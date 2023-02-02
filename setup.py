@@ -15,7 +15,7 @@ CLASSIFIERS     = [
                     "Natural Language :: English",
                     f"License :: {LICENSE}",
                     "Operating System :: OS Independent",
-                    "Programming Language :: Python :: 3.7",
+                    "Programming Language :: Python :: 3.9",
                     "Topic :: Scientific/Engineering",
                     ]
 INSTALL_REQUIRES = [
@@ -23,6 +23,8 @@ INSTALL_REQUIRES = [
                     'numba',
                     'scipy',
                     'ssqueezepy',
+                    'matplotlib',
+                    'holoviews'
                     ]
 with open("README.md", "r") as f:
     LONG_DESCRIPTION = f.read()

@@ -1,12 +1,11 @@
 import numpy as np
 import numba as nb
-from numba.types import b1, f8, i8, string, List, UniTuple
-from .utils import ReshapeInputArray, get_interval_division
+from .utils import ReshapeInputArray
 from scipy import special, optimize
 
-################################################################
-###########################   DATE   ###########################
-################################################################
+
+########################  B-E-DATE   ########################
+
 
 @nb.njit(["f8(f8[:], i8, f8)", 
           "f8(f4[:], i8, f8)"])
@@ -14,45 +13,60 @@ def _DATE(Y, Nmin, xi_lamb):
     """
         Estimates thresholding function for outlier trimming via DATE algorithm
 
-        Y : np.ndarray (N,) : sequence of random numbers
-        Nmin : int : minimum number of trimmed values
-        xi_lamb : float : xi(rho) / lambda (see DATE)
+        Arguments:
+            Y : np.ndarray (N,) : sequence of random numbers
+            Nmin : int : minimum number of trimmed values
+            xi_lamb : float : xi(rho) / lambda (see DATE)
+
+        Returns:
+            eta : float : threshold value for outlier trimming
     """
     N = len(Y)
     Y_sort = np.sort(Y)
     
     M = M0 = sum(Y_sort[:Nmin - 1])
+    eta0 = (M0 + Y_sort[Nmin - 1]) / Nmin * xi_lamb
+    found = False
     for ni in range(Nmin - 1, N - 1):
         M += Y_sort[ni]
         M_s = M / (ni + 1)
         eta = M_s * xi_lamb
         found = (Y_sort[ni] <= eta < Y_sort[ni + 1])
         if found: break
-    eta = eta if found else (M0 + Y_sort[Nmin - 1]) / Nmin * xi_lamb # test the right part
+    eta = eta if found else eta0  # if not found in loop, then minimum
     return eta
 
-@nb.njit(["f8[:, :](f8[:, :], i8[:, :], i8[:], f8[:])", 
+
+@nb.njit(["f8[:, :](f8[:, :], i8[:, :], i8[:], f8[:])",
           "f8[:, :](f4[:, :], i8[:, :], i8[:], f8[:])"], parallel=True)
 def _BEDATE(PSD, frames, Nmins, xi_lamb):
     """
         Performs Block-Extended-DATE algorithm 
 
-        PSD : np.ndarray (M, N) : array of random sequences (norm of complex STFT coefficients)
-        frames : np.ndarray (n,) : intervals of time frames (blocks) which are processed independently 
-        Nmins : np.ndarray (n,) : minimum number of trimmed values for each block
-        xi_lamb : np.ndarray (M,) : xi(rho) / lambda for each sequency
+        Arguments:
+            PSD : np.ndarray (M, N) : array of random sequences (norm of complex STFT coefficients)
+            frames : np.ndarray (n,) : intervals of time frames (blocks) which are processed independently
+            Nmins : np.ndarray (n,) : minimum number of trimmed values for each block
+            xi_lamb : np.ndarray (M,) : xi(rho) / lambda for each sequence
+
+        Returns:
+            Eta : np.ndarray (M, n) : threshold values for each sequence `M` and each time frame `n`
     """
     M, N = PSD.shape
-    Eta = np.zeros((M, len(frames)))
+    n = len(frames)
+    Eta = np.zeros((M, n))
     for i in nb.prange(M):
         ci, xi = np.abs(PSD[i]), xi_lamb[i]
-        for j, (j1, j2) in enumerate(frames):
+        for j in range(n):
+            j1, j2 = frames[j]
             Eta[i, j] = _DATE(ci[j1 : j2], Nmins[j], xi)
     return Eta
+
 
 @ReshapeInputArray(dim=2, num=1, methodfunc=False)
 def _BEDATE_API(PSD, frames, Nmins, xi_lamb):
     return _BEDATE(PSD, frames, Nmins, xi_lamb)
+
 
 def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95):
     """
@@ -63,13 +77,12 @@ def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95):
             PSD : np.ndarray (..., Nf, N) : norm of complex STFT coefficients, with `Nf` frequencies and N time samples
                                             `Nf=0` is zero-frequency, `Nf=Nf` is Nyquist frequency  
             minSNR : float : expected minimum signal-to-noise ratio 
-            J : int : minimum length of one independent time frame (stationary window). 
-                      `J` will be adjusted so that `N % J --> min` where the last frame will have `J + N % J`.
-            Q : float [0, 1) : probability value to compute appropriate `Nmin`
+            frames : np.ndarray (n, 2) / None : independent time frames (stationary windows) in index form.
+                      If `None`, the default np.array([[0, N]]), i.e. 1 time frame
+            Q : float [0, 1) : probability value to compute appropriate `Nmin`. Recommended value `0.95`
 
         Return:
-            Eta : np.ndarray (..., Nf, N // J) : thresholding function
-            frames : np.ndarray (N // J, ) : intervals of time frames for `Eta`
+            Eta : np.ndarray (..., Nf, n) : thresholding function
     """
     preshape, N = PSD.shape[:-1], PSD.shape[-1]
     d = np.full(preshape, 2)
@@ -88,6 +101,7 @@ def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95):
 
 ######################### CONSTANTS #########################
 
+
 def _Nmin(N, Q=None):
     maxQ = 1 - N / 4 / (N / 2 - 1)**2
     if Q is None: 
@@ -97,15 +111,21 @@ def _Nmin(N, Q=None):
     Nmin = np.clip(int(0.5 * (N - np.sqrt(N / (1 - Q)))), 2, N)
     return Nmin
 
+
 def _Lambda(d):
     return np.sqrt(2) * special.gamma((d + 1) / 2) / special.gamma(d / 2)
+
+
+def _xi_loss(xi, d, rho):
+    return (special.hyp0f1(d / 2, rho**2 * xi**2 / 4) - np.exp(rho**2 / 2))**2
+
 
 def _xi(d, rho):
     if d == 1:
         return np.arccosh(np.exp(rho**2 / 2)) / rho
     else:
-        func = lambda x: (special.hyp0f1(d / 2, rho**2 * x**2 / 4) - np.exp(rho**2 / 2))**2
-        return abs(optimize.minimize_scalar(func).x)
+        return abs(optimize.minimize_scalar(_xi_loss, args=(d, rho)).x)
+
 
 def _Xi(d, rho, d_unique=None):
     if np.isscalar(d):
@@ -119,6 +139,7 @@ def _Xi(d, rho, d_unique=None):
             xsi[ind] = xsi_kw[di]
         return xsi
 
+
 def _Xi_Lambda(d, rho, d_unique=None):
     if np.isscalar(d):
         return _xi(d, rho) / _Lambda(d)
@@ -131,9 +152,21 @@ def _Xi_Lambda(d, rho, d_unique=None):
             xi_lamd[ind] = xi_lamd_kw[di]
         return xi_lamd
 
-def Eta2Sigma(eta, rho):
-    d = np.full(eta.shape[:-1], 2)
-    d[..., 0] = 1; d[..., -1] = 1 # zero and Nyq frequencies are 1-dim samples (imag = 0)
 
+def EtaToSigma(eta, rho):
+    """
+        Converts thresholding function `eta` to standard deviation `sigma` assuming usage in Time-Frequency domain
+
+        Arguments:
+            eta : np.ndarray (..., Nf, n) : thresholding function where `Nf` is number of frequencies,
+                                             `n` is number of time frames.
+            rho : float : used minimum SNR for thresholding function `eta`.
+
+        Returns:
+            sigma : np.ndarray (..., Nf, n) : converted standard deviation
+    """
+    d = np.full(eta.shape[:-1], 2)
+    d[..., 0] = 1
+    d[..., -1] = 1      # zero and Nyq frequencies are 1-dim samples (imag = 0)
     xi = _Xi(d, rho, d_unique=[1, 2])
     return eta / xi[..., None]
