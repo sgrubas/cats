@@ -6,8 +6,8 @@ from .core.timefrequency import STFT_Operator
 from .core.date import BEDATE, EtaToSigma
 from .core.thresholding import Thresholding
 from .core.clustering import Clustering, ClusterFilling, OptimalNeighborhoodDistance
-from .core.projection import RemoveGaps
 from .core.utils import get_interval_division
+from .core.wiener import WienerNaive
 
 ##################### Detector API #####################
 
@@ -16,7 +16,7 @@ class CATSDenoiser:
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft,
                        minSNR, stationary_frame_sec, min_dt_width_sec, min_df_width_Hz,
                        neighbor_distance_len=None, min_neighbors=None,
-                       date_Q=0.95, date_detection_mode=True, **stft_kwargs):
+                       date_Q=0.95, date_detection_mode=False, wiener=False, **stft_kwargs):
         self.dt_sec         =   dt_sec
         self.STFT           =   STFT_Operator(window=stft_window_sec, overlap=stft_overlap,
                                               dt=dt_sec, nfft=stft_nfft, **stft_kwargs)
@@ -55,6 +55,7 @@ class CATSDenoiser:
         else:
             self.min_neighbors = min_neighbors
 
+        self.wiener = wiener
 
     def denoise_stepwise(self, x):
         N = x.shape[-1]
@@ -70,12 +71,13 @@ class CATSDenoiser:
         C = Clustering(B, q=self.neighbor_distance_len,
                        s=(self.min_df_width_len, self.min_dt_width_len))
         F = ClusterFilling(C, self.neighbor_distance_len, self.min_neighbors)
-        y = (self.STFT / (X * F))[..., :N]
+        W = WienerNaive(PSD, Sgm, F, stationary_intervals) if self.wiener else F
+        y = (self.STFT / (X * W))[..., :N]
         kwargs = {"signal" : x, "spectrogram" : X, "noise_thresholding" : Eta, "noise_std" : Sgm,
                   "binary_spectrogram" : B, "binary_spectrogram_clustered" : C,
-                  "binary_spectrogram_filled" : F, "denoised_signal" : y,
+                  "binary_spectrogram_filled" : F, "wiener_spectrogram" : W, "denoised_signal" : y,
                   "time" : time, "stft_time" : stft_time, "stft_frequency" : self.stft_frequency,
-                  "stationary_intervals" : stationary_intervals}
+                  "stationary_intervals" : stationary_intervals, "wienered" : self.wiener}
 
         return CATSDenoisingResult(**kwargs)
 
@@ -120,6 +122,10 @@ class CATSDenoisingResult:
                         label='3. Clustering: $C_{k,m} \cdot |X_{k,m}|$')
         fig4 = hv.Image((self.stft_time, self.stft_frequency, F), kdims=[t_dim, f_dim],
                         label='4. Filling: $F_{k,m} \cdot |X_{k,m}|$')
+        if self.wienered:
+            W = self.wiener_spectrogram[ind] * PSD
+            fig41 = hv.Image((self.stft_time, self.stft_frequency, W), kdims=[t_dim, f_dim],
+                            label='4.1 Wiener: $W_{k,m} \cdot |X_{k,m}|$')
         fig5 = hv.Curve((self.time, self.denoised_signal[ind]),
                         kdims=[t_dim], vdims=A_dim,
                         label='5. Denoised signal: $y_n$').opts(xlabel='Time (s)')
@@ -129,8 +135,13 @@ class CATSDenoisingResult:
                              xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_kwargs  = dict(aspect=5, fig_size=figsize, fontsize=fontsize)
 
-        fig = (fig0 + fig1 + fig2 +
-               fig3 + fig4 + fig5).opts(fig_size=figsize, shared_axes=True, vspace=0.4, aspect_weight=0,
-                                        sublabel_format='').opts(hv.opts.Image(**spectr_kwargs),
-                                                                 hv.opts.Curve(**curve_kwargs))
+
+        if self.wienered:
+            fig = fig0 + fig1 + fig2 + fig3 + fig4 + fig41 + fig5
+        else:
+            fig = fig0 + fig1 + fig2 + fig3 + fig4 + fig5
+
+        fig = fig.opts(fig_size=figsize, shared_axes=True, vspace=0.4, aspect_weight=0,
+                       sublabel_format='').opts(hv.opts.Image(**spectr_kwargs),
+                                                hv.opts.Curve(**curve_kwargs))
         return fig.cols(1)

@@ -263,6 +263,7 @@ def ClusterFilling(B, d, min_neighbors):
 
 
 def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
+    qi = qmax  # in case the cycle is empty
     for qi in range(1, qmax + 1):
         Q = (qi * 2 + 1)**2  # clustering kernel is square
         cdf = stats.binom.cdf(maxN, Q, p)  # probability that maximum `maxN` elements in kernel `Q` are nonzero
