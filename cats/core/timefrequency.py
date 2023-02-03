@@ -195,7 +195,8 @@ class STFT_Operator:
 
     def forward_time_axis(self, N):
         bounds = self.padedge * 2 if (self.padtype is not None) else 0
-        tail = self.hop - (N + bounds - self.nperseg) % self.hop
+        tail = (N + bounds - self.nperseg) % self.hop
+        tail = self.hop - tail if tail > 0 else tail
         n_hops = (N + bounds + tail - self.nperseg) // self.hop + 1
         t = self.dt * (np.arange(n_hops) * self.hop + (bounds // 2) * (bounds < 1))
         return t

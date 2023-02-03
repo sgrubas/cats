@@ -1,6 +1,8 @@
 import numpy as np
 import numba as nb
 from .utils import ReshapeInputArray, _scalarORarray_to_tuple
+from .date import _xi
+from scipy import special, stats
 
 ###################  CLUSTERING  ###################
 
@@ -187,18 +189,19 @@ def _ClusteringToProjection2D(B, q, s, max_gap):
             t_min, t_max = cl_arr[:, 1].min(), cl_arr[:, 1].max()
             cl_dt = t_max - t_min
             if (cl_dt >= s_t) and (cl_df >= s_f):
-                if len(intervals) == 0:
-                    intervals.append((t_min, t_max))
-                else:
-                    prev_interval = intervals[-1]
-                    if (t_min - prev_interval[1]) > max_gap:
-                        intervals.append((t_min, t_max))
-                    else:
-                        intervals[-1] = (prev_interval[0], t_max)
+                intervals.append((t_min, t_max))
+                # if len(intervals) == 0:
+                #     intervals.append((t_min, t_max))
+                # else:
+                #     prev_interval = intervals[-1]
+                #     if (t_min - prev_interval[1]) > max_gap:
+                #         intervals.append((t_min, t_max))
+                #     else:
+                #         intervals[-1] = (prev_interval[0], t_max)
 
     projection = np.full(Nt, False)
     for i1, i2 in intervals:
-        projection[i1 : i2] = True
+        projection[i1 : i2 + 1] = True
     return projection
 
 
@@ -230,3 +233,39 @@ def _ClusterFiling2D(B, d, t):
         else:
             F[i, j] = (B[i : i + u + 1, j : j + u + 1].sum() >= t)
     return F
+
+
+def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
+    for qi in range(1, qmax + 1):
+        Q = (qi * 2 + 1)**2  # clustering kernel is square
+        cdf = stats.binom.cdf(maxN, Q, p)  # probability that maximum `maxN` elements in kernel `Q` are nonzero
+        if cdf < pmin:  # choose `qi` which provides probability of noisy nonzero elements not to be present in `Q`
+            break
+    return max(1, qi - 1)
+
+def OptimalNeighborhoodDistance(minSNR, d=2, pmin=0.95, qmax=10, maxN=1):
+    """
+        Estimates optimal value for neighborhood distance for the clustering.
+        Estimation is based on probability `pmin` that in a given neighborhood distance
+        there are no more than `maxN` noise elements. The main idea behind this estimation is that
+        the sparsity of the trimmed spectrogram is directly dependent on the `minSNR` used for the trimming from DATE.
+        This estimation is to reduce the number of manually adjusted non-intuitive parameters by using `minSNR`.
+
+        Arguments:
+            minSNR : float : minimum SNR used in DATE algorithm
+            d : int : dimension of random numbers. Default `d=2`, i.e. spectrograms almost all the frequency bins
+                      are complex numbers (2-dim real numbers)
+            pmin : float : minimum confidence level that within neighborhood distance,
+                           there are no more than `maxN` noise elements.
+                           Default `0.95`, empirically estimated as the optimal level of confidence for various `minSNR`
+            qmax : int : maximal size of the neighborhood distance.
+                         Default `10`, but should not be bigger than minimum cluster size
+            maxN : int : maximal number of allowed noise elements to be present within the neighborhood distance.
+                         Default `1`, based on that isolated single points are automatically considered as noise
+    """
+    # thresholding function value from DATE, defined for `noise variance = 1`
+    xi = _xi(d=d, rho=minSNR)
+    # percentage of chi-distributed noise elements to be > `xi` (`d` degrees of freedom)
+    p = special.gammaincc(d / 2, xi**2 / 2)
+    q_opt = _optimalNeighborhoodDistance(p, pmin=pmin, qmax=qmax, maxN=maxN)
+    return q_opt
