@@ -21,3 +21,22 @@ def _Thresholding(PSD, Eta, frames):
 @ReshapeInputArray(dim=2, num=2, methodfunc=False)
 def Thresholding(PSD, Eta, frames):
     return _Thresholding(PSD, Eta, frames)
+
+
+@nb.njit(["b1[:, :](f8[:, :], f8[:, :], i8[:, :], f8)",
+          "b1[:, :](f4[:, :], f8[:, :], i8[:, :], f8)"], parallel=True)
+def _ThresholdingSNR(PSD, Sgm, frames, minSNR):
+    B = np.empty_like(PSD, dtype=np.bool_)
+    M = len(frames)
+    N = len(PSD)
+    for j in nb.prange(M):
+        j1, j2 = frames[j]
+        for i in nb.prange(N):
+            snr = PSD[i, j1: j2] / Sgm[i, j]
+            B[i, j1: j2] = snr > minSNR
+    return B
+
+
+@ReshapeInputArray(dim=2, num=3, methodfunc=False)
+def ThresholdingSNR(PSD, Sgm, frames, minSNR):
+    return _ThresholdingSNR(PSD, Sgm, frames, minSNR)

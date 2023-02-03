@@ -223,7 +223,7 @@ def ClusteringToProjection(B, q, s, max_gap):
 
 
 @nb.njit("b1[:, :](b1[:, :], i8, i8)")
-def _ClusterFiling2D(B, d, t):
+def _ClusterFilling2D(B, d, t):
     N, M = B.shape
     u = 2 * d
     F = np.empty((N - u, M - u), dtype=np.bool_)
@@ -233,6 +233,33 @@ def _ClusterFiling2D(B, d, t):
         else:
             F[i, j] = (B[i : i + u + 1, j : j + u + 1].sum() >= t)
     return F
+
+
+@nb.njit("b1[:, :, :](b1[:, :, :], i8, i8)")
+def _ClusterFillingN2D(B, d, t):
+    M, Nf, Nt = B.shape
+    u = 2 * d
+    F = np.empty((M, Nf - u, Nt - u), dtype=np.bool_)
+    for i in nb.prange(M):
+        F[i] = _ClusterFilling2D(B[i], d, t)
+    return F
+
+
+@ReshapeInputArray(dim=3, num=1, methodfunc=False)
+def ClusterFilling(B, d, min_neighbors):
+    """
+        Fills the zero elements if they have at least `min_neighbors` nonzero neighbors within distance `d`
+
+        Arguments:
+            B : boolean np.ndarray (..., Nf, Nt) : binary spectrograms
+            d : int : neighborhood distance
+            min_neighbors : int : minimum number of neighbors for zero element to be re-assigned to nonzero
+
+        Returns:
+            F : boolean np.ndarray (..., Nf, Nt) : filled binary spectrograms
+    """
+    B_pad = np.pad(B, [(0, 0), (d, d), (d, d)], mode='constant', constant_values=0)
+    return _ClusterFillingN2D(B_pad.astype(bool), d, min_neighbors)
 
 
 def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
