@@ -1,51 +1,5 @@
 import numpy as np
 from numba import cuda
-import cmath
-
-
-#######################################################
-#################### PSD algorithm ####################
-#######################################################
-
-@cuda.jit('f4[:,:,:], f4[:,:], f4[:], i8, f8, i8')
-def kernelPSD(Y, X, w, L, c, step):
-    i, j, k = cuda.grid(3)
-    
-    if i < Y.shape[0] and j < Y.shape[1] and k < Y.shape[2]:        
-        yi = 0.0j
-        for m in range(L):
-            yi += w[m] * X[i, j * step + m] * cmath.exp(-2j * cmath.pi * m * k / L)
-        Y[i, j, k] = c * abs(yi)**2
-        if k == 0 or k == Y.shape[2] - 1:
-            Y[i, j, k] /= 2
-
-def gpuPSD_API(x, w, c, Nt, Nf, step, threadsperblock=None, **kwargs):
-         
-    # Constants
-    L = len(w)
-    Nx = len(x)
-    
-    # Sending arrays to GPU
-    stream = cuda.stream()
-    Xd = cuda.to_device(np.float32(x), stream=stream)
-    wd = cuda.to_device(np.float32(w), stream=stream)
-    
-    # final array is created at gpu
-    Yd = cuda.device_array((Nx, Nt, Nf), dtype=np.float32)
-        
-    # GPU settings
-    if threadsperblock is None:
-        threadsperblock = (32, 32, 1)
-    blockspergrid = tuple(int(np.ceil(Yd.shape[i] / threadsperblock[i]))
-                          for i in range(len(Yd.shape)))
-    
-    # PSD computation
-    kernelPSD[blockspergrid, threadsperblock](Yd, Xd, wd, L, c, step)
-
-    # Sending final array to CPU
-    Y = Yd.copy_to_host()
-    return Y
-
 
 #################################################
 #################### STA/LTA ####################

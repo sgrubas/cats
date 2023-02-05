@@ -89,7 +89,7 @@ class STFT_Operator:
             forw_kw['padded']           =   kwargs.get('padded', False)
             forw_kw['detrend']          =   kwargs.get('detrend', False)
             forw_kw['boundary'],    inv_kw['boundary']                  =   None,   True
-            forw_kw['axis'],        inv_kw['time_axis'],    inv_kw['freq_axis'] =   -1,     -1,     -2
+            forw_kw['axis'], inv_kw['time_axis'], inv_kw['freq_axis']   =   -1,     -1,     -2
 
         elif 'ssq' in self.backend:
             forw_kw['n_fft']        =   inv_kw['n_fft']     =   self.nfft

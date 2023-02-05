@@ -4,3 +4,4 @@ from .thresholding import *
 from .clustering import *
 from .projection import *
 from .utils import *
+from .wiener import *
