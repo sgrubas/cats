@@ -2,9 +2,11 @@ import numpy as np
 import holoviews as hv
 
 from .core.date import EtaToSigma
-from .core.clustering import Clustering, ClusteringToProjection
+from .core.clustering import ClusteringToProjection
 from .core.projection import RemoveGaps, ProjectFilterIntervals
 from .baseclass import CATSBaseSTFT, CATSResult
+from .core.utils import get_interval_division
+from .core.thresholding import ThresholdingSNR
 
 ##################### CATS Detector API #####################
 
@@ -24,14 +26,14 @@ class CATSDetector(CATSBaseSTFT):
         self.max_dt_gap_len = int(max_dt_gap_sec / self.stft_hop_sec)
 
     def detect_stepwise(self, x):
-        X, PSD, Eta, B, frames, stft_time = super()._apply(x)
+        X, Eta, B, C = super()._apply(x, finish_on='clustering')
+        c = C.max(axis=-2)
+        detection = RemoveGaps(c, self.max_dt_gap_len)
 
         Sgm = EtaToSigma(Eta, self.minSNR)
         time = np.arange(x.shape[-1]) * self.dt_sec
-        C = Clustering(B, q=self.neighbor_distance_len,
-                       s=(self.min_df_width_len, self.min_dt_width_len))
-        c = C.max(axis=-2)
-        detection = RemoveGaps(c, self.max_dt_gap_len)
+        stft_time = self.STFT.forward_time_axis(x.shape[-1])
+        frames = get_interval_division(N=X.shape[-1], L=self.stationary_frame_len)
 
         kwargs = {"signal" : x, "spectrogram" : X, "noise_thresholding" : Eta, "noise_std" : Sgm,
                   "binary_spectrogram" : B, "binary_spectrogram_clustered" : C,
@@ -42,10 +44,11 @@ class CATSDetector(CATSBaseSTFT):
         return CATSDetectionResult(**kwargs)
 
     def detect(self, x):
-        X, PSD, Eta, B, frames, stft_time = super()._apply(x)
+        X, Eta, B = super()._apply(x, finish_on='threshold')
         detection = ClusteringToProjection(B, q=self.neighbor_distance_len,
                                            s=(self.min_df_width_len, self.min_dt_width_len),
                                            max_gap=self.max_dt_gap_len)
+        stft_time = self.STFT.forward_time_axis(x.shape[-1])
         return stft_time, detection
 
 
@@ -80,13 +83,15 @@ class SNRDetector(CATSBaseSTFT):
 
 
     def detect(self, x):
-        X, PSD, Eta, B, frames, stft_time = super()._apply(x)
-
+        X, Eta = super()._apply(x, finish_on='date')
         Sgm = EtaToSigma(Eta, self.minSNR)
-        time = np.arange(x.shape[-1]) * self.dt_sec
+        frames = get_interval_division(N=X.shape[-1], L=self.stationary_frame_len)
+        B = ThresholdingSNR(np.abs(X), Sgm, frames, self.minSNR)
         c = B.max(axis=-2)
+        stft_time = self.STFT.forward_time_axis(x.shape[-1])
         detection = ProjectFilterIntervals(c, stft_time, self.max_dt_gap_sec, self.min_dt_width_sec, stft_time)
 
+        time = np.arange(x.shape[-1]) * self.dt_sec
         kwargs = {"signal" : x, "spectrogram" : X, "noise_thresholding" : Eta, "noise_std" : Sgm,
                   "binary_spectrogram" : B, "binary_spectrogram_clustered" : B,
                   "binary_projection" : c, "detection" : detection,

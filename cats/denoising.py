@@ -2,12 +2,12 @@ import numpy as np
 import holoviews as hv
 
 from .core.date import EtaToSigma
-from .core.thresholding import Thresholding
-from .core.clustering import Clustering, ClusterFilling
+from .core.clustering import ClusterFilling
 from .core.wiener import WienerNaive
 from .baseclass import CATSBaseSTFT, CATSResult
+from .core.utils import get_interval_division
 
-##################### Detector API #####################
+##################### Denoiser API #####################
 
 
 class CATSDenoiser(CATSBaseSTFT):
@@ -27,16 +27,18 @@ class CATSDenoiser(CATSBaseSTFT):
         self.wiener = wiener
 
     def denoise_stepwise(self, x):
-        X, PSD, Eta, B, frames, stft_time = super()._apply(x)
+        X, Eta, B, C = super()._apply(x, finish_on='clustering')
+
         N = x.shape[-1]
         time = np.arange(N) * self.dt_sec
         Sgm = EtaToSigma(Eta, self.minSNR)
-        B = Thresholding(PSD, Eta, frames)
-        C = Clustering(B, q=self.neighbor_distance_len,
-                       s=(self.min_df_width_len, self.min_dt_width_len))
+        frames = get_interval_division(N=X.shape[-1], L=self.stationary_frame_len)
+        stft_time = self.STFT.forward_time_axis(x.shape[-1])
+
         F = ClusterFilling(C, self.neighbor_distance_len, self.min_neighbors)
-        W = WienerNaive(PSD, Sgm, F, frames) if self.wiener else F
+        W = WienerNaive(np.abs(X), Sgm, F, frames) if self.wiener else F
         y = (self.STFT / (X * W))[..., :N]
+
         kwargs = {"signal" : x, "spectrogram" : X, "noise_thresholding" : Eta, "noise_std" : Sgm,
                   "binary_spectrogram" : B, "binary_spectrogram_clustered" : C,
                   "binary_spectrogram_filled" : F, "wiener_spectrogram" : W, "denoised_signal" : y,
@@ -46,9 +48,7 @@ class CATSDenoiser(CATSBaseSTFT):
         return CATSDenoisingResult(**kwargs)
 
     def denoise(self, x):
-        X, PSD, Eta, B, frames, stft_time = super()._apply(x)
-        C = Clustering(B, q=self.neighbor_distance_len,
-                       s=(self.min_df_width_len, self.min_dt_width_len))
+        X, Eta, B, C = super()._apply(x, finish_on='clustering')
         F = ClusterFilling(C, self.neighbor_distance_len, self.min_neighbors)
         y = (self.STFT / (X * F))[..., :x.shape[-1]]
         return y
@@ -60,6 +60,7 @@ class CATSDenoisingResult(CATSResult):
 
     def plot(self, ind):
         fig, opts = super().plot(ind)
+
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')
         A_dim = hv.Dimension('Amplitude')

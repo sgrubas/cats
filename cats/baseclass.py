@@ -2,7 +2,7 @@ import numpy as np
 import holoviews as hv
 
 from .core.timefrequency import STFT_Operator
-from .core.clustering import OptimalNeighborhoodDistance
+from .core.clustering import OptimalNeighborhoodDistance, Clustering
 from .core.date import BEDATE
 from .core.utils import get_interval_division
 from .core.thresholding import Thresholding
@@ -89,15 +89,25 @@ class CATSBaseSTFT:
         else:
             self.neighbor_distance_len = int(neighbor_distance)
 
-    def _apply(self, x):
+    def _apply(self, x, finish_on='clustering'):
         X = self.STFT * x
         PSD = np.abs(X)
+        if 'stft' in finish_on.casefold():
+            return X
+
         frames = get_interval_division(N=PSD.shape[-1], L=self.stationary_frame_len)
         Eta = BEDATE(PSD, frames=frames, minSNR=self.minSNR, Q=self.date_Q,
                      original_mode=self.date_noise_mode)
+        if 'date' in finish_on.casefold():
+            return X, Eta
+
         B = Thresholding(PSD, Eta, frames=frames)
-        stft_time = self.STFT.forward_time_axis(x.shape[-1])
-        return X, PSD, Eta, B, frames, stft_time
+        if 'threshold' in finish_on.casefold():
+            return X, Eta, B
+
+        C = Clustering(B, q=self.neighbor_distance_len,
+                       s=(self.min_df_width_len, self.min_dt_width_len))
+        return X, Eta, B, C
 
 
 class CATSResult:
