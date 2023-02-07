@@ -1,3 +1,10 @@
+"""
+    API for Detector based Cluster Analysis of Trimmed Spectrograms (CATS)
+    Main operators:
+        CATSDetector : .................
+        SNRDetector : experimental detector based on SNR values only (no CATS) .................
+"""
+
 import numpy as np
 import holoviews as hv
 
@@ -7,9 +14,6 @@ from .core.projection import RemoveGaps, ProjectFilterIntervals
 from .baseclass import CATSBaseSTFT, CATSResult
 from .core.utils import get_interval_division
 from .core.thresholding import ThresholdingSNR
-
-##################### CATS Detector API #####################
-
 
 class CATSDetector(CATSBaseSTFT):
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft, minSNR, stationary_frame_sec,
@@ -62,9 +66,6 @@ class CATSDetectionResult(CATSResult):
         fig4 = hv.Curve((self.stft_time, self.detection[ind].astype(float)),
                         kdims=[t_dim], vdims='Classification', label='4. Projection: $o_k$')
         return (fig + fig4).opts(*opts).cols(1)
-
-
-##################### SNR Detector API, experimental #####################
 
 
 class SNRDetector(CATSBaseSTFT):

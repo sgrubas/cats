@@ -1,7 +1,7 @@
 import numpy as np
 import holoviews as hv
 
-from .core.timefrequency import STFT_Operator
+from .core.timefrequency import STFTOperator
 from .core.clustering import OptimalNeighborhoodDistance, Clustering
 from .core.date import BEDATE
 from .core.utils import get_interval_division
@@ -53,8 +53,8 @@ class CATSBaseSTFT:
         self.dt_sec = dt_sec
         self.stft_backend = stft_backend
         self.stft_kwargs = stft_kwargs or {}
-        self.STFT = STFT_Operator(window=stft_window_sec, overlap=stft_overlap, dt=dt_sec,
-                                  nfft=stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
+        self.STFT = STFTOperator(window=stft_window_sec, overlap=stft_overlap, dt=dt_sec,
+                                 nfft=stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
         self.stft_overlap = stft_overlap
         self.stft_overlap_len = self.STFT.noverlap
         self.stft_overlap_sec = self.stft_overlap_len * dt_sec

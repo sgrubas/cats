@@ -1,6 +1,14 @@
+"""
+    Functions for projection detection from Time-Frequency onto Time.
+    Main functions:
+        GiveIntervals : extracts intervals of True from binary classification
+    ...
+
+"""
+
 import numpy as np
 import numba as nb
-from .utils import ReshapeInputArray
+from .utils import ReshapeArraysDecorator
 
 
 ############################################################################
@@ -67,8 +75,8 @@ def _removeGaps(detection, max_gap):
             filtered[i, j1 : j2 + 1] = True
     return filtered
 
-@ReshapeInputArray(dim=2)
-def RemoveGaps(detection, max_gap):
+@ReshapeArraysDecorator(dim=2)
+def RemoveGaps(detection, /, max_gap):
     return _removeGaps(detection, max_gap)
 
 
@@ -229,8 +237,8 @@ def _projectFilterIntervalsN(detection, time, max_gap, min_width, new_time):
     return b
 
 
-@ReshapeInputArray(dim=2)
-def ProjectFilterIntervals(detection, time, max_gap, min_width, new_time):
+@ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+def ProjectFilterIntervals(detection, /, time, max_gap, min_width, new_time):
     """
         Filters boolean array `detection` by combining close `True` intervals with gap <= `max_gap`
         and removing short intervals < `min_width`. Then, projects onto `new_time` axis.

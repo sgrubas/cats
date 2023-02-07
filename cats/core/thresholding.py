@@ -1,6 +1,13 @@
+"""
+    Functions for trimming spectrograms (in Time-Frequency domain).
+    Main functions:
+        ...
+
+"""
+
 import numpy as np
 import numba as nb
-from .utils import ReshapeInputArray
+from .utils import ReshapeArraysDecorator
 
 ################### THRESHOLDING ###################
 
@@ -18,8 +25,8 @@ def _Thresholding(PSD, Eta, frames):
     return B
 
 
-@ReshapeInputArray(dim=2, num=2, methodfunc=False)
-def Thresholding(PSD, Eta, frames):
+@ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=1, first_shape=True)
+def Thresholding(PSD, Eta, /, frames):
     return _Thresholding(PSD, Eta, frames)
 
 
@@ -37,6 +44,6 @@ def _ThresholdingSNR(PSD, Sgm, frames, minSNR):
     return B
 
 
-@ReshapeInputArray(dim=2, num=3, methodfunc=False)
-def ThresholdingSNR(PSD, Sgm, frames, minSNR):
+@ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=1, first_shape=True)
+def ThresholdingSNR(PSD, Sgm, /, frames, minSNR):
     return _ThresholdingSNR(PSD, Sgm, frames, minSNR)

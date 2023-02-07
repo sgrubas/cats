@@ -1,3 +1,9 @@
+"""
+    API for Denoiser based on Cluster Analysis of Trimmed Spectrograms (CATS)
+    Main operators:
+        CATSDenoiser : STFT based yet .................
+"""
+
 import numpy as np
 import holoviews as hv
 
@@ -6,8 +12,6 @@ from .core.clustering import ClusterFilling
 from .core.wiener import WienerNaive
 from .baseclass import CATSBaseSTFT, CATSResult
 from .core.utils import get_interval_division
-
-##################### Denoiser API #####################
 
 
 class CATSDenoiser(CATSBaseSTFT):

@@ -1,4 +1,4 @@
-from .core.timefrequency import STFT_Operator
+from .core.timefrequency import STFTOperator
 from .core.date import BEDATE, EtaToSigma
 from .core.thresholding import Thresholding
 from .core.clustering import Clustering, ClusteringToProjection

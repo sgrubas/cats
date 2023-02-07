@@ -1,6 +1,6 @@
 import numpy as np
 import numba as nb
-from .utils import ReshapeInputArray
+from .utils import ReshapeArraysDecorator
 from scipy import special, optimize
 
 
@@ -80,8 +80,8 @@ def _BEDATE(PSD, frames, Nmins, xi_lamb, original_mode):
     return Eta
 
 
-@ReshapeInputArray(dim=2, num=1, methodfunc=False)
-def _BEDATE_API(PSD, frames, Nmins, xi_lamb, original_mode):
+@ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+def _BEDATE_API(PSD, /, frames, Nmins, xi_lamb, original_mode):
     return _BEDATE(PSD, frames, Nmins, xi_lamb, original_mode)
 
 

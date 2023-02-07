@@ -1,6 +1,13 @@
+"""
+    Functions for clustering trimmed spectrograms (in Time-Frequency domain).
+    Main functions:
+        ...
+
+"""
+
 import numpy as np
 import numba as nb
-from .utils import ReshapeInputArray, _scalarORarray_to_tuple
+from .utils import ReshapeArraysDecorator, _scalarORarray_to_tuple
 from .date import _xi
 from scipy import special, stats
 
@@ -105,8 +112,8 @@ def _ClusteringN2D(B, q, s):
     return C
 
 
-@ReshapeInputArray(dim=3, num=1, methodfunc=False)
-def Clustering(B, q=1, s=(5, 5)):
+@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+def Clustering(B, /, q=1, s=(5, 5)):
     """
         Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
 
@@ -214,8 +221,8 @@ def _ClusteringToProjectionN2D(B, q, s, max_gap):
     return projection
 
 
-@ReshapeInputArray(dim=3, num=1, methodfunc=False)
-def ClusteringToProjection(B, q, s, max_gap):
+@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+def ClusteringToProjection(B, /, q, s, max_gap):
     q = _scalarORarray_to_tuple(q, minsize=2)
     s = _scalarORarray_to_tuple(s, minsize=2)
     P = _ClusteringToProjectionN2D(B.astype(bool), q, s, max_gap)
@@ -245,8 +252,8 @@ def _ClusterFillingN2D(B, d, t):
     return F
 
 
-@ReshapeInputArray(dim=3, num=1, methodfunc=False)
-def ClusterFilling(B, d, min_neighbors):
+@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+def ClusterFilling(B, /, d, min_neighbors):
     """
         Fills the zero elements if they have at least `min_neighbors` nonzero neighbors within distance `d`
 

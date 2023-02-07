@@ -1,6 +1,6 @@
 import numpy as np
 import numba as nb
-from .utils import ReshapeInputArray
+from .utils import ReshapeArraysDecorator
 from .projection import _giveIntervals
 
 
@@ -22,6 +22,6 @@ def _WienerNaive(PSD, Sgm, Mask, frames):
     return A
 
 
-@ReshapeInputArray(dim=2, num=3, methodfunc=False)
+@ReshapeArraysDecorator(dim=2, input_num=3, methodfunc=False)
 def WienerNaive(PSD, Sgm, Mask, frames):
     return _WienerNaive(PSD, Sgm, Mask, frames)

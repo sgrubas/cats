@@ -1,8 +1,16 @@
+"""
+    Operators for computing Time-Frequency representations, which are implemented for convenient usage of Forward and
+    Inverse transforms from one object. Overrides operators `*` for forward transform, and `/` for inverse.
+    Main operators:
+        STFT operator : Short-Time Fourier Transform
+        CWT operator : Continuous Wavelet Transform (```````` not implemented `````````)
+"""
+
 import numpy as np
 from scipy import signal
 import ssqueezepy as ssq
 import os
-from .utils import ReshapeInputArray
+from .utils import ReshapeArraysDecorator
 
 
 ############################################################
@@ -10,7 +18,7 @@ from .utils import ReshapeInputArray
 ############################################################
 
 
-class STFT_Operator: 
+class STFTOperator:
     def __init__(self, window, overlap=0.5, dt=1, backend='scipy', nfft=None, padtype='reflect', **kwargs):
         """
             Operator for Short-Term Fourier Transform (STFT) (forward & inverse)
@@ -169,8 +177,8 @@ class STFT_Operator:
 
         return X
 
-    @ReshapeInputArray(dim=2, num=1, methodfunc=True)
-    def forward(self, X):
+    @ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=True, output_num=1, first_shape=True)
+    def forward(self, X, /):
         """
             Performs Forward STFT
 
@@ -180,8 +188,8 @@ class STFT_Operator:
         """
         return self._forward_backend(X)
 
-    @ReshapeInputArray(dim=3, num=1, methodfunc=True)
-    def inverse(self, C):
+    @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=True, output_num=1, first_shape=True)
+    def inverse(self, C, /):
         """
             Performs Inverse STFT
 
