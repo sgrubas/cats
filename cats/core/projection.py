@@ -118,7 +118,8 @@ def _giveTimeIntervals(detection, time):
     return intervals[:j]
 
 
-@nb.njit("f8[:, :](f8[:, :], f8, f8)")
+@nb.njit(["f8[:, :](f8[:, :], f8, f8)",
+          "i8[:, :](i8[:, :], i8, i8)"])
 def _filterIntervals(intervals, max_gap, min_width):
     """
         Filters intervals by combining close intervals with gap <= `max_gap` and removing short intervals < `min_width`.
@@ -145,7 +146,7 @@ def _filterIntervals(intervals, max_gap, min_width):
                 filtered[-1] = (intv_old[0], intv_new[1])
         if (len(filtered) > 0) and (filtered[-1][1] - filtered[-1][0]) < min_width:
             filtered.pop(-1)
-        filtered = np.array(filtered) if len(filtered) > 0 else np.zeros((0, 2))
+        filtered = np.array(filtered) if len(filtered) > 0 else np.zeros((0, 2), dtype=intervals.dtype)
     else:
         filtered = intervals
     
@@ -153,41 +154,40 @@ def _filterIntervals(intervals, max_gap, min_width):
 
 
 @nb.njit("List(f8[:, :])(b1[:, :], f8[:], f8, f8)")
-def _filterIntervalsN(detection, time, max_gap, min_width):
-    """
-        Extracts and filters time intervals of `True` values from boolean array.
-        Filters by combining close intervals with gap <= `max_gap` and removing short intervals < `min_width`.
-
-        Arguments:
-            detection : boolean np.ndarray (M, N,) : `M` boolean arrays, assuming `True` is earthquake, `False` is noise
-            time : float np.ndarray (N,) : time axis to assign time values to the extracted intervals
-            max_gap : float : maximum gap between two close intervals to be considered as one big interval
-            min_width : float : minimum width of intervals to be kept
-
-        Returns:
-            filtered_intervals : List(np.ndarray (ntf, 2)) : `ntf` filtered time intervals
-    """
+def _filterTimeIntervalsN(detection, time, max_gap, min_width):
     intervals = []
     for di in detection:
         intervals.append(_filterIntervals(_giveTimeIntervals(di, time), max_gap, min_width))
     return intervals
 
 
-def FilterIntervals(detection, time, max_gap, min_width):
+@nb.njit("List(i8[:, :])(b1[:, :], i8, i8)")
+def _filterIntervalsN(detection, max_gap, min_width):
+    intervals = []
+    for di in detection:
+        intervals.append(_filterIntervals(_giveIntervals(di), max_gap, min_width))
+    return intervals
+
+
+def FilterIntervals(detection, max_gap, min_width, time=None):
     """
         Extracts and filters time intervals of `True` values from boolean array.
         Filters by combining close intervals with gap <= `max_gap` and removing short intervals < `min_width`.
 
         Arguments:
             detection : boolean np.ndarray (M, N,) : `M` boolean arrays, assuming `True` is earthquake, `False` is noise
-            time : float np.ndarray (N,) : time axis to assign time values to the extracted intervals
             max_gap : float : maximum gap between two close intervals to be considered as one big interval
             min_width : float : minimum width of intervals to be kept
+            time : float np.ndarray (N,) : time axis to assign time values to the extracted intervals
 
         Returns:
             filtered_intervals : List(np.ndarray (ntf, 2)) : `ntf` filtered time intervals
     """
-    return _filterIntervalsN(detection, time, max_gap, min_width)
+    if time is None:
+        filtered = _filterIntervalsN(detection, int(max_gap), int(min_width))
+    else:
+        filtered = _filterTimeIntervalsN(detection, time, float(max_gap), float(min_width))
+    return filtered
 
 
 @nb.njit("b1[:](f8[:, :], i8, f8)")

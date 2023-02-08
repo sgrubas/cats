@@ -47,3 +47,21 @@ def _ThresholdingSNR(PSD, Sgm, frames, minSNR):
 @ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=1, first_shape=True)
 def ThresholdingSNR(PSD, Sgm, /, frames, minSNR):
     return _ThresholdingSNR(PSD, Sgm, frames, minSNR)
+
+
+@nb.njit(["f8[:, :](f8[:, :], f8[:, :], i8[:, :])",
+          "f8[:, :](f4[:, :], f8[:, :], i8[:, :])"], parallel=True)
+def _CalculateSNR(PSD, Sgm, frames):
+    SNR = np.empty(PSD.shape)
+    M = len(frames)
+    N = len(PSD)
+    for j in nb.prange(M):
+        j1, j2 = frames[j]
+        for i in nb.prange(N):
+            SNR[i, j1 : j2 + 1] = PSD[i, j1 : j2 + 1] / Sgm[i, j]
+    return SNR
+
+
+@ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=1, first_shape=True)
+def CalculateSNR(PSD, Sgm, /, frames):
+    return _CalculateSNR(PSD, Sgm, frames)

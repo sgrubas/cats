@@ -13,7 +13,7 @@ from .core.clustering import ClusteringToProjection
 from .core.projection import RemoveGaps, ProjectFilterIntervals
 from .baseclass import CATSBaseSTFT, CATSResult
 from .core.utils import get_interval_division
-from .core.thresholding import ThresholdingSNR
+from .core.thresholding import ThresholdingSNR, CalculateSNR
 
 class CATSDetector(CATSBaseSTFT):
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft, minSNR, stationary_frame_sec,
@@ -30,7 +30,8 @@ class CATSDetector(CATSBaseSTFT):
         self.max_dt_gap_len = int(max_dt_gap_sec / self.stft_hop_sec)
 
     def detect_stepwise(self, x):
-        X, Eta, B, C = super()._apply(x, finish_on='clustering')
+        X, PSD, Eta, B, K = super()._apply(x, finish_on='clustering')
+        C = (K > 0)
         c = C.max(axis=-2)
         detection = RemoveGaps(c, self.max_dt_gap_len)
 
@@ -38,17 +39,18 @@ class CATSDetector(CATSBaseSTFT):
         time = np.arange(x.shape[-1]) * self.dt_sec
         stft_time = self.STFT.forward_time_axis(x.shape[-1])
         frames = get_interval_division(N=X.shape[-1], L=self.stationary_frame_len)
+        SNR = CalculateSNR(PSD, Sgm, frames)
 
-        kwargs = {"signal" : x, "spectrogram" : X, "noise_thresholding" : Eta, "noise_std" : Sgm,
-                  "binary_spectrogram" : B, "binary_spectrogram_clustered" : C,
-                  "binary_projection" : c, "detection" : detection,
+        kwargs = {"signal" : x, "coefficients" : X, "spectrogram" : PSD, "noise_thresholding" : Eta, "noise_std" : Sgm,
+                  "binary_spectrogram" : B, "binary_spectrogram_clustered" : C, "spectrogram_clusters" : K,
+                  "binary_projection" : c, "detection" : detection, "SNR_spectrogram" : SNR,
                   "time" : time, "stft_time" : stft_time, "stft_frequency" : self.stft_frequency,
                   "stationary_intervals" : frames}
 
         return CATSDetectionResult(**kwargs)
 
     def detect(self, x):
-        X, Eta, B = super()._apply(x, finish_on='threshold')
+        X, PSD, Eta, B = super()._apply(x, finish_on='threshold')
         detection = ClusteringToProjection(B, q=self.neighbor_distance_len,
                                            s=(self.min_df_width_len, self.min_dt_width_len),
                                            max_gap=self.max_dt_gap_len)
@@ -84,17 +86,17 @@ class SNRDetector(CATSBaseSTFT):
 
 
     def detect(self, x):
-        X, Eta = super()._apply(x, finish_on='date')
+        X, PSD, Eta = super()._apply(x, finish_on='date')
         Sgm = EtaToSigma(Eta, self.minSNR)
         frames = get_interval_division(N=X.shape[-1], L=self.stationary_frame_len)
-        B = ThresholdingSNR(np.abs(X), Sgm, frames, self.minSNR)
+        B = ThresholdingSNR(PSD, Sgm, frames, self.minSNR)
         c = B.max(axis=-2)
         stft_time = self.STFT.forward_time_axis(x.shape[-1])
         detection = ProjectFilterIntervals(c, stft_time, self.max_dt_gap_sec, self.min_dt_width_sec, stft_time)
 
         time = np.arange(x.shape[-1]) * self.dt_sec
-        kwargs = {"signal" : x, "spectrogram" : X, "noise_thresholding" : Eta, "noise_std" : Sgm,
-                  "binary_spectrogram" : B, "binary_spectrogram_clustered" : B,
+        kwargs = {"signal" : x, "coefficients" : X, "spectrogram" : PSD, "noise_thresholding" : Eta, "noise_std" : Sgm,
+                  "binary_spectrogram" : B, "binary_spectrogram_clustered" : B, "spectrogram_clusters" : B,
                   "binary_projection" : c, "detection" : detection,
                   "time" : time, "stft_time" : stft_time, "stft_frequency" : self.stft_frequency,
                   "stationary_intervals" : frames}

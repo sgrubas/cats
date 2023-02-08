@@ -16,17 +16,17 @@ from cats.core.utils import ReshapeArraysDecorator
 _EPS = 1e-9
 
 
-@nb.njit("f8(i8[:], i8[:])")
+@nb.njit("f8[:](i8[:], i8[:])")
 def _BinaryCrossentropy(y_true, y_pred):
     bce = y_true * np.log(y_pred + _EPS)
     bce += (1 - y_true) * np.log(1 - y_pred + _EPS)
     return -bce
 
 
-@nb.njit("f8[:](i8[:, :], i8[:, :])", parallel=True)
+@nb.njit("f8[:, :](i8[:, :], i8[:, :])", parallel=True)
 def _BinaryCrossentropyN(y_true, y_pred):
     M = y_true.shape[0]
-    bce = np.empty(M)
+    bce = np.empty(y_true.shape)
     for i in nb.prange(M):
         bce[i] = _BinaryCrossentropy(y_true[i], y_pred[i])
     return bce
@@ -34,7 +34,7 @@ def _BinaryCrossentropyN(y_true, y_pred):
 
 @ReshapeArraysDecorator(dim=2, input_num=2)
 def BinaryCrossentropy(y_true, y_pred, /):
-    return _BinaryCrossentropyN(y_true.astype(int), y_pred.astype(int))
+    return _BinaryCrossentropyN(y_true.astype(np.int64), y_pred.astype(np.int64))
 
 
 """ Classification labels """
@@ -56,14 +56,16 @@ def _intervalFalseNeg(classes, fn_max):
         fn, tp = 0, 1
     return label, fn, tp
 
-@nb.njit("UniTuple(i8, 2)(i8[:], i8, b1)")
+
+@nb.njit("UniTuple(i8, 3)(i8[:], i8, i8)")
 def _intervalFalsePos(classes, fp_max, overlap):
     fp_count = np.count_nonzero(classes == _FP)
-    if (fp_count > fp_max) or not overlap:
-        label, fp = _FP, 1
+    if (fp_count > fp_max) or (overlap == 0):
+        label, fp, tn = _FP, max(fp_count // fp_max, 1), 0
     else:
-        label, fp = _TN, 0
-    return label, fp
+        label, fp, tn = _TN, 0, (overlap == 2) * 1
+    return label, fp, tn
+
 
 @nb.njit("UniTuple(i8[:], 2)(b1[:], b1[:], f8, i8)")
 def _evaluateDetection(y_true, y_pred, fn_max, fp_max):
@@ -84,9 +86,9 @@ def _evaluateDetection(y_true, y_pred, fn_max, fp_max):
                 R[0] += fn
                 R[1] += tp
             elif ci_ == _FP:
-                overlap = (c[i1 - 1] == _TP) or (ci == _TP)
-                label, fp = _intervalFalsePos(c[i1: i2 + 1], fp_max, overlap)
+                label, fp, tn = _intervalFalsePos(c[i1: i2 + 1], fp_max, (c[i1 - 1] == _TP) + (ci == _TP))
                 R[2] += fp
+                R[3] += tn
             else:
                 label = _TN
                 R[3] += 1
@@ -96,19 +98,19 @@ def _evaluateDetection(y_true, y_pred, fn_max, fp_max):
     return classified, R
 
 
-@nb.njit("Tuple(i8[:, :], i8[:])(b1[:, :], b1[:, :], f8, i8)")
+@nb.njit("Tuple((i8[:, :], i8[:]))(b1[:, :], b1[:, :], f8, i8)")
 def _evaluateDetectionN(y_true, y_pred, fn_max, fp_max):
     R = np.array([0, 0, 0, 0])
     M, N = y_true.shape
-    labels = np.empty((M, N))
+    labels = np.empty((M, N), dtype=np.int64)
     for i in nb.prange(M):
         labels_i, R_i = _evaluateDetection(y_true[i], y_pred[i], fn_max, fp_max)
         labels[i] = labels_i
-        R[i] += R_i
+        R += R_i
     return labels, R
 
 
 @ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=1, first_shape=True)
 def EvaluateDetection(y_true, y_pred, /, fn_max, fp_max):
-    labels, R = _evaluateDetection(y_true, y_pred, fn_max, fp_max)
+    labels, R = _evaluateDetectionN(y_true, y_pred, fn_max, fp_max)
     return labels, R

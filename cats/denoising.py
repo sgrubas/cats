@@ -31,8 +31,8 @@ class CATSDenoiser(CATSBaseSTFT):
         self.wiener = wiener
 
     def denoise_stepwise(self, x):
-        X, Eta, B, C = super()._apply(x, finish_on='clustering')
-
+        X, PSD, Eta, B, K = super()._apply(x, finish_on='clustering')
+        C = K > 0
         N = x.shape[-1]
         time = np.arange(N) * self.dt_sec
         Sgm = EtaToSigma(Eta, self.minSNR)
@@ -40,11 +40,11 @@ class CATSDenoiser(CATSBaseSTFT):
         stft_time = self.STFT.forward_time_axis(x.shape[-1])
 
         F = ClusterFilling(C, self.neighbor_distance_len, self.min_neighbors)
-        W = WienerNaive(np.abs(X), Sgm, F, frames) if self.wiener else F
+        W = WienerNaive(PSD, Sgm, F, frames) if self.wiener else F
         y = (self.STFT / (X * W))[..., :N]
 
-        kwargs = {"signal" : x, "spectrogram" : X, "noise_thresholding" : Eta, "noise_std" : Sgm,
-                  "binary_spectrogram" : B, "binary_spectrogram_clustered" : C,
+        kwargs = {"signal" : x, "coefficients" : X, "spectrogram" : PSD, "noise_thresholding" : Eta, "noise_std" : Sgm,
+                  "binary_spectrogram" : B, "binary_spectrogram_clustered" : C, "spectrogram_clusters" : K,
                   "binary_spectrogram_filled" : F, "wiener_spectrogram" : W, "denoised_signal" : y,
                   "time" : time, "stft_time" : stft_time, "stft_frequency" : self.stft_frequency,
                   "stationary_intervals" : frames, "wienered" : self.wiener}
@@ -52,7 +52,7 @@ class CATSDenoiser(CATSBaseSTFT):
         return CATSDenoisingResult(**kwargs)
 
     def denoise(self, x):
-        X, Eta, B, C = super()._apply(x, finish_on='clustering')
+        X, PSD, Eta, B, C = super()._apply(x, finish_on='clustering')
         F = ClusterFilling(C, self.neighbor_distance_len, self.min_neighbors)
         y = (self.STFT / (X * F))[..., :x.shape[-1]]
         return y
@@ -69,7 +69,7 @@ class CATSDenoisingResult(CATSResult):
         f_dim = hv.Dimension('Frequency', unit='Hz')
         A_dim = hv.Dimension('Amplitude')
 
-        PSD = np.abs(self.spectrogram[ind])
+        PSD = self.spectrogram[ind]
         F = PSD * self.binary_spectrogram_filled[ind].astype(float)
 
         fig4 = hv.Image((self.stft_time, self.stft_frequency, F), kdims=[t_dim, f_dim],

@@ -1,1 +1,1 @@
-from .detection import *
+from .binary import *

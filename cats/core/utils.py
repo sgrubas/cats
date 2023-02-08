@@ -37,7 +37,7 @@ def _ReshapeOutputs(outputs, dim, output_num, methodfunc, first_shape, preshapes
             zndim = inputs[mf + i * first_shape].ndim
             zi = zi.squeeze() if zndim == d else zi
             V.append(zi)
-        V = tuple(V)
+        V = tuple(V) + tuple(outputs[out_num:])
     return V
 
 

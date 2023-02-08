@@ -93,32 +93,33 @@ class CATSBaseSTFT:
         X = self.STFT * x
         PSD = np.abs(X)
         if 'stft' in finish_on.casefold():
-            return X
+            return X, PSD
 
         frames = get_interval_division(N=PSD.shape[-1], L=self.stationary_frame_len)
-        Eta = BEDATE(PSD, frames=frames, minSNR=self.minSNR, Q=self.date_Q,
-                     original_mode=self.date_noise_mode)
+        Eta = BEDATE(PSD, frames=frames, minSNR=self.minSNR, Q=self.date_Q, original_mode=self.date_noise_mode)
         if 'date' in finish_on.casefold():
-            return X, Eta
+            return X, PSD, Eta
 
         B = Thresholding(PSD, Eta, frames=frames)
         if 'threshold' in finish_on.casefold():
-            return X, Eta, B
+            return X, PSD, Eta, B
 
-        C = Clustering(B, q=self.neighbor_distance_len,
-                       s=(self.min_df_width_len, self.min_dt_width_len))
-        return X, Eta, B, C
+        K = Clustering(B, q=self.neighbor_distance_len, s=(self.min_df_width_len, self.min_dt_width_len))
+        return X, PSD, Eta, B, K
 
 
 class CATSResult:
-    def __init__(self, signal, spectrogram, noise_thresholding, noise_std, binary_spectrogram,
-                 binary_spectrogram_clustered, time, stft_time, stft_frequency, stationary_intervals, **kwargs):
+    def __init__(self, signal, coefficients, spectrogram, noise_thresholding, noise_std, binary_spectrogram,
+                 binary_spectrogram_clustered, spectrogram_clusters,
+                 time, stft_time, stft_frequency, stationary_intervals, **kwargs):
         self.signal = signal
+        self.coefficients = coefficients
         self.spectrogram = spectrogram
         self.noise_thresholding = noise_thresholding
         self.noise_std = noise_std
         self.binary_spectrogram = binary_spectrogram
         self.binary_spectrogram_clustered = binary_spectrogram_clustered
+        self.spectrogram_clusters = spectrogram_clusters
         self.time = time
         self.stft_time = stft_time
         self.stft_frequency = stft_frequency
@@ -132,7 +133,7 @@ class CATSResult:
         f_dim = hv.Dimension('Frequency', unit='Hz')
         A_dim = hv.Dimension('Amplitude')
 
-        PSD = np.abs(self.spectrogram[ind])
+        PSD = self.spectrogram[ind]
         B = PSD * self.binary_spectrogram[ind].astype(float)
         C = PSD * self.binary_spectrogram_clustered[ind].astype(float)
 

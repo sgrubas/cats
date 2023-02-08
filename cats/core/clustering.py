@@ -13,7 +13,7 @@ from scipy import special, stats
 
 ###################  CLUSTERING  ###################
 
-@nb.njit("b1[:, :](b1[:, :], UniTuple(i8, 2), UniTuple(i8, 2))")
+@nb.njit("i8[:, :](b1[:, :], UniTuple(i8, 2), UniTuple(i8, 2))")
 def _Clustering2D(B, q, s):
     """
         Performs clustering (density-based / neighbor-based) of binary spectrogram.
@@ -74,8 +74,6 @@ def _Clustering2D(B, q, s):
             for ind in cluster_k:
                 C[ind] = cluster_assigned
             
-    F = np.full(shape, False)
-
     counted = []
     for (di, dj) in move_clusters:
         if (dj not in counted) and (di not in counted):
@@ -83,7 +81,8 @@ def _Clustering2D(B, q, s):
             clusters[di] += clusters[dj]
             clusters[dj] = [(Nf, Nt)]  # meaningless isolated point, will not be used
 
-    F = np.full(shape, False)
+    K = np.full(shape, 0)
+    k = 1
     for cl in clusters:
         if len(cl) > 1:
             cl_arr = np.array(cl)
@@ -91,12 +90,13 @@ def _Clustering2D(B, q, s):
             cl_dt = cl_arr[:, 1].max() - cl_arr[:, 1].min()
             if (cl_dt >= s_t) and (cl_df >= s_f):
                 for ind in cl:
-                    F[ind] = True
+                    K[ind] = k
+                k += 1
 
-    return F
+    return K
 
 
-@nb.njit("b1[:, :, :](b1[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2))", parallel=True)
+@nb.njit("i8[:, :, :](b1[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2))", parallel=True)
 def _ClusteringN2D(B, q, s):
     """
         Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
@@ -106,10 +106,10 @@ def _ClusteringN2D(B, q, s):
             q : tuple(int, 2) : neighborhood distance for clustering `(q_f, q_t)` for time and frequency respectively.
             s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
     """
-    C = np.empty(B.shape, dtype=np.bool_)
+    K = np.empty(B.shape, dtype=np.int64)
     for i in nb.prange(B.shape[0]):
-        C[i] = _Clustering2D(B[i], q, s)
-    return C
+        K[i] = _Clustering2D(B[i], q, s)
+    return K
 
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
@@ -124,8 +124,8 @@ def Clustering(B, /, q=1, s=(5, 5)):
     """
     q = _scalarORarray_to_tuple(q, minsize=2)
     s = _scalarORarray_to_tuple(s, minsize=2)
-    C = _ClusteringN2D(B.astype(bool), q, s)
-    return C
+    K = _ClusteringN2D(B.astype(bool), q, s)
+    return K
 
 
 @nb.njit("b1[:](b1[:, :], UniTuple(i8, 2), UniTuple(i8, 2), i8)")
@@ -197,14 +197,6 @@ def _ClusteringToProjection2D(B, q, s, max_gap):
             cl_dt = t_max - t_min
             if (cl_dt >= s_t) and (cl_df >= s_f):
                 intervals.append((t_min, t_max))
-                # if len(intervals) == 0:
-                #     intervals.append((t_min, t_max))
-                # else:
-                #     prev_interval = intervals[-1]
-                #     if (t_min - prev_interval[1]) > max_gap:
-                #         intervals.append((t_min, t_max))
-                #     else:
-                #         intervals[-1] = (prev_interval[0], t_max)
 
     projection = np.full(Nt, False)
     for i1, i2 in intervals:
