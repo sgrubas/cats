@@ -19,16 +19,19 @@ class CATSDenoiser(CATSBaseSTFT):
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft, minSNR, stationary_frame_sec,
                  min_dt_width_sec, min_df_width_Hz, neighbor_distance=0.95, min_neighbors=None, date_Q=0.95,
                  date_detection_mode=True, wiener=False, stft_backend='ssqueezepy', stft_kwargs=None):
+        # Filling cluster params
+        self.min_neighbors = min_neighbors
+        # Wiener filtering
+        self.wiener = wiener
         # Set basic parameter via baseclass
         super().__init__(dt_sec=dt_sec, stft_window_sec=stft_window_sec, stft_overlap=stft_overlap, stft_nfft=stft_nfft,
                          minSNR=minSNR, stationary_frame_sec=stationary_frame_sec, min_dt_width_sec=min_dt_width_sec,
                          min_df_width_Hz=min_df_width_Hz, neighbor_distance=neighbor_distance, date_Q=date_Q,
                          date_detection_mode=date_detection_mode, stft_backend=stft_backend, stft_kwargs=stft_kwargs)
 
-        # Filling cluster params
-        self.min_neighbors = (self.neighbor_distance_len * 2 + 1)**2 // 2 if min_neighbors is None else min_neighbors
-        # Wiener filtering
-        self.wiener = wiener
+    def _set_params(self):
+        super()._set_params()
+        self.min_neighbors = self.min_neighbors or (self.neighbor_distance_len * 2 + 1)**2 // 2
 
     def denoise_stepwise(self, x):
         X, PSD, Eta, B, K = super()._apply(x, finish_on='clustering')
