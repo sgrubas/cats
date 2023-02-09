@@ -52,6 +52,18 @@ def _giveIntervals(detection):
     return intervals[:j]
 
 
+@nb.njit("List(i8[:, :])(b1[:, :])")
+def _giveIntervalsN(detection):
+    intervals = []
+    for di in detection:
+        intervals.append(_giveIntervals(di))
+    return intervals
+
+
+@ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=False, output_num=0, first_shape=True)
+def GiveIntervals(detection, /):
+    return _giveIntervalsN(detection)
+
 @nb.njit("b1[:, :](b1[:, :], i8)")
 def _removeGaps(detection, max_gap):
     M, Nt = detection.shape
