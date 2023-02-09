@@ -42,7 +42,18 @@ def _ReshapeOutputs(outputs, dim, output_num, methodfunc, first_shape, preshapes
 
 
 def ReshapeArraysDecorator(dim : int, input_num : int = 1, methodfunc : bool = False,
-                  output_num : int = 1, first_shape : bool = True):
+                           output_num : int = 1, first_shape : bool = True):
+    """
+        Decorator for reshaping input and output arrays (positional arguments only) to a predefined number
+        of dimensions `dim`. The last axis is always main axis over which all the computations are performed.
+
+        Arguments:
+            dim : int : number of dimensions to be used for computations
+            input_num : int : number of first positional arguments (arrays) to be reshaped
+            methodfunc : boolean : whether it is applied to a method of class or a standalone function
+            output_num : int : number of first outputs (arrays) to be reshaped back to original shape
+            first_shape : boolean : whether to use the shape of the first input array for reshaping outputs back
+    """
     def decorator(function):
         @wraps(function)
         def wrapper(*inputs, **kwargs):
