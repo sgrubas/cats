@@ -5,3 +5,4 @@ from .clustering import *
 from .projection import *
 from .utils import *
 from .wiener import *
+from .plottingutils import *

@@ -53,41 +53,60 @@ class CATSBaseSTFT:
         self.dt_sec = dt_sec
         self.stft_backend = stft_backend
         self.stft_kwargs = stft_kwargs or {}
-        self.STFT = STFTOperator(window=stft_window_sec, overlap=stft_overlap, dt=dt_sec,
-                                 nfft=stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
         self.stft_overlap = stft_overlap
-        self.stft_overlap_len = self.STFT.noverlap
-        self.stft_overlap_sec = self.stft_overlap_len * dt_sec
-        self.stft_window = self.STFT.window
-        self.stft_window_len = len(self.stft_window)
-        self.stft_window_sec = self.stft_window_len * dt_sec
-        self.stft_frequency = self.STFT.f
-        self.stft_nfft = self.STFT.nfft
-        self.stft_hop_len = self.STFT.hop
-        self.stft_hop_sec = dt_sec * self.stft_hop_len
-
+        self.stft_window_sec = stft_window_sec
+        self.stft_nfft = stft_nfft
         # DATE params
         self.minSNR = minSNR
         self.date_Q = date_Q
         self.date_detection_mode = date_detection_mode
-        self.date_noise_mode = not date_detection_mode
+        self.stationary_frame_sec = stationary_frame_sec
+        # Clustering params
+        self.min_dt_width_sec = min_dt_width_sec
+        self.min_df_width_Hz = min_df_width_Hz
+        self.neighbor_distance_len = neighbor_distance
 
-        self.stationary_frame_len = max(int(stationary_frame_sec / self.stft_hop_sec), 256)
+        # Set other params and update correspondingly if needed
+        self._set_params()
+
+    def _set_params(self):
+        # Setting STFT
+        self.STFT = STFTOperator(window=self.stft_window_sec, overlap=self.stft_overlap, dt=self.dt_sec,
+                                 nfft=self.stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
+        self.stft_overlap_len = self.STFT.noverlap
+        self.stft_overlap_sec = self.stft_overlap_len * self.dt_sec
+        self.stft_window = self.STFT.window
+        self.stft_window_len = len(self.stft_window)
+        self.stft_window_sec = self.stft_window_len * self.dt_sec
+        self.stft_frequency = self.STFT.f
+        self.stft_nfft = self.STFT.nfft
+        self.stft_hop_len = self.STFT.hop
+        self.stft_hop_sec = self.dt_sec * self.stft_hop_len
+
+        # DATE params
+        self.date_noise_mode = not self.date_detection_mode
+        self.stationary_frame_len = max(int(self.stationary_frame_sec / self.stft_hop_sec), 256)
         self.stationary_frame_sec = self.stationary_frame_len * self.stft_hop_sec
 
         # Clustering params
-        self.min_dt_width_sec = min_dt_width_sec
-        self.min_dt_width_len = int(min_dt_width_sec / self.stft_hop_sec)
-        self.min_df_width_Hz = min_df_width_Hz
-        self.min_df_width_len = int(min_df_width_Hz / self.STFT.df)
-        if 0.0 <= neighbor_distance < 1.0:
+        self.min_dt_width_len = int(self.min_dt_width_sec / self.stft_hop_sec)
+        self.min_df_width_len = int(self.min_df_width_Hz / self.STFT.df)
+        if 0.0 <= self.neighbor_distance_len < 1.0:
             self.neighbor_distance_len = OptimalNeighborhoodDistance(self.minSNR, d=2,
-                                                                     pmin=neighbor_distance,
+                                                                     pmin=self.neighbor_distance_len,
                                                                      qmax=min(self.min_df_width_len,
                                                                               self.min_dt_width_len),
                                                                      maxN=1)
         else:
-            self.neighbor_distance_len = int(neighbor_distance)
+            self.neighbor_distance_len = int(self.neighbor_distance_len)
+
+    def reset_params(self, **params):
+        for attribute, value in params.items():
+            if hasattr(self, attribute):
+                setattr(self, attribute, value)
+            else:
+                raise AttributeError(f'{self.__name__} has no attribute: {attribute}')
+        self._set_params()
 
     def _apply(self, x, finish_on='clustering'):
         X = self.STFT * x
