@@ -98,19 +98,19 @@ def _evaluateDetection(y_true, y_pred, fn_max, fp_max):
     return classified, R
 
 
-@nb.njit("Tuple((i8[:, :], i8[:]))(b1[:, :], b1[:, :], f8, i8)")
+@nb.njit("UniTuple(i8[:, :], 2)(b1[:, :], b1[:, :], f8, i8)")
 def _evaluateDetectionN(y_true, y_pred, fn_max, fp_max):
-    R = np.array([0, 0, 0, 0])
     M, N = y_true.shape
+    R = np.empty((M, 4), dtype=np.int64)
     labels = np.empty((M, N), dtype=np.int64)
     for i in nb.prange(M):
         labels_i, R_i = _evaluateDetection(y_true[i], y_pred[i], fn_max, fp_max)
         labels[i] = labels_i
-        R += R_i
+        R[i] = R_i
     return labels, R
 
 
-@ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=1, first_shape=True)
+@ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=2, first_shape=True)
 def EvaluateDetection(y_true, y_pred, /, fn_max, fp_max):
     labels, R = _evaluateDetectionN(y_true, y_pred, fn_max, fp_max)
     return labels, R
