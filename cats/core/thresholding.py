@@ -32,7 +32,7 @@ def Thresholding(PSD, Eta, /, frames):
 
 @nb.njit(["b1[:, :](f8[:, :], f8[:, :], i8[:, :], f8)",
           "b1[:, :](f4[:, :], f8[:, :], i8[:, :], f8)"], parallel=True)
-def _ThresholdingSNR(PSD, Sgm, frames, minSNR):
+def _ThresholdingBySNR(PSD, Sgm, frames, minSNR):
     B = np.empty_like(PSD, dtype=np.bool_)
     M = len(frames)
     N = len(PSD)
@@ -45,23 +45,24 @@ def _ThresholdingSNR(PSD, Sgm, frames, minSNR):
 
 
 @ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=1, first_shape=True)
-def ThresholdingSNR(PSD, Sgm, /, frames, minSNR):
-    return _ThresholdingSNR(PSD, Sgm, frames, minSNR)
+def ThresholdingBySNR(PSD, Sgm, /, frames, minSNR):
+    return _ThresholdingBySNR(PSD, Sgm, frames, minSNR)
 
 
-@nb.njit(["f8[:, :](f8[:, :], f8[:, :], i8[:, :])",
-          "f8[:, :](f4[:, :], f8[:, :], i8[:, :])"], parallel=True)
-def _CalculateSNR(PSD, Sgm, frames):
+@nb.njit(["f8[:, :](f8[:, :], f8[:, :], f8[:, :], i8[:, :])",
+          "f8[:, :](f4[:, :], f8[:, :], f8[:, :], i8[:, :])"], parallel=True)
+def _ThresholdingSNR(PSD, Sgm, Eta, frames):
     SNR = np.empty(PSD.shape)
     M = len(frames)
     N = len(PSD)
     for j in nb.prange(M):
         j1, j2 = frames[j]
         for i in nb.prange(N):
-            SNR[i, j1 : j2 + 1] = PSD[i, j1 : j2 + 1] / Sgm[i, j]
+            psd = PSD[i, j1 : j2 + 1]
+            SNR[i, j1 : j2 + 1] = (psd > Eta[i, j]) * psd / Sgm[i, j]
     return SNR
 
 
-@ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=1, first_shape=True)
-def CalculateSNR(PSD, Sgm, /, frames):
-    return _CalculateSNR(PSD, Sgm, frames)
+@ReshapeArraysDecorator(dim=2, input_num=3, methodfunc=False, output_num=1, first_shape=True)
+def ThresholdingSNR(PSD, Sgm, Eta, /, frames):
+    return _ThresholdingSNR(PSD, Sgm, Eta, frames)

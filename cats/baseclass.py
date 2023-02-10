@@ -3,9 +3,9 @@ import holoviews as hv
 
 from .core.timefrequency import STFTOperator
 from .core.clustering import OptimalNeighborhoodDistance, Clustering
-from .core.date import BEDATE
+from .core.date import BEDATE, EtaToSigma
 from .core.utils import get_interval_division
-from .core.thresholding import Thresholding
+from .core.thresholding import Thresholding, ThresholdingSNR
 
 
 class CATSBaseSTFT:
@@ -15,7 +15,7 @@ class CATSBaseSTFT:
     """
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft,
                  minSNR, stationary_frame_sec, min_dt_width_sec, min_df_width_Hz,
-                 neighbor_distance=0.95, date_Q=0.95, date_detection_mode=True,
+                 neighbor_distance=1, clusteringWithSNR=True, date_Q=0.95, date_detection_mode=True,
                  stft_backend='ssqueezepy', stft_kwargs=None):
         """
             Arguments:
@@ -65,6 +65,7 @@ class CATSBaseSTFT:
         self.min_dt_width_sec = min_dt_width_sec
         self.min_df_width_Hz = min_df_width_Hz
         self.neighbor_distance_len = neighbor_distance
+        self.clusteringWithSNR = clusteringWithSNR
 
         # Set other params and update correspondingly if needed
         self._set_params()
@@ -116,15 +117,19 @@ class CATSBaseSTFT:
 
         frames = get_interval_division(N=PSD.shape[-1], L=self.stationary_frame_len)
         Eta = BEDATE(PSD, frames=frames, minSNR=self.minSNR, Q=self.date_Q, original_mode=self.date_noise_mode)
+        Sgm = EtaToSigma(Eta, self.minSNR)
         if 'date' in finish_on.casefold():
-            return X, PSD, Eta
+            return X, PSD, Eta, Sgm
 
-        B = Thresholding(PSD, Eta, frames=frames)
+        SNR = ThresholdingSNR(PSD, Sgm, Eta, frames)
         if 'threshold' in finish_on.casefold():
-            return X, PSD, Eta, B
+            return X, PSD, Eta, Sgm, SNR
 
-        K = Clustering(B, q=self.neighbor_distance_len, s=(self.min_df_width_len, self.min_dt_width_len))
-        return X, PSD, Eta, B, K
+        K = Clustering(SNR, q=self.neighbor_distance_len,
+                       s=(self.min_df_width_len, self.min_dt_width_len),
+                       minSNR=self.minSNR * self.clusteringWithSNR)
+
+        return X, PSD, Eta, Sgm, SNR, K
 
 
 class CATSResult:
