@@ -89,8 +89,8 @@ def _Clustering2D(SNR, q, s, minSNR):
     for cl in clusters:
         if len(cl) > 1:
             cl_arr = np.array(cl)
-            cl_df = cl_arr[:, 0].max() - cl_arr[:, 0].min()
-            cl_dt = cl_arr[:, 1].max() - cl_arr[:, 1].min()
+            cl_df = cl_arr[:, 0].max() - cl_arr[:, 0].min() + 1
+            cl_dt = cl_arr[:, 1].max() - cl_arr[:, 1].min() + 1
             cl_snr = cl_arr[:, 2].mean()
             if (cl_dt >= s_t) and (cl_df >= s_f) and (cl_snr >= minSNR):
                 for (l1, l2, snr) in cl:
@@ -117,7 +117,101 @@ def _ClusteringN2D(B, q, s, minSNR):
 
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
-def Clustering(B, /, q=1, s=(5, 5), minSNR=4.0):
+def _ClusteringN2D_API(B, /, q, s, minSNR):
+    return _ClusteringN2D(B, q, s, minSNR)
+
+
+@nb.njit("i8[:, :, :](f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)")
+def _Clustering3D(SNR, q, s, minSNR):
+    """
+        Performs clustering (density-based / neighbor-based) of binary spectrogram.
+
+        Arguments:
+            B : np.ndarray (Nf, Nt) : where `Nf` is frequency axis, `Nt` is time axis
+            q : tuple(int, 2) : neighborhood distance for clustering `(q_f, q_t)` for time and frequency respectively.
+            s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
+    """
+    B = SNR > 0
+    shape = B.shape
+    Nc, Nf, Nt = shape
+    C = np.full(shape, -1)
+    q_c, q_f, q_t = q
+    s_c, s_f, s_t = s
+    clusters = []
+    move_clusters = []  # for combining the connecting clusters
+
+    for (i, j, k), bijk in np.ndenumerate(B):
+        if bijk:
+            # selecting area of interest
+            i1, i2 = max(i - q_c, 0), min(i + q_c + 1, Nc)
+            j1, j2 = max(j - q_f, 0), min(j + q_f + 1, Nf)
+            k1, k2 = max(k - q_t, 0), min(k + q_t + 1, Nt)
+
+            b = B[i1: i2, j1: j2, k1: k2]
+            if np.sum(b) < 2:  # isolated single points are deleted right away
+                continue
+
+            c = C[i1: i2, j1: j2, k1: k2]
+            snr = SNR[i1: i2, j1: j2, k1: k2]
+            cluster_k = []
+            neighbor_clusters = []
+
+            # checking existing clusters and remembering not assigned
+            for l, cl in np.ndenumerate(c):
+                if b[l]:
+                    if (cl >= 0):
+                        if (cl not in neighbor_clusters):
+                            neighbor_clusters.append(cl)
+                    else:
+                        l1 = i - q_c * (i > 0) + l[0]
+                        l2 = j - q_f * (j > 0) + l[1]
+                        l3 = k - q_t * (k > 0) + l[2]
+                        cluster_k.append((l1, l2, l3, snr[l]))
+
+            # combining different clusters into one
+            # and updating collection of clusters
+            k = len(neighbor_clusters)
+            if k == 0:
+                cluster_assigned = len(clusters)
+                clusters.append(cluster_k)
+            elif (k == 1) and (len(cluster_k) == 0):
+                continue
+            else:
+                cluster_assigned = neighbor_clusters[0]
+                clusters[cluster_assigned] += cluster_k
+                for cli in neighbor_clusters[1:]:
+                    move_clusters.append((cluster_assigned, cli))
+
+            # assigning clusters
+            for (l1, l2, l3, snr) in cluster_k:
+                C[l1, l2, l3] = cluster_assigned
+
+    counted = []
+    for (di, dj) in move_clusters:
+        if (dj not in counted) and (di not in counted):
+            counted.append(dj)
+            clusters[di] += clusters[dj]
+            clusters[dj] = [(Nc, Nf, Nt, 0.0)]  # meaningless isolated point, will not be used
+
+    K = np.full(shape, 0)
+    k = 1
+    for cl in clusters:
+        if len(cl) > 1:
+            cl_arr = np.array(cl)
+            cl_dc = cl_arr[:, 0].max() - cl_arr[:, 0].min() + 1
+            cl_df = cl_arr[:, 1].max() - cl_arr[:, 1].min() + 1
+            cl_dt = cl_arr[:, 2].max() - cl_arr[:, 2].min() + 1
+            cl_snr = cl_arr[:, 3].mean()
+            if (cl_dc >= s_c) and (cl_dt >= s_t) and (cl_df >= s_f) and (cl_snr >= minSNR):
+                for (l1, l2, l3, snr) in cl:
+                    K[l1, l2, l3] = k
+                k += 1
+
+    return K
+
+
+@nb.njit("i8[:, :, :, :](f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)", parallel=True)
+def _ClusteringN3D(B, q, s, minSNR):
     """
         Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
 
@@ -126,9 +220,30 @@ def Clustering(B, /, q=1, s=(5, 5), minSNR=4.0):
             q : tuple(int, 2) : neighborhood distance for clustering `(q_f, q_t)` for time and frequency respectively.
             s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
     """
-    q = _scalarORarray_to_tuple(q, minsize=2)
-    s = _scalarORarray_to_tuple(s, minsize=2)
-    K = _ClusteringN2D(B, q, s, minSNR)
+    K = np.empty(B.shape, dtype=np.int64)
+    for i in nb.prange(B.shape[0]):
+        K[i] = _Clustering3D(B[i], q, s, minSNR)
+    return K
+
+
+@ReshapeArraysDecorator(dim=4, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+def _ClusteringN3D_API(B, /, q, s, minSNR):
+    return _ClusteringN3D(B, q, s, minSNR)
+
+
+def Clustering(B, /, q, s, minSNR, dim=2):
+    """
+        Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
+
+        Arguments:
+            B : np.ndarray (M, Nf, Nt) : `M' is number of spectrograms, `Nf` is frequency axis, `Nt` is time axis
+            q : tuple(int, 2) : neighborhood distance for clustering `(q_f, q_t)` for time and frequency respectively.
+            s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
+    """
+    func = {2 : _ClusteringN2D_API, 3 : _ClusteringN3D_API}
+    q = _scalarORarray_to_tuple(q, minsize=dim)
+    s = _scalarORarray_to_tuple(s, minsize=dim)
+    K = func[dim](B, q, s, minSNR)
     return K
 
 

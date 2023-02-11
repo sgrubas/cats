@@ -27,7 +27,8 @@ def plot_traces(traces, detection, fname, comp, gain=1, rsp=1, **kwargs):
     kwargs.setdefault('figsize', 400)
 
     t_dim = hv.Dimension('Time', unit='s')
-    dco = traces[fname].loc[comp]
+    dco = traces[fname]
+    dco = dco[dco.Component == comp].squeeze()
 
     locy = dco.Location.values
     dy = min(np.diff(locy))
@@ -48,7 +49,8 @@ def plot_traces(traces, detection, fname, comp, gain=1, rsp=1, **kwargs):
     rects = []
     if detection is not None:
         time = detection[fname].coords['Time'].values
-        det = detection[fname].loc[comp].values
+        det = detection[fname]
+        det = det[det.Component == comp].squeeze().values
         if det.ndim == 2:
             det = det[..., None]
 

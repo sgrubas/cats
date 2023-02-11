@@ -5,7 +5,7 @@ from .core.timefrequency import STFTOperator
 from .core.clustering import OptimalNeighborhoodDistance, Clustering
 from .core.date import BEDATE, EtaToSigma
 from .core.utils import get_interval_division
-from .core.thresholding import Thresholding, ThresholdingSNR
+from .core.thresholding import ThresholdingSNR
 
 
 class CATSBaseSTFT:
@@ -15,8 +15,8 @@ class CATSBaseSTFT:
     """
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft,
                  minSNR, stationary_frame_sec, min_dt_width_sec, min_df_width_Hz,
-                 neighbor_distance=1, clusteringWithSNR=True, date_Q=0.95, date_detection_mode=True,
-                 stft_backend='ssqueezepy', stft_kwargs=None):
+                 neighbor_distance=1, clustering_with_SNR=True, clustering_multitrace=False,
+                 date_Q=0.95, date_detection_mode=True, stft_backend='ssqueezepy', stft_kwargs=None):
         """
             Arguments:
                 dt_sec : float : sampling time in seconds
@@ -65,7 +65,8 @@ class CATSBaseSTFT:
         self.min_dt_width_sec = min_dt_width_sec
         self.min_df_width_Hz = min_df_width_Hz
         self.neighbor_distance_len = neighbor_distance
-        self.clusteringWithSNR = clusteringWithSNR
+        self.clustering_with_SNR = clustering_with_SNR
+        self.clustering_multitrace = clustering_multitrace
 
         # Set other params and update correspondingly if needed
         self._set_params()
@@ -124,10 +125,11 @@ class CATSBaseSTFT:
         SNR = ThresholdingSNR(PSD, Sgm, Eta, frames)
         if 'threshold' in finish_on.casefold():
             return X, PSD, Eta, Sgm, SNR
-
+        mc = self.clustering_multitrace
         K = Clustering(SNR, q=self.neighbor_distance_len,
-                       s=(self.min_df_width_len, self.min_dt_width_len),
-                       minSNR=self.minSNR * self.clusteringWithSNR)
+                       s=(1,) * mc + (self.min_df_width_len, self.min_dt_width_len),
+                       minSNR=self.minSNR * self.clustering_with_SNR,
+                       dim=2 + mc)
 
         return X, PSD, Eta, Sgm, SNR, K
 

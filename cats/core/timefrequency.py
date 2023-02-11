@@ -19,7 +19,7 @@ from .utils import ReshapeArraysDecorator
 
 
 class STFTOperator:
-    def __init__(self, window, overlap=0.5, dt=1, backend='scipy', nfft=None, padtype='reflect', **kwargs):
+    def __init__(self, window, overlap=0.5, dt=1, backend='ssqueezepy', nfft=None, padtype='reflect', **kwargs):
         """
             Operator for Short-Term Fourier Transform (STFT) (forward & inverse)
 
@@ -122,6 +122,8 @@ class STFTOperator:
 
             X : numpy array : shape (..., N), `N` time samples
         """
+        compatible_padmodes = {"replicate ": "edge", "zero": "constant"}
+        padmode = compatible_padmodes.get(self.padtype, self.padtype)
         N = X.shape[-1]
         if self.backend == 'scipy':
             n1 = self.padedge
@@ -129,7 +131,7 @@ class STFTOperator:
         else:
             n1 = 0
             n2 = self.hop - (N - 1) % self.hop
-        return np.pad(X, [(0, 0), (n1, n2)], mode=self.padtype)
+        return np.pad(X, [(0, 0), (n1, n2)], mode=padmode)
 
     def _forward_backend(self, X):
         """

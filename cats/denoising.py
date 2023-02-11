@@ -17,7 +17,8 @@ from .core.utils import get_interval_division
 class CATSDenoiser(CATSBaseSTFT):
 
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft, minSNR, stationary_frame_sec,
-                 min_dt_width_sec, min_df_width_Hz, neighbor_distance=0.95, clusteringWithSNR=True, min_neighbors=None,
+                 min_dt_width_sec, min_df_width_Hz, neighbor_distance=0.95, clustering_with_SNR=True,
+                 clustering_multitrace=False, min_neighbors=None,
                  date_Q=0.95, date_detection_mode=True, wiener=False, stft_backend='ssqueezepy', stft_kwargs=None):
         # Filling cluster params
         self.min_neighbors = min_neighbors
@@ -27,14 +28,15 @@ class CATSDenoiser(CATSBaseSTFT):
         super().__init__(dt_sec=dt_sec, stft_window_sec=stft_window_sec, stft_overlap=stft_overlap, stft_nfft=stft_nfft,
                          minSNR=minSNR, stationary_frame_sec=stationary_frame_sec, min_dt_width_sec=min_dt_width_sec,
                          min_df_width_Hz=min_df_width_Hz, neighbor_distance=neighbor_distance,
-                         clusteringWithSNR=clusteringWithSNR, date_Q=date_Q, date_detection_mode=date_detection_mode,
-                         stft_backend=stft_backend, stft_kwargs=stft_kwargs)
+                         clustering_with_SNR=clustering_with_SNR, clustering_multitrace=clustering_multitrace,
+                         date_Q=date_Q, date_detection_mode=date_detection_mode, stft_backend=stft_backend,
+                         stft_kwargs=stft_kwargs)
 
     def _set_params(self):
         super()._set_params()
         self.min_neighbors = self.min_neighbors or (self.neighbor_distance_len * 2 + 1)**2 // 2
 
-    def denoise_stepwise(self, x):
+    def denoise(self, x):
         N = x.shape[-1]
         time = np.arange(N) * self.dt_sec
         stft_time = self.STFT.forward_time_axis(N)
@@ -53,12 +55,6 @@ class CATSDenoiser(CATSBaseSTFT):
                   "stationary_intervals" : frames, "wienered" : self.wiener}
 
         return CATSDenoisingResult(**kwargs)
-
-    def denoise(self, x):
-        X, PSD, Eta, Sgm, SNR, K = super()._apply(x, finish_on='clustering')
-        F = ClusterFilling(K > 0, self.neighbor_distance_len, self.min_neighbors)
-        y = (self.STFT / (X * F))[..., :x.shape[-1]]
-        return y
 
 
 class CATSDenoisingResult(CATSResult):
