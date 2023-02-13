@@ -15,7 +15,7 @@ class CATSBaseSTFT:
     """
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft,
                  minSNR, stationary_frame_sec, cluster_size_t_sec, cluster_size_f_Hz,
-                 cluster_distance_t_sec=1, cluster_distance_f_Hz=1, clustering_with_SNR=True,
+                 cluster_distance_t_sec=None, cluster_distance_f_Hz=None, clustering_with_SNR=True,
                  clustering_multitrace=False, cluster_size_trace=None, cluster_distance_trace=None,
                  date_Q=0.95, date_detection_mode=True, stft_backend='ssqueezepy', stft_kwargs=None):
         """
@@ -67,9 +67,9 @@ class CATSBaseSTFT:
         self.cluster_size_f_Hz = cluster_size_f_Hz
         self.cluster_size_trace = cluster_size_trace
 
-        self.cluster_distance_t_sec = cluster_distance_t_sec
-        self.cluster_distance_f_Hz = cluster_distance_f_Hz
-        self.cluster_distance_trace = cluster_distance_trace
+        self.cluster_distance_t_sec = cluster_distance_t_sec or self.cluster_size_t_sec / 2
+        self.cluster_distance_f_Hz = cluster_distance_f_Hz or self.cluster_size_f_Hz / 2
+        self.cluster_distance_trace = cluster_distance_trace or self.cluster_size_trace
 
         self.clustering_with_SNR = clustering_with_SNR
         self.clustering_multitrace = clustering_multitrace

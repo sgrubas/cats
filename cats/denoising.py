@@ -17,7 +17,7 @@ from .core.utils import get_interval_division
 class CATSDenoiser(CATSBaseSTFT):
 
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft, minSNR, stationary_frame_sec,
-                 cluster_size_t_sec, cluster_size_f_Hz, cluster_distance_t_sec, cluster_distance_f_Hz,
+                 cluster_size_t_sec, cluster_size_f_Hz, cluster_distance_t_sec=None, cluster_distance_f_Hz=None,
                  clustering_with_SNR=True, clustering_multitrace=False, cluster_size_trace=None,
                  cluster_distance_trace=None, min_neighbors=None,
                  date_Q=0.95, date_detection_mode=True, wiener=False, stft_backend='ssqueezepy', stft_kwargs=None):
@@ -38,7 +38,9 @@ class CATSDenoiser(CATSBaseSTFT):
     def _set_params(self):
         super()._set_params()
         if self.min_neighbors is None:
-            self.min_neighbors = (self.cluster_distance_t_len * 2 + 1) * (self.cluster_distance_f_len * 2 + 1) // 2
+            self.min_neighbors = ((self.cluster_distance_t_len * 2 + 1) *
+                                  (self.cluster_distance_f_len * 2 + 1) *
+                                  (self.cluster_distance_trace_len * self.clustering_multitrace * 2 + 1)) // 2
         else:
             self.min_neighbors = self.min_neighbors
 
