@@ -14,8 +14,9 @@ class CATSBaseSTFT:
 
     """
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft,
-                 minSNR, stationary_frame_sec, min_dt_width_sec, min_df_width_Hz,
-                 neighbor_distance=1, clustering_with_SNR=True, clustering_multitrace=False,
+                 minSNR, stationary_frame_sec, cluster_size_t_sec, cluster_size_f_Hz,
+                 cluster_distance_t_sec=1, cluster_distance_f_Hz=1, clustering_with_SNR=True,
+                 clustering_multitrace=False, cluster_size_trace=None, cluster_distance_trace=None,
                  date_Q=0.95, date_detection_mode=True, stft_backend='ssqueezepy', stft_kwargs=None):
         """
             Arguments:
@@ -62,9 +63,14 @@ class CATSBaseSTFT:
         self.date_detection_mode = date_detection_mode
         self.stationary_frame_sec = stationary_frame_sec
         # Clustering params
-        self.min_dt_width_sec = min_dt_width_sec
-        self.min_df_width_Hz = min_df_width_Hz
-        self.neighbor_distance_len = neighbor_distance
+        self.cluster_size_t_sec = cluster_size_t_sec
+        self.cluster_size_f_Hz = cluster_size_f_Hz
+        self.cluster_size_trace = cluster_size_trace
+
+        self.cluster_distance_t_sec = cluster_distance_t_sec
+        self.cluster_distance_f_Hz = cluster_distance_f_Hz
+        self.cluster_distance_trace = cluster_distance_trace
+
         self.clustering_with_SNR = clustering_with_SNR
         self.clustering_multitrace = clustering_multitrace
 
@@ -91,16 +97,18 @@ class CATSBaseSTFT:
         self.stationary_frame_sec = self.stationary_frame_len * self.stft_hop_sec
 
         # Clustering params
-        self.min_dt_width_len = int(self.min_dt_width_sec / self.stft_hop_sec)
-        self.min_df_width_len = int(self.min_df_width_Hz / self.STFT.df)
-        if 0.0 <= self.neighbor_distance_len < 1.0:
-            self.neighbor_distance_len = OptimalNeighborhoodDistance(self.minSNR, d=2,
-                                                                     pmin=self.neighbor_distance_len,
-                                                                     qmax=min(self.min_df_width_len,
-                                                                              self.min_dt_width_len),
-                                                                     maxN=1)
-        else:
-            self.neighbor_distance_len = int(self.neighbor_distance_len)
+        self.cluster_size_t_len = max(int(self.cluster_size_t_sec / self.stft_hop_sec), 1)
+        self.cluster_size_f_len = max(int(self.cluster_size_f_Hz / self.STFT.df), 1)
+        self.cluster_size_trace_len = max(self.cluster_size_trace or 1, 1)  # int(self.cluster_size_trace / self.dx)
+
+        self.cluster_distance_t_len = max(int(self.cluster_distance_t_sec / self.stft_hop_sec), 1)
+        self.cluster_distance_f_len = max(int(self.cluster_distance_f_Hz / self.STFT.df), 1)
+        self.cluster_distance_trace_len = max(self.cluster_distance_trace or 1, 1)  # int(self.cluster_distance_trace / self.dx)
+
+        if self.clustering_multitrace:
+            msg = "For clustering on multiple traces, `cluster_size_trace_len` and `cluster_distance_trace_len`"
+            msg += f"must be `int`, given `{type(self.cluster_size_trace_len)}` and `{type(self.cluster_distance_trace_len)}`"
+            assert isinstance(self.cluster_size_trace_len, int) and isinstance(self.cluster_distance_trace_len, int), msg
 
     def reset_params(self, **params):
         for attribute, value in params.items():
@@ -125,19 +133,21 @@ class CATSBaseSTFT:
         SNR = ThresholdingSNR(PSD, Sgm, Eta, frames)
         if 'threshold' in finish_on.casefold():
             return X, PSD, Eta, Sgm, SNR
+
         mc = self.clustering_multitrace
-        K = Clustering(SNR, q=self.neighbor_distance_len,
-                       s=(1,) * mc + (self.min_df_width_len, self.min_dt_width_len),
-                       minSNR=self.minSNR * self.clustering_with_SNR,
-                       dim=2 + mc)
+        q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
+        s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
+        minSNR = self.minSNR * self.clustering_with_SNR
+        dim = 2 + mc
+        K = Clustering(SNR, q=q, s=s, minSNR=minSNR, dim=dim)
 
         return X, PSD, Eta, Sgm, SNR, K
 
 
 class CATSResult:
     def __init__(self, signal, coefficients, spectrogram, noise_thresholding, noise_std, binary_spectrogram,
-                 binary_spectrogram_clustered, spectrogram_clusters,
-                 time, stft_time, stft_frequency, stationary_intervals, **kwargs):
+                 binary_spectrogram_clustered, spectrogram_clusters,time, stft_time, stft_frequency,
+                 stationary_intervals, **kwargs):
         self.signal = signal
         self.coefficients = coefficients
         self.spectrogram = spectrogram

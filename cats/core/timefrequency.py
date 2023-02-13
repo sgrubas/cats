@@ -150,6 +150,8 @@ class STFTOperator:
             C = ssq.stft(Y, **self.forw_kw)
             if gpu_status: 
                 C = C.cpu().numpy()
+        else:
+            raise KeyError(f"Unknown backend `{self.backend}`, must be one of `{self._backends}`")
         return C
 
     def _inverse_backend(self, C):

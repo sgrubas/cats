@@ -32,7 +32,7 @@ def _DATE(Y, Nmin, xi_lamb, original_mode):
     Y_sort = np.sort(Y)
     
     M = M0 = sum(Y_sort[:Nmin - 1])
-    eta0 = (M0 + Y_sort[Nmin - 1]) / Nmin * xi_lamb
+    eta = eta0 = (M0 + Y_sort[Nmin - 1]) / Nmin * xi_lamb
     found = False
     for ni in range(Nmin - 1, N - 1):
         M += Y_sort[ni]
@@ -73,7 +73,7 @@ def _BEDATE(PSD, frames, Nmins, xi_lamb, original_mode):
     n = len(frames)
     Eta = np.zeros((M, n))
     for i in nb.prange(M):
-        ci, xi_lamb_i = np.abs(PSD[i]), xi_lamb[i]
+        ci, xi_lamb_i = PSD[i], xi_lamb[i]
         for j in range(n):
             j1, j2 = frames[j]
             Eta[i, j] = _DATE(ci[j1 : j2], Nmins[j], xi_lamb_i, original_mode)
@@ -181,7 +181,7 @@ def _Xi_Lambda(d, rho, d_unique=None):
 
 def EtaToSigma(eta, rho):
     """
-        Converts thresholding function `eta` to standard deviation `sigma` assuming usage in Time-Frequency domain
+        Converts thresholding function `eta` to standard deviation `sigma` assuming usage with STFT
 
         Arguments:
             eta : np.ndarray (..., Nf, n) : thresholding function where `Nf` is number of frequencies,

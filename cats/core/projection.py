@@ -64,8 +64,8 @@ def _giveIntervalsN(detection):
 def GiveIntervals(detection, /):
     return _giveIntervalsN(detection)
 
-@nb.njit("b1[:, :](b1[:, :], i8)")
-def _removeGaps(detection, max_gap):
+@nb.njit("b1[:, :](b1[:, :], i8, i8)")
+def _removeGaps(detection, max_gap, min_width):
     M, Nt = detection.shape
     filtered = np.full_like(detection, False)
     for i in nb.prange(M):
@@ -76,10 +76,11 @@ def _removeGaps(detection, max_gap):
             for j in range(1, n):
                 intv_new = intervals[j]
                 intv_old = buffer[-1]
-                if (intv_new[0] - intv_old[1]) > max_gap:
-                    buffer.append((intv_new[0], intv_new[1]))
-                else:
+                if ((intv_new[0] - intv_old[1] - 1) <= max_gap) and (((intv_new[1] - intv_new[0] + 1) < min_width) or
+                                                                     ((intv_old[1] - intv_old[0] + 1) < min_width)):
                     buffer[-1] = (intv_old[0], intv_new[1])
+                else:
+                    buffer.append((intv_new[0], intv_new[1]))
             buffer = np.array(buffer) if len(buffer) > 0 else np.zeros((0, 2), dtype=np.int64)
         else:
             buffer = intervals
@@ -88,8 +89,8 @@ def _removeGaps(detection, max_gap):
     return filtered
 
 @ReshapeArraysDecorator(dim=2)
-def RemoveGaps(detection, /, max_gap):
-    return _removeGaps(detection, max_gap)
+def RemoveGaps(detection, /, max_gap, min_width):
+    return _removeGaps(detection, max_gap, min_width)
 
 
 @nb.njit("f8[:, :](b1[:], f8[:])")

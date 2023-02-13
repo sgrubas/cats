@@ -27,8 +27,7 @@ def plot_traces(traces, detection, fname, comp, gain=1, rsp=1, **kwargs):
     kwargs.setdefault('figsize', 400)
 
     t_dim = hv.Dimension('Time', unit='s')
-    dco = traces[fname]
-    dco = dco[dco.Component == comp].squeeze()
+    dco = traces[fname].sel(Component=comp)
 
     locy = dco.Location.values
     dy = min(np.diff(locy))
@@ -48,9 +47,8 @@ def plot_traces(traces, detection, fname, comp, gain=1, rsp=1, **kwargs):
     names = ['Detected', 'False Alarm', 'Missed Event']
     rects = []
     if detection is not None:
-        time = detection[fname].coords['Time'].values
-        det = detection[fname]
-        det = det[det.Component == comp].squeeze().values
+        time = detection[fname].Time.values
+        det = detection[fname].sel(Component=comp).values
         if det.ndim == 2:
             det = det[..., None]
 
