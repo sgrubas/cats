@@ -19,7 +19,7 @@ class CATSDenoiser(CATSBaseSTFT):
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft, minSNR, stationary_frame_sec,
                  cluster_size_t_sec, cluster_size_f_Hz, cluster_distance_t_sec=None, cluster_distance_f_Hz=None,
                  clustering_with_SNR=True, clustering_multitrace=False, cluster_size_trace=None,
-                 cluster_distance_trace=None, min_neighbors=None,
+                 cluster_distance_trace=None, min_neighbors=False,
                  date_Q=0.95, date_detection_mode=True, wiener=False, stft_backend='ssqueezepy', stft_kwargs=None):
         # Filling cluster params
         self.min_neighbors = min_neighbors
@@ -37,7 +37,7 @@ class CATSDenoiser(CATSBaseSTFT):
 
     def _set_params(self):
         super()._set_params()
-        if self.min_neighbors is None:
+        if (self.min_neighbors is None) or self.min_neighbors:
             self.min_neighbors = ((self.cluster_distance_t_len * 2 + 1) *
                                   (self.cluster_distance_f_len * 2 + 1) *
                                   (self.cluster_distance_trace_len * self.clustering_multitrace * 2 + 1)) // 2
@@ -54,7 +54,7 @@ class CATSDenoiser(CATSBaseSTFT):
         C = K > 0
         mc = self.clustering_multitrace
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
-        F = ClusterFilling(C, q, self.min_neighbors)
+        F = ClusterFilling(C, q, self.min_neighbors) if self.min_neighbors else C
         W = WienerNaive(PSD, Sgm, F, frames) if self.wiener else F
         y = (self.STFT / (X * W))[..., :N]
 

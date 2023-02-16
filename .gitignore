@@ -8,8 +8,10 @@ bin-release/
 .settings/
 /cats/__pycache__/
 cats.egg-info/
-/notebooks/.ipynb_checkpoints
+/examples/.ipynb_checkpoints
 /figures
+/examples/Detection.ipynb
+/examples/Denoising.ipynb
 
 # Executables
 *.swf
