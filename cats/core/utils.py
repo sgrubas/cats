@@ -32,9 +32,9 @@ def _ReshapeOutputs(outputs, dim, output_num, methodfunc, first_shape, preshapes
         V = []
         for i, zi in enumerate(outputs[: out_num]):
             postshape = zi.shape[1:]
-            preshape_i = preshapes[i * first_shape]
+            preshape_i = preshapes[i * (not first_shape)]
             zi = zi.reshape(*(preshape_i + postshape))  # reshaping back to the input shape
-            zndim = inputs[mf + i * first_shape].ndim
+            zndim = inputs[mf + i * (not first_shape)].ndim
             zi = zi.squeeze() if zndim == d else zi
             V.append(zi)
         V = tuple(V) + tuple(outputs[out_num:])

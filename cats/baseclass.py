@@ -138,10 +138,9 @@ class CATSBaseSTFT:
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
         s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
         minSNR = self.minSNR * self.clustering_with_SNR
-        dim = 2 + mc
-        K = Clustering(SNR, q=q, s=s, minSNR=minSNR, dim=dim)
+        K, P = Clustering(SNR, q=q, s=s, minSNR=minSNR)
 
-        return X, PSD, Eta, Sgm, SNR, K
+        return X, PSD, Eta, Sgm, SNR, K, P
 
 
 class CATSResult:

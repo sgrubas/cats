@@ -15,13 +15,9 @@ from .core.utils import get_interval_division
 
 class CATSDetector(CATSBaseSTFT):
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft, minSNR, stationary_frame_sec,
-                 min_t_duration_sec, min_t_separation_sec, cluster_size_t_sec, cluster_size_f_Hz,
-                 cluster_distance_t_sec=None, cluster_distance_f_Hz=None, clustering_with_SNR=True,
-                 clustering_multitrace=False, cluster_size_trace=None, cluster_distance_trace=None,
+                 cluster_size_t_sec, cluster_size_f_Hz, cluster_distance_t_sec=None, cluster_distance_f_Hz=None,
+                 clustering_with_SNR=True, clustering_multitrace=False, cluster_size_trace=None, cluster_distance_trace=None,
                  date_Q=0.95, date_detection_mode=True, stft_backend='ssqueezepy', stft_kwargs=None):
-        # Filtering detected intervals params
-        self.min_t_separation_sec = min_t_separation_sec
-        self.min_t_duration_sec = min_t_duration_sec
         # Set basic parameter via baseclass
         super().__init__(dt_sec=dt_sec, stft_window_sec=stft_window_sec, stft_overlap=stft_overlap, stft_nfft=stft_nfft,
                          minSNR=minSNR, stationary_frame_sec=stationary_frame_sec,
@@ -34,22 +30,17 @@ class CATSDetector(CATSBaseSTFT):
 
     def _set_params(self):
         super()._set_params()
-        self.min_t_separation_len = int(self.min_t_separation_sec / self.stft_hop_sec)
-        self.min_t_duration_len = int(self.min_t_duration_sec / self.stft_hop_sec)
 
     def detect(self, x):
         time = np.arange(x.shape[-1]) * self.dt_sec
         stft_time = self.STFT.forward_time_axis(len(time))
         frames = get_interval_division(N=len(stft_time), L=self.stationary_frame_len)
 
-        X, PSD, Eta, Sgm, SNR, K = super()._apply(x, finish_on='clustering')
-        C = (K > 0)
-        c = C.max(axis=-2)
-        detection = RemoveGaps(c, self.min_t_separation_len, self.min_t_duration_len)
+        X, PSD, Eta, Sgm, SNR, K, P = super()._apply(x, finish_on='clustering')
 
         kwargs = {"signal" : x, "coefficients" : X, "spectrogram" : PSD, "noise_thresholding" : Eta, "noise_std" : Sgm,
-                  "binary_spectrogram" : SNR > 0, "binary_spectrogram_clustered" : C, "spectrogram_clusters" : K,
-                  "binary_projection" : c, "detection" : detection, "SNR_spectrogram" : SNR, "time" : time,
+                  "binary_spectrogram" : SNR > 0, "binary_spectrogram_clustered" : K > 0, "spectrogram_clusters" : K,
+                  "detection" : P > 0, "projected_clusters": P, "SNR_spectrogram" : SNR, "time" : time,
                   "stft_time" : stft_time, "stft_frequency" : self.stft_frequency, "stationary_intervals" : frames}
 
         return CATSDetectionResult(**kwargs)

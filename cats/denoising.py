@@ -50,9 +50,8 @@ class CATSDenoiser(CATSBaseSTFT):
         stft_time = self.STFT.forward_time_axis(N)
         frames = get_interval_division(N=len(stft_time), L=self.stationary_frame_len)
 
-        X, PSD, Eta, Sgm, SNR, K = super()._apply(x, finish_on='clustering')
+        X, PSD, Eta, Sgm, SNR, K, P = super()._apply(x, finish_on='clustering')
         C = K > 0
-
         mc = self.clustering_multitrace
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
         F = ClusterFilling(C, q, self.min_neighbors)

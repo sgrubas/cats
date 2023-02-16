@@ -14,7 +14,7 @@ from scipy import special, stats
 ###################  CLUSTERING  ###################
 
 
-@nb.njit("i8[:, :](f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)")
+@nb.njit("Tuple((i8[:, :], i8[:]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)")
 def _Clustering2D(SNR, q, s, minSNR):
     """
         Performs clustering (density-based / neighbor-based) of binary spectrogram.
@@ -85,21 +85,23 @@ def _Clustering2D(SNR, q, s, minSNR):
 
     K = np.full(shape, 0)
     k = 1
+    projection = np.zeros(Nt, dtype=np.int64)
     for cl in clusters:
         if len(cl) > 1:
             cl_arr = np.array(cl)
-            cl_df = cl_arr[:, 0].max() - cl_arr[:, 0].min() + 1
-            cl_dt = cl_arr[:, 1].max() - cl_arr[:, 1].min() + 1
+            cl_f_min, cl_f_max = cl_arr[:, 0].min(), cl_arr[:, 0].max() + 1
+            cl_t_min, cl_t_max = cl_arr[:, 1].min(), cl_arr[:, 1].max() + 1
             cl_snr = cl_arr[:, 2].mean()
-            if (cl_dt >= s_t) and (cl_df >= s_f) and (cl_snr >= minSNR):
+            if (cl_f_max - cl_f_min >= s_f) and (cl_t_max - cl_t_min >= s_t) and (cl_snr >= minSNR):
+                projection[cl_t_min: cl_t_max] += k
                 for (l1, l2, snr) in cl:
                     K[l1, l2] = k
                 k += 1
 
-    return K
+    return K, projection
 
 
-@nb.njit("i8[:, :, :](f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)", parallel=True)
+@nb.njit("Tuple((i8[:, :, :], i8[:, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)", parallel=True)
 def _ClusteringN2D(B, q, s, minSNR):
     """
         Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
@@ -110,17 +112,18 @@ def _ClusteringN2D(B, q, s, minSNR):
             s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
     """
     K = np.empty(B.shape, dtype=np.int64)
+    P = np.empty((B.shape[0], B.shape[-1]), dtype=np.int64)
     for i in nb.prange(B.shape[0]):
-        K[i] = _Clustering2D(B[i], q, s, minSNR)
-    return K
+        K[i], P[i] = _Clustering2D(B[i], q, s, minSNR)
+    return K, P
 
 
-@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
 def _ClusteringN2D_API(B, /, q, s, minSNR):
     return _ClusteringN2D(B, q, s, minSNR)
 
 
-@nb.njit("i8[:, :, :](f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)")
+@nb.njit("Tuple((i8[:, :, :], i8[:, :]))(f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)")
 def _Clustering3D(SNR, q, s, minSNR):
     """
         Performs clustering (density-based / neighbor-based) of binary spectrogram.
@@ -191,23 +194,25 @@ def _Clustering3D(SNR, q, s, minSNR):
             clusters[dj] = [(Nc, Nf, Nt, 0.0)]  # meaningless isolated point, will not be used
 
     K = np.full(shape, 0)
+    projection = np.zeros((Nc, Nt), dtype=np.int64)
     k = 1
     for cl in clusters:
         if len(cl) > 1:
             cl_arr = np.array(cl)
-            cl_dc = cl_arr[:, 0].max() - cl_arr[:, 0].min() + 1
-            cl_df = cl_arr[:, 1].max() - cl_arr[:, 1].min() + 1
-            cl_dt = cl_arr[:, 2].max() - cl_arr[:, 2].min() + 1
+            cl_c_min, cl_c_max = cl_arr[:, 0].min(), cl_arr[:, 0].max() + 1
+            cl_f_min, cl_f_max = cl_arr[:, 1].min(), cl_arr[:, 1].max() + 1
+            cl_t_min, cl_t_max = cl_arr[:, 2].min(), cl_arr[:, 2].max() + 1
             cl_snr = cl_arr[:, 3].mean()
-            if (cl_dc >= s_c) and (cl_dt >= s_t) and (cl_df >= s_f) and (cl_snr >= minSNR):
+            if (cl_c_max - cl_c_min >= s_c) and (cl_f_max - cl_f_min >= s_f) and \
+               (cl_t_max - cl_t_min >= s_t) and (cl_snr >= minSNR):
+                projection[cl_c_min: cl_c_max, cl_t_min: cl_t_max] += k
                 for (l1, l2, l3, snr) in cl:
                     K[l1, l2, l3] = k
                 k += 1
+    return K, projection
 
-    return K
 
-
-@nb.njit("i8[:, :, :, :](f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)", parallel=True)
+@nb.njit("Tuple((i8[:, :, :, :], i8[:, :, :]))(f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)", parallel=True)
 def _ClusteringN3D(B, q, s, minSNR):
     """
         Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
@@ -218,17 +223,18 @@ def _ClusteringN3D(B, q, s, minSNR):
             s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
     """
     K = np.empty(B.shape, dtype=np.int64)
+    P = np.empty((B.shape[0], B.shape[1], B.shape[-1]), dtype=np.int64)
     for i in nb.prange(B.shape[0]):
-        K[i] = _Clustering3D(B[i], q, s, minSNR)
-    return K
+        K[i], P[i] = _Clustering3D(B[i], q, s, minSNR)
+    return K, P
 
 
-@ReshapeArraysDecorator(dim=4, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+@ReshapeArraysDecorator(dim=4, input_num=1, methodfunc=False, output_num=2, first_shape=True)
 def _ClusteringN3D_API(B, /, q, s, minSNR):
     return _ClusteringN3D(B, q, s, minSNR)
 
 
-def Clustering(B, /, q, s, minSNR, dim=2):
+def Clustering(B, /, q, s, minSNR):
     """
         Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
 
@@ -238,10 +244,100 @@ def Clustering(B, /, q, s, minSNR, dim=2):
             s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
     """
     func = {2 : _ClusteringN2D_API, 3 : _ClusteringN3D_API}
-    q = _scalarORarray_to_tuple(q, minsize=dim)
-    s = _scalarORarray_to_tuple(s, minsize=dim)
-    K = func[dim](B, q, s, minSNR)
-    return K
+    dim = len(q)
+    K, P = func[dim](B, q, s, minSNR)
+    return K, P
+
+
+@nb.njit("b1[:, :](b1[:, :], UniTuple(i8, 2), i8)")
+def _ClusterFilling2D(B, q, min_neighbors):
+    Nf, Nt = B.shape
+    q_f, q_t = q
+    F = np.empty((Nf - q_f * 2,
+                  Nt - q_t * 2), dtype=np.bool_)
+    for (i, j), fij in np.ndenumerate(F):
+        if B[i + q_f, j + q_t]:
+            F[i, j] = True
+        else:
+            F[i, j] = (B[i : i + q_f * 2 + 1,
+                         j : j + q_t * 2 + 1].sum() >= min_neighbors)
+    return F
+
+
+@nb.njit("b1[:, :, :](b1[:, :, :], UniTuple(i8, 2), i8)")
+def _ClusterFillingN2D(B, q, min_neighbors):
+    M, Nf, Nt = B.shape
+    q_f, q_t = q
+    F = np.empty((M,
+                  Nf - q_f * 2,
+                  Nt - q_t * 2), dtype=np.bool_)
+    for i in nb.prange(M):
+        F[i] = _ClusterFilling2D(B[i], q, min_neighbors)
+    return F
+
+
+@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+def _ClusterFilling2D_API(B, /, q, min_neighbors):
+    q_f, q_t = q
+    B_pad = np.pad(B, [(0, 0), (q_f, q_f), (q_t, q_t)], mode='constant', constant_values=0)
+    return _ClusterFillingN2D(B_pad.astype(bool), q, min_neighbors)
+
+
+@nb.njit("b1[:, :, :](b1[:, :, :], UniTuple(i8, 3), i8)")
+def _ClusterFilling3D(B, q, min_neighbors):
+    Nc, Nf, Nt = B.shape
+    q_c, q_f, q_t = q
+    F = np.empty((Nc - q_c * 2,
+                  Nf - q_f * 2,
+                  Nt - q_t * 2), dtype=np.bool_)
+    for (i, j, k), fijk in np.ndenumerate(F):
+        if B[i + q_c, j + q_f, k + q_t]:
+            F[i, j, k] = True
+        else:
+            F[i, j, k] = (B[i : i + q_c * 2 + 1,
+                            j : j + q_f * 2 + 1,
+                            k : k + q_t * 2 + 1].sum() >= min_neighbors)
+    return F
+
+
+@nb.njit("b1[:, :, :, :](b1[:, :, :, :], UniTuple(i8, 3), i8)")
+def _ClusterFillingN3D(B, q, min_neighbors):
+    M, Nc, Nf, Nt = B.shape
+    q_c, q_f, q_t = q
+    F = np.empty((M,
+                  Nc - q_c * 2,
+                  Nf - q_f * 2,
+                  Nt - q_t * 2), dtype=np.bool_)
+    for i in nb.prange(M):
+        F[i] = _ClusterFilling3D(B[i], q, min_neighbors)
+    return F
+
+
+@ReshapeArraysDecorator(dim=4, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+def _ClusterFilling3D_API(B, /, q, min_neighbors):
+    q_c, q_f, q_t = q
+    B_pad = np.pad(B, [(0, 0), (q_c, q_c), (q_f, q_f), (q_t, q_t)], mode='constant', constant_values=0)
+    return _ClusterFillingN3D(B_pad.astype(bool), q, min_neighbors)
+
+
+def ClusterFilling(B, /, q, min_neighbors):
+    """
+        Fills the zero elements if they have at least `min_neighbors` nonzero neighbors within distance `d`
+
+        Arguments:
+            B : boolean np.ndarray (..., Nf, Nt) : binary spectrograms
+            q : int : neighborhood distance
+            min_neighbors : int : minimum number of neighbors for zero element to be re-assigned to nonzero
+
+        Returns:
+            F : boolean np.ndarray (..., Nf, Nt) : filled binary spectrograms
+    """
+    func = {2: _ClusterFilling2D_API, 3: _ClusterFilling3D_API}
+    dim = len(q)
+    return func[dim](B, q, min_neighbors)
+
+
+## Experimental ##
 
 
 @nb.njit("b1[:](f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)")
@@ -337,94 +433,6 @@ def ClusteringToProjection(SNR, /, q, s, minSNR):
     s = _scalarORarray_to_tuple(s, minsize=2)
     P = _ClusteringToProjectionN2D(SNR, q, s, minSNR)
     return P
-
-
-@nb.njit("b1[:, :](b1[:, :], UniTuple(i8, 2), i8)")
-def _ClusterFilling2D(B, q, min_neighbors):
-    Nf, Nt = B.shape
-    q_f, q_t = q
-    F = np.empty((Nf - q_f * 2,
-                  Nt - q_t * 2), dtype=np.bool_)
-    for (i, j), fij in np.ndenumerate(F):
-        if B[i + q_f, j + q_t]:
-            F[i, j] = True
-        else:
-            F[i, j] = (B[i : i + q_f * 2 + 1,
-                         j : j + q_t * 2 + 1].sum() >= min_neighbors)
-    return F
-
-
-@nb.njit("b1[:, :, :](b1[:, :, :], UniTuple(i8, 2), i8)")
-def _ClusterFillingN2D(B, q, min_neighbors):
-    M, Nf, Nt = B.shape
-    q_f, q_t = q
-    F = np.empty((M,
-                  Nf - q_f * 2,
-                  Nt - q_t * 2), dtype=np.bool_)
-    for i in nb.prange(M):
-        F[i] = _ClusterFilling2D(B[i], q, min_neighbors)
-    return F
-
-
-@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
-def _ClusterFilling2D_API(B, /, q, min_neighbors):
-    q_f, q_t = q
-    B_pad = np.pad(B, [(0, 0), (q_f, q_f), (q_t, q_t)], mode='constant', constant_values=0)
-    return _ClusterFillingN2D(B_pad.astype(bool), q, min_neighbors)
-
-
-@nb.njit("b1[:, :, :](b1[:, :, :], UniTuple(i8, 3), i8)")
-def _ClusterFilling3D(B, q, min_neighbors):
-    Nc, Nf, Nt = B.shape
-    q_c, q_f, q_t = q
-    F = np.empty((Nc - q_c * 2,
-                  Nf - q_f * 2,
-                  Nt - q_t * 2), dtype=np.bool_)
-    for (i, j, k), fijk in np.ndenumerate(F):
-        if B[i + q_c, j + q_f, k + q_t]:
-            F[i, j, k] = True
-        else:
-            F[i, j, k] = (B[i : i + q_c * 2 + 1,
-                            j : j + q_f * 2 + 1,
-                            k : k + q_t * 2 + 1].sum() >= min_neighbors)
-    return F
-
-
-@nb.njit("b1[:, :, :, :](b1[:, :, :, :], UniTuple(i8, 3), i8)")
-def _ClusterFillingN3D(B, q, min_neighbors):
-    M, Nc, Nf, Nt = B.shape
-    q_c, q_f, q_t = q
-    F = np.empty((M,
-                  Nc - q_c * 2,
-                  Nf - q_f * 2,
-                  Nt - q_t * 2), dtype=np.bool_)
-    for i in nb.prange(M):
-        F[i] = _ClusterFilling3D(B[i], q, min_neighbors)
-    return F
-
-
-@ReshapeArraysDecorator(dim=4, input_num=1, methodfunc=False, output_num=1, first_shape=True)
-def _ClusterFilling3D_API(B, /, q, min_neighbors):
-    q_c, q_f, q_t = q
-    B_pad = np.pad(B, [(0, 0), (q_c, q_c), (q_f, q_f), (q_t, q_t)], mode='constant', constant_values=0)
-    return _ClusterFillingN3D(B_pad.astype(bool), q, min_neighbors)
-
-
-def ClusterFilling(B, /, q, min_neighbors):
-    """
-        Fills the zero elements if they have at least `min_neighbors` nonzero neighbors within distance `d`
-
-        Arguments:
-            B : boolean np.ndarray (..., Nf, Nt) : binary spectrograms
-            q : int : neighborhood distance
-            min_neighbors : int : minimum number of neighbors for zero element to be re-assigned to nonzero
-
-        Returns:
-            F : boolean np.ndarray (..., Nf, Nt) : filled binary spectrograms
-    """
-    func = {2: _ClusterFilling2D_API, 3: _ClusterFilling3D_API}
-    dim = len(q)
-    return func[dim](B, q, min_neighbors)
 
 
 def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
