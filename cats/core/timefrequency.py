@@ -148,7 +148,7 @@ class STFTOperator:
             os.environ['SSQ_GPU'] = '1' if gpu_status else '0'
         
             C = ssq.stft(Y, **self.forw_kw)
-            if gpu_status: 
+            if not isinstance(C, np.ndarray):
                 C = C.cpu().numpy()
         else:
             raise KeyError(f"Unknown backend `{self.backend}`, must be one of `{self._backends}`")
@@ -174,7 +174,7 @@ class STFTOperator:
             X = []
             for ci in C:
                 xi = ssq.istft(ci, N=N, **self.inv_kw)
-                if gpu_status:
+                if not isinstance(C, np.ndarray):
                     xi = xi.cpu().numpy()
                 X.append(xi)
             X = np.stack(X, axis=0)

@@ -54,15 +54,14 @@ class CATSDenoiser(CATSBaseSTFT):
         C = K > 0
         mc = self.clustering_multitrace
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
-        F = ClusterFilling(C, q, self.min_neighbors) if self.min_neighbors else C
-        W = WienerNaive(PSD, Sgm, F, frames) if self.wiener else F
-        y = (self.STFT / (X * W))[..., :N]
+        # F = ClusterFilling(C, q, self.min_neighbors) if self.min_neighbors else C
+        # W = WienerNaive(PSD, Sgm, F, frames) if self.wiener else F
+        y = (self.STFT / (X * C))[..., :N]
 
         kwargs = {"signal" : x, "coefficients" : X, "spectrogram" : PSD, "noise_thresholding" : Eta, "noise_std" : Sgm,
                   "binary_spectrogram" : SNR > 0, "binary_spectrogram_clustered" : C, "spectrogram_clusters" : K,
-                  "binary_spectrogram_filled" : F, "wiener_spectrogram" : W, "denoised_signal" : y,
-                  "time" : time, "stft_time" : stft_time, "stft_frequency" : self.stft_frequency,
-                  "stationary_intervals" : frames, "wienered" : self.wiener}
+                  "denoised_signal" : y, "time" : time, "stft_time" : stft_time, "stft_frequency" : self.stft_frequency,
+                  "stationary_intervals" : frames}
 
         return CATSDenoisingResult(**kwargs)
 
@@ -78,20 +77,8 @@ class CATSDenoisingResult(CATSResult):
         f_dim = hv.Dimension('Frequency', unit='Hz')
         A_dim = hv.Dimension('Amplitude')
 
-        PSD = self.spectrogram[ind]
-        F = PSD * self.binary_spectrogram_filled[ind].astype(float)
-
-        fig4 = hv.Image((self.stft_time, self.stft_frequency, F), kdims=[t_dim, f_dim],
-                                label='4. Filling: $F_{k,m} \cdot |X_{k,m}|$')
-        fig = fig + fig4
-        if self.wienered:
-            W = self.wiener_spectrogram[ind] * PSD
-            fig41 = hv.Image((self.stft_time, self.stft_frequency, W), kdims=[t_dim, f_dim],
-                            label='4.1 Wiener: $W_{k,m} \cdot |X_{k,m}|$')
-            fig = fig + fig41
-        fig5 = hv.Curve((self.time, self.denoised_signal[ind]),
-                        kdims=[t_dim], vdims=A_dim,
-                        label='5. Denoised signal: $y_n$').opts(xlabel='Time (s)')
-        fig = fig + fig5
+        fig = fig + hv.Curve((self.time, self.denoised_signal[ind]),
+                              kdims=[t_dim], vdims=A_dim,
+                              label='5. Denoised signal: $y_n$').opts(xlabel='Time (s)')
 
         return fig.opts(*opts).cols(1)
