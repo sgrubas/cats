@@ -33,37 +33,49 @@ class CATSBaseSTFT:
         """
             Arguments:
                 dt_sec : float : sampling time in seconds.
-                stft_window_sec : float / tuple(str, float) : weighting window.
-                                If `float`, defines length where window weights are ones [1, 1, ...].
-                                If `tuple(str, float)`, `str` defines window type (e.g. `hann`, `hamming`),
-                                and `float` is for length (e.g. ('hann', 0.5)).
+
+                stft_window_sec : float / tuple(str, float) : weighting window. \
+If `float`, defines length where window weights are ones [1, 1, ...]. If `tuple(str, float)`, \
+`str` defines window type (e.g. `hann`, `hamming`), and `float` is for length (e.g. ('hann', 0.5)).
+
                 stft_overlap : float [0, 1] : overlapping of STFT windows (e.g. `0.5` means 50% overlap).
+
                 stft_nfft : int : zero-padding for each individual STFT window, recommended a power of 2 (e.g. 256).
+
                 minSNR : float : minimum Signal-to-Noise Ratio (SNR) for B-E-DATE algorithm. Recommended `4.0`.
-                stationary_frame_sec : float : length of time frame in seconds wherein noise is stationary.
-                                               Length will be adjusted to have at least 256 elements in one frame.
-                cluster_size_t_sec : float : minimum cluster size in time, in seconds.
-                                             Can be estimated as length of the strongest phases.
+
+                stationary_frame_sec : float : length of time frame in seconds wherein noise is stationary. \
+Length will be adjusted to have at least 256 elements in one frame.
+
+                cluster_size_t_sec : float : minimum cluster size in time, in seconds. \
+Can be estimated as length of the strongest phases.
+
                 cluster_size_f_Hz : float : minimum cluster size in frequency, in hertz, i.e. minimum frequency width.
-                cluster_distance_t_sec : float : neighborhood distance in time for clustering, in seconds.
-                                                 Minimum separation time between two different events.
-                cluster_distance_f_Hz : float : neighborhood distance in frequency for clustering, in hertz.
-                                                Minimum separation frequency width between two different events.
-                clustering_multitrace : bool : whether to use multitrace clustering (Location x Frequency x Time).
-                                               Increase accuracy for multiple arrays of receivers on regular grid.
-                                               Performs cross-station association.
+
+                cluster_distance_t_sec : float : neighborhood distance in time for clustering, in seconds. \
+Minimum separation time between two different events.
+
+                cluster_distance_f_Hz : float : neighborhood distance in frequency for clustering, in hertz. \
+Minimum separation frequency width between two different events.
+
+                clustering_multitrace : bool : whether to use multitrace clustering (Location x Frequency x Time). \
+Increase accuracy for multiple arrays of receivers on regular grid. Performs cross-station association.
+
                 cluster_size_trace : int : minimum cluster size for traces, minimum number of traces in one cluster.
+
                 cluster_distance_trace : int : neighborhood distance across multiple traces for clustering.
-                date_Q : float : probability that sorted elements after certain `Nmin` are have amplitude higher
-                                 than standard deviation. Used in Bienaymé–Chebyshev inequality to estimate `Nmin`
-                                 to reduce computational cost of DATE. Default `0.95`
-                date_detection_mode : bool : `True` means NOT to use original implementation of DATE algorithm. Original
-                                            implementation assumes that if no outliers are found then standard deviation
-                                            is estimated from `Nmin` to not overestimate the noise. `True` implies that
-                                            noise can be overestimated. It is beneficial if no outliers are found,
-                                            then no outliers will be present in the trimmed spectrogram.
-                stft_backend : str : backend for STFT operator ['scipy', 'ssqueezepy', 'ssqueezepy_gpu'].
-                                     The fastest CPU version is 'ssqueezepy', which is default.
+
+                date_Q : float : probability that sorted elements after certain `Nmin` are have amplitude higher \
+than standard deviation. Used in Bienaymé–Chebyshev inequality to get `Nmin` to minimize cost of DATE. Default `0.95`
+
+                date_detection_mode : bool : `True` means NOT to use original implementation of DATE algorithm. \
+Original implementation assumes that if no outliers are found then standard deviation is estimated from `Nmin` \
+to not overestimate the noise. `True` implies that noise can be overestimated. It is beneficial if no outliers \
+are found, then no outliers will be present in the trimmed spectrogram.
+
+                stft_backend : str : backend for STFT operator ['scipy', 'ssqueezepy', 'ssqueezepy_gpu']. \
+The fastest CPU version is 'ssqueezepy', which is default.
+
                 stft_kwargs : dict : additional keyword arguments for STFT operator (see `cats.STFTOperator`).
         """
 
