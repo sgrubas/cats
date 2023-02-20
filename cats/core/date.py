@@ -10,24 +10,7 @@ from scipy import special, optimize
 @nb.njit(["f8(f8[:], i8, f8, b1)",
           "f8(f4[:], i8, f8, b1)"])
 def _DATE(Y, Nmin, xi_lamb, original_mode):
-    """
-        Estimates thresholding function for outlier trimming via DATE algorithm [1]
 
-        Arguments:
-            Y : np.ndarray (N,) : sequence of random numbers
-            Nmin : int : minimum number of trimmed values
-            xi_lamb : float : xi(rho) / lambda (see DATE)
-            original_mode : boolean : whether to use original implementation [1].
-                            If `True`, noise is estimated on `Nmin` in the worst case.
-                            If `False`, i.e. we may overestimate noise,
-                            but it is good for detection with high minSNR (`xi_lamb`)
-        Returns:
-            eta : float : threshold value for outlier trimming
-
-        References:
-            [1] Pastor, D., & Socheleau, F. X. (2012). Robust estimation of noise standard deviation in presence of
-            signals with unknown distributions and occurrences. IEEE transactions on Signal Processing, 60(4), 1545-1555.
-    """
     N = len(Y)
     Y_sort = np.sort(Y)
     
@@ -48,27 +31,6 @@ def _DATE(Y, Nmin, xi_lamb, original_mode):
 @nb.njit(["f8[:, :](f8[:, :], i8[:, :], i8[:], f8[:], b1)",
           "f8[:, :](f4[:, :], i8[:, :], i8[:], f8[:], b1)"], parallel=True)
 def _BEDATE(PSD, frames, Nmins, xi_lamb, original_mode):
-    """
-        Performs Block-Extended-DATE algorithm [1]
-
-        Arguments:
-            PSD : np.ndarray (M, N) : array of random sequences (norm of complex STFT coefficients)
-            frames : np.ndarray (n,) : intervals of time frames (blocks) which are processed independently
-            Nmins : np.ndarray (n,) : minimum number of trimmed values for each block
-            xi_lamb : np.ndarray (M,) : xi(rho) / lambda for each sequence
-            original_mode : boolean : whether to use original implementation [1].
-                            If `True`, noise is estimated on `Nmin` in the worst case.
-                            If `False`, i.e. we may overestimate noise,
-                            but it is good for detection with high minSNR (`xi_lamb`)
-
-        Returns:
-            Eta : np.ndarray (M, n) : threshold values for each sequence `M` and each time frame `n`
-
-        References:
-            [1] Mai, V. K., Pastor, D., Aïssa-El-Bey, A., & Le-Bidan, R. (2015). Robust estimation of non-stationary
-            noise power spectrum for speech enhancement. IEEE/ACM Transactions on Audio, Speech,
-            and Language Processing, 23(4), 670-682.
-    """
     M, N = PSD.shape
     n = len(frames)
     Eta = np.zeros((M, n))

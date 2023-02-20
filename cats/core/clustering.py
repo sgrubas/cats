@@ -1,13 +1,10 @@
 """
-    Functions for clustering trimmed spectrograms (in Time-Frequency domain).
-    Main functions:
-        ...
-
+    Functions for clustering trimmed spectrograms (in Time-Frequency or Space-Time-Frequency domain).
 """
 
 import numpy as np
 import numba as nb
-from .utils import ReshapeArraysDecorator, _scalarORarray_to_tuple
+from .utils import ReshapeArraysDecorator
 from .date import _xi
 from scipy import special, stats
 
@@ -16,14 +13,7 @@ from scipy import special, stats
 
 @nb.njit("Tuple((i8[:, :], i8[:]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)")
 def _Clustering2D(SNR, q, s, minSNR):
-    """
-        Performs clustering (density-based / neighbor-based) of binary spectrogram.
 
-        Arguments:
-            B : np.ndarray (Nf, Nt) : where `Nf` is frequency axis, `Nt` is time axis
-            q : tuple(int, 2) : neighborhood distance for clustering `(q_f, q_t)` for time and frequency respectively.
-            s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
-    """
     B = SNR > 0
     shape = B.shape
     Nf, Nt = shape
@@ -102,37 +92,23 @@ def _Clustering2D(SNR, q, s, minSNR):
 
 
 @nb.njit("Tuple((i8[:, :, :], i8[:, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)", parallel=True)
-def _ClusteringN2D(B, q, s, minSNR):
-    """
-        Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
+def _ClusteringN2D(SNR, q, s, minSNR):
 
-        Arguments:
-            B : np.ndarray (M, Nf, Nt) : `M' is number of spectrograms, `Nf` is frequency axis, `Nt` is time axis
-            q : tuple(int, 2) : neighborhood distance for clustering `(q_f, q_t)` for time and frequency respectively.
-            s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
-    """
-    K = np.empty(B.shape, dtype=np.int64)
-    P = np.empty((B.shape[0], B.shape[-1]), dtype=np.int64)
-    for i in nb.prange(B.shape[0]):
-        K[i], P[i] = _Clustering2D(B[i], q, s, minSNR)
+    K = np.empty(SNR.shape, dtype=np.int64)
+    P = np.empty((SNR.shape[0], SNR.shape[-1]), dtype=np.int64)
+    for i in nb.prange(SNR.shape[0]):
+        K[i], P[i] = _Clustering2D(SNR[i], q, s, minSNR)
     return K, P
 
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
-def _ClusteringN2D_API(B, /, q, s, minSNR):
-    return _ClusteringN2D(B, q, s, minSNR)
+def _ClusteringN2D_API(SNR, /, q, s, minSNR):
+    return _ClusteringN2D(SNR, q, s, minSNR)
 
 
 @nb.njit("Tuple((i8[:, :, :], i8[:, :]))(f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)")
 def _Clustering3D(SNR, q, s, minSNR):
-    """
-        Performs clustering (density-based / neighbor-based) of binary spectrogram.
 
-        Arguments:
-            B : np.ndarray (Nf, Nt) : where `Nf` is frequency axis, `Nt` is time axis
-            q : tuple(int, 2) : neighborhood distance for clustering `(q_f, q_t)` for time and frequency respectively.
-            s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
-    """
     B = SNR > 0
     shape = B.shape
     Nc, Nf, Nt = shape
@@ -213,40 +189,42 @@ def _Clustering3D(SNR, q, s, minSNR):
 
 
 @nb.njit("Tuple((i8[:, :, :, :], i8[:, :, :]))(f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)", parallel=True)
-def _ClusteringN3D(B, q, s, minSNR):
-    """
-        Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
-
-        Arguments:
-            B : np.ndarray (M, Nf, Nt) : `M' is number of spectrograms, `Nf` is frequency axis, `Nt` is time axis
-            q : tuple(int, 2) : neighborhood distance for clustering `(q_f, q_t)` for time and frequency respectively.
-            s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
-    """
-    K = np.empty(B.shape, dtype=np.int64)
-    P = np.empty((B.shape[0], B.shape[1], B.shape[-1]), dtype=np.int64)
-    for i in nb.prange(B.shape[0]):
-        K[i], P[i] = _Clustering3D(B[i], q, s, minSNR)
+def _ClusteringN3D(SNR, q, s, minSNR):
+    N, Nc, Nf, Nt = SNR.shape
+    K = np.empty(SNR.shape, dtype=np.int64)
+    P = np.empty((N, Nc, Nt), dtype=np.int64)
+    for i in nb.prange(SNR.shape[0]):
+        K[i], P[i] = _Clustering3D(SNR[i], q, s, minSNR)
     return K, P
 
 
 @ReshapeArraysDecorator(dim=4, input_num=1, methodfunc=False, output_num=2, first_shape=True)
-def _ClusteringN3D_API(B, /, q, s, minSNR):
-    return _ClusteringN3D(B, q, s, minSNR)
+def _ClusteringN3D_API(SNR, /, q, s, minSNR):
+    return _ClusteringN3D(SNR, q, s, minSNR)
 
 
-def Clustering(B, /, q, s, minSNR):
+def Clustering(SNR, /, q, s, minSNR):
     """
-        Performs clustering (density-based / neighbor-based) of many binary spectrograms in parallel.
+        Performs clustering (density-based / neighbor-based) of many trimmed spectrograms in parallel.
+        If `len(q) = 2` then 2-dimensional clustering in "Frequency x Time" is used, `SNR.shape=(M, Nf, Nt)`
+        If `len(q) = 3` then 3-dimensional clustering in "Trace x Frequency x Time" is used, `SNR.shape=(M, Nc, Nf, Nt)`
 
         Arguments:
-            B : np.ndarray (M, Nf, Nt) : `M' is number of spectrograms, `Nf` is frequency axis, `Nt` is time axis
-            q : tuple(int, 2) : neighborhood distance for clustering `(q_f, q_t)` for time and frequency respectively.
-            s : tuple(int, 2) : minimum cluster size (width & height) `(s_f, s_t)` for time and frequency respectively.
+            SNR : np.ndarray (M, Nf, Nt) or (M, Nc, Nf, Nt) : Trimmed spectrogram wherein nonzero elements represent
+                                    SNR values. `M' is number of spectrograms, `Nc` number of traces,
+                                    `Nf` is frequency axis, `Nt` is time axis.
+            q : tuple(int, 2) / tuple(int, 3) : neighborhood distance for clustering `(q_f, q_t)` or `(q_c, q_f, q_t)`.
+                                                `q_c` for traces, `q_f` for frequency, `q_t` for time.
+            s : tuple(int, 2) / tuple(int, 3) : minimum cluster sizes `(s_f, s_t)` or `(s_c, s_f, s_t)`.
+                                                `s_c` for traces, `s_f` for frequency, `s_t` for time.
     """
     func = {2 : _ClusteringN2D_API, 3 : _ClusteringN3D_API}
     dim = len(q)
-    K, P = func[dim](B, q, s, minSNR)
+    K, P = func[dim](SNR, q, s, minSNR)
     return K, P
+
+
+## Experimental ##
 
 
 @nb.njit("b1[:, :](b1[:, :], UniTuple(i8, 2), i8)")
@@ -335,9 +313,6 @@ def ClusterFilling(B, /, q, min_neighbors):
     func = {2: _ClusterFilling2D_API, 3: _ClusterFilling3D_API}
     dim = len(q)
     return func[dim](B, q, min_neighbors)
-
-
-## Experimental ##
 
 
 @nb.njit("b1[:](f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)")
@@ -429,8 +404,6 @@ def _ClusteringToProjectionN2D(SNR, q, s, minSNR):
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
 def ClusteringToProjection(SNR, /, q, s, minSNR):
-    q = _scalarORarray_to_tuple(q, minsize=2)
-    s = _scalarORarray_to_tuple(s, minsize=2)
     P = _ClusteringToProjectionN2D(SNR, q, s, minSNR)
     return P
 
@@ -443,6 +416,7 @@ def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
         if cdf < pmin:  # choose `qi` which provides probability of noisy nonzero elements not to be present in `Q`
             break
     return max(1, qi - 1)
+
 
 def OptimalNeighborhoodDistance(minSNR, d=2, pmin=0.95, qmax=10, maxN=1):
     """

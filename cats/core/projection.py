@@ -1,9 +1,5 @@
 """
     Functions for projection detection from Time-Frequency onto Time.
-    Main functions:
-        GiveIntervals : extracts intervals of True from binary classification
-    ...
-
 """
 
 import numpy as np

@@ -24,7 +24,9 @@ INSTALL_REQUIRES = [
                     'scipy',
                     'ssqueezepy',
                     'matplotlib',
-                    'holoviews'
+                    'holoviews',
+                    'xarray',
+                    'colorednoise'
                     ]
 with open("README.md", "r") as f:
     LONG_DESCRIPTION = f.read()
@@ -47,6 +49,6 @@ setup(
     zip_safe=False,
     install_requires=INSTALL_REQUIRES,
     # include_package_data=True,
-    package_data={NAME: ["data/*.npy"]}
+    package_data={NAME: ["data/*.npy", "data/*.pkl"]}
     )
 

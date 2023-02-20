@@ -1,54 +1,44 @@
 """
-    API for Detector based Cluster Analysis of Trimmed Spectrograms (CATS)
+    API for Detector based on Cluster Analysis of Trimmed Spectrograms (CATS)
     Main operators:
-        CATSDetector : .................
-        SNRDetector : experimental detector based on SNR values only (no CATS) .................
+        CATSDetector : Detector of seismic events based on CATS
+        CATSDetectionResult : keeps all the results and can plot sample trace with step-by-step visualization
 """
 
 import numpy as np
 import holoviews as hv
 
-from .core.projection import RemoveGaps
 from .baseclass import CATSBaseSTFT, CATSResult
 from .core.utils import get_interval_division
 
 
 class CATSDetector(CATSBaseSTFT):
-    def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft, minSNR, stationary_frame_sec,
-                 cluster_size_t_sec, cluster_size_f_Hz, cluster_distance_t_sec=None, cluster_distance_f_Hz=None,
-                 clustering_with_SNR=True, clustering_multitrace=False, cluster_size_trace=None, cluster_distance_trace=None,
-                 date_Q=0.95, date_detection_mode=True, stft_backend='ssqueezepy', stft_kwargs=None):
-        # Set basic parameter via baseclass
-        super().__init__(dt_sec=dt_sec, stft_window_sec=stft_window_sec, stft_overlap=stft_overlap, stft_nfft=stft_nfft,
-                         minSNR=minSNR, stationary_frame_sec=stationary_frame_sec,
-                         cluster_size_t_sec=cluster_size_t_sec, cluster_size_f_Hz=cluster_size_f_Hz,
-                         cluster_distance_t_sec=cluster_distance_t_sec, cluster_distance_f_Hz=cluster_distance_f_Hz,
-                         clustering_with_SNR=clustering_with_SNR, clustering_multitrace=clustering_multitrace,
-                         cluster_size_trace=cluster_size_trace, cluster_distance_trace=cluster_distance_trace,
-                         date_Q=date_Q, date_detection_mode=date_detection_mode, stft_backend=stft_backend,
-                         stft_kwargs=stft_kwargs)
-
-    def _set_params(self):
-        super()._set_params()
-
+    """
+        Detector of events based on Cluster Analysis of Trimmed Spectrograms
+    """
     def detect(self, x):
+        """
+            Performs the detection on the given dataset.
+
+            Arguments:
+                x : np.ndarray (..., N) : input data with any number of dimensions, but the last axis `N` must be Time.
+        """
         time = np.arange(x.shape[-1]) * self.dt_sec
         stft_time = self.STFT.forward_time_axis(len(time))
         frames = get_interval_division(N=len(stft_time), L=self.stationary_frame_len)
 
         X, PSD, Eta, Sgm, SNR, K, P = super()._apply(x, finish_on='clustering')
 
-        kwargs = {"signal" : x, "coefficients" : X, "spectrogram" : PSD, "noise_thresholding" : Eta, "noise_std" : Sgm,
-                  "binary_spectrogram" : SNR > 0, "binary_spectrogram_clustered" : K > 0, "spectrogram_clusters" : K,
-                  "detection" : P > 0, "projected_clusters": P, "SNR_spectrogram" : SNR, "time" : time,
-                  "stft_time" : stft_time, "stft_frequency" : self.stft_frequency, "stationary_intervals" : frames}
+        kwargs = {"signal": x, "coefficients": X, "spectrogram": PSD, "noise_thresholding": Eta, "noise_std": Sgm,
+                  "binary_spectrogram": SNR > 0, "binary_spectrogram_clustered": K > 0, "spectrogram_clusters": K,
+                  "detection": P > 0, "projected_clusters": P, "SNR_spectrogram": SNR, "time": time,
+                  "stft_time": stft_time, "stft_frequency": self.stft_frequency,
+                  "stationary_intervals": stft_time[frames]}
 
         return CATSDetectionResult(**kwargs)
 
 
 class CATSDetectionResult(CATSResult):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
 
     def plot(self, ind):
         fig, opts = super().plot(ind)

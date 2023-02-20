@@ -1,8 +1,15 @@
+"""
+    Implements baseclasses for Cluster Analysis of Trimmed Spectrograms (CATS)
+
+        CATSBaseSTFT : baseclass to perform CATS
+        CATSResult : baseclass for keeping the results of CATS
+"""
+
 import numpy as np
 import holoviews as hv
 
 from .core.timefrequency import STFTOperator
-from .core.clustering import OptimalNeighborhoodDistance, Clustering
+from .core.clustering import Clustering
 from .core.date import BEDATE, EtaToSigma
 from .core.utils import get_interval_division
 from .core.thresholding import ThresholdingSNR
@@ -10,44 +17,54 @@ from .core.thresholding import ThresholdingSNR
 
 class CATSBaseSTFT:
     """
-        Base class for CATS based on STFT. Implements unpacking of base parameters.
+        Base class for CATS based on STFT. Implements unpacking of the main parameters.
+        Implements 4 main steps:
+            1) STFT
+            2) Noise estimation via B-E-DATE
+            3) Trimming spectrogram based minSNR
+            4) Clustering trimmed spectrogram
 
     """
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft,
                  minSNR, stationary_frame_sec, cluster_size_t_sec, cluster_size_f_Hz,
-                 cluster_distance_t_sec=None, cluster_distance_f_Hz=None, clustering_with_SNR=True,
+                 cluster_distance_t_sec=None, cluster_distance_f_Hz=None,
                  clustering_multitrace=False, cluster_size_trace=None, cluster_distance_trace=None,
                  date_Q=0.95, date_detection_mode=True, stft_backend='ssqueezepy', stft_kwargs=None):
         """
             Arguments:
-                dt_sec : float : sampling time in seconds
+                dt_sec : float : sampling time in seconds.
                 stft_window_sec : float / tuple(str, float) : weighting window.
-                                If `float`, `stft_window_sec` is length of window in seconds
-                                and all window weights are ones.
+                                If `float`, defines length where window weights are ones [1, 1, ...].
                                 If `tuple(str, float)`, `str` defines window type (e.g. `hann`, `hamming`),
-                                and `float` is for length.
-                stft_overlap : float [0, 1] : overlapping if STFT windows, e.g. `0.5` means 50% overlap
-                stft_nfft : int : zero-padding for each individual STFT window,
-                                  preferably should be a power of 2 (e.g. 256, 512).
-                minSNR : float : minimum Signal-to-Noise Ratio (SNR) for DATE algorithm.
-                                 Recommended value is `minSNR = 4.0`
-                stationary_frame_sec : float : length of time frame in seconds wherein noise is assumed to be stationary
-                                               One time frame must have at least 256 elements, which is used as minimum.
-                min_dt_width_sec : float : minimum time duration of seismic event in seconds.
-                                           It will be used in clustering
-                min_df_width_Hz : float : minimum frequency band of seismic event in Hz. It will be used in clustering.
-                neighbor_distance : int / float : Neighborhood distance for clustering.
-                                   Value >= 1 means exactly distance that will be used.
-                                   Value in [0, 1] is used as probability that at maximum 1 element will be noise
-                                   within neighborhood distance. Provides an estimate of optimal distance takin into
-                                   account influence of `minSNR` on the sparsity. Default `0.95`
+                                and `float` is for length (e.g. ('hann', 0.5)).
+                stft_overlap : float [0, 1] : overlapping of STFT windows (e.g. `0.5` means 50% overlap).
+                stft_nfft : int : zero-padding for each individual STFT window, recommended a power of 2 (e.g. 256).
+                minSNR : float : minimum Signal-to-Noise Ratio (SNR) for B-E-DATE algorithm. Recommended `4.0`.
+                stationary_frame_sec : float : length of time frame in seconds wherein noise is stationary.
+                                               Length will be adjusted to have at least 256 elements in one frame.
+                cluster_size_t_sec : float : minimum cluster size in time, in seconds.
+                                             Can be estimated as length of the strongest phases.
+                cluster_size_f_Hz : float : minimum cluster size in frequency, in hertz, i.e. minimum frequency width.
+                cluster_distance_t_sec : float : neighborhood distance in time for clustering, in seconds.
+                                                 Minimum separation time between two different events.
+                cluster_distance_f_Hz : float : neighborhood distance in frequency for clustering, in hertz.
+                                                Minimum separation frequency width between two different events.
+                clustering_multitrace : bool : whether to use multitrace clustering (Location x Frequency x Time).
+                                               Increase accuracy for multiple arrays of receivers on regular grid.
+                                               Performs cross-station association.
+                cluster_size_trace : int : minimum cluster size for traces, minimum number of traces in one cluster.
+                cluster_distance_trace : int : neighborhood distance across multiple traces for clustering.
                 date_Q : float : probability that sorted elements after certain `Nmin` are have amplitude higher
                                  than standard deviation. Used in Bienaymé–Chebyshev inequality to estimate `Nmin`
                                  to reduce computational cost of DATE. Default `0.95`
-                date_detection_mode : bool : `True` means not to use original implementation of DATE algorithm in case
-                                             if no outliers are found and standard deviation is estimated from `Nmin`.
-                                             Default `True`, i.e. if no outliers then noise estimated on everything.
-                kwargs : dict : additional keyword arguments
+                date_detection_mode : bool : `True` means NOT to use original implementation of DATE algorithm. Original
+                                            implementation assumes that if no outliers are found then standard deviation
+                                            is estimated from `Nmin` to not overestimate the noise. `True` implies that
+                                            noise can be overestimated. It is beneficial if no outliers are found,
+                                            then no outliers will be present in the trimmed spectrogram.
+                stft_backend : str : backend for STFT operator ['scipy', 'ssqueezepy', 'ssqueezepy_gpu'].
+                                     The fastest CPU version is 'ssqueezepy', which is default.
+                stft_kwargs : dict : additional keyword arguments for STFT operator (see `cats.STFTOperator`).
         """
 
         # STFT params
@@ -71,7 +88,7 @@ class CATSBaseSTFT:
         self.cluster_distance_f_Hz = cluster_distance_f_Hz or self.cluster_size_f_Hz / 2
         self.cluster_distance_trace = cluster_distance_trace or self.cluster_size_trace
 
-        self.clustering_with_SNR = clustering_with_SNR
+        self.clustering_with_SNR = True
         self.clustering_multitrace = clustering_multitrace
 
         # Set other params and update correspondingly if needed
@@ -111,6 +128,9 @@ class CATSBaseSTFT:
             assert isinstance(self.cluster_size_trace_len, int) and isinstance(self.cluster_distance_trace_len, int), msg
 
     def reset_params(self, **params):
+        """
+            Updates the instance with changed parameters.
+        """
         for attribute, value in params.items():
             if hasattr(self, attribute):
                 setattr(self, attribute, value)
@@ -145,7 +165,7 @@ class CATSBaseSTFT:
 
 class CATSResult:
     def __init__(self, signal, coefficients, spectrogram, noise_thresholding, noise_std, binary_spectrogram,
-                 binary_spectrogram_clustered, spectrogram_clusters,time, stft_time, stft_frequency,
+                 binary_spectrogram_clustered, spectrogram_clusters, time, stft_time, stft_frequency,
                  stationary_intervals, **kwargs):
         self.signal = signal
         self.coefficients = coefficients

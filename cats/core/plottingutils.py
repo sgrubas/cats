@@ -1,6 +1,7 @@
 import numpy as np
 import numba as nb
 import holoviews as hv
+hv.extension('matplotlib')
 
 from .projection import GiveIntervals
 
@@ -21,18 +22,18 @@ def give_rectangles(events, time, yloc, dy):
     return rectangles
 
 
-def plot_traces(traces, detection, fname, comp, gain=1, rsp=1, **kwargs):
+def plot_traces(traces, detection, comp, gain=1, rsp=1, **kwargs):
     kwargs.setdefault('color', 'black')
     kwargs.setdefault('lw', 0.5)
     kwargs.setdefault('figsize', 400)
 
     t_dim = hv.Dimension('Time', unit='s')
-    dco = traces[fname].sel(Component=comp)
+    dco = traces.sel(Component=comp)
 
-    locy = dco.Location.values
+    locy = dco.Receiver.values
     dy = min(np.diff(locy))
     scale = ((rsp - 1) + 1) * gain * dy
-    dc = (dco / abs(dco).max(axis=-1).mean() * scale) + dco.Location
+    dc = (dco / abs(dco).max(axis=-1).mean() * scale) + dco.Receiver
 
     ### Data
     traces = hv.Overlay([hv.Curve(xi, kdims=[t_dim]) for xi in dc])
@@ -47,23 +48,22 @@ def plot_traces(traces, detection, fname, comp, gain=1, rsp=1, **kwargs):
     names = ['Detected', 'False Alarm', 'Missed Event']
     rects = []
     if detection is not None:
-        time = detection[fname].Time.values
-        det = detection[fname].sel(Component=comp).values
+        time = detection.Time.values
+        det = detection.sel(Component=comp).values
         if det.ndim == 2:
             det = det[..., None]
 
         for i in range(det.shape[-1]):
             intervals = GiveIntervals(det[..., i])
             intervals = [intvs for vi, intvs in zip(vis, intervals) if vi]
-            rectangles = give_rectangles(intervals, time, dc.Location[vis].values,
+            rectangles = give_rectangles(intervals, time, dc.Receiver[vis].values,
                                          scale / gain / 2.2)
-            rects.append(hv.Rectangles(rectangles, label=names[i]).opts(facecolor=colors[i],
-                                                                        color=colors[i],
-                                                                        alpha=kwargs.get('alpha', 0.3)))
+            rects.append(hv.Rectangles(rectangles).opts(facecolor=colors[i], color=colors[i],
+                                                        alpha=kwargs.get('alpha', 0.3)))
     rects = hv.Overlay(rects)
 
     ### Summary of all
     ylims = (locy.min() - 2 * dy, locy.max() + 2 * dy)
-    figure = (traces * rects)
+    figure = hv.Overlay((traces, rects))
     figure = figure.opts(ylim=ylims, fig_size=kwargs['figsize'])
     return figure

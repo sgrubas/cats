@@ -1,9 +1,8 @@
 """
     Operators for computing Time-Frequency representations, which are implemented for convenient usage of Forward and
     Inverse transforms from one object. Overrides operators `*` for forward transform, and `/` for inverse.
-    Main operators:
+
         STFT operator : Short-Time Fourier Transform
-        CWT operator : Continuous Wavelet Transform (```````` not implemented `````````)
 """
 
 import numpy as np

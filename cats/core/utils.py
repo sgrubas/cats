@@ -77,7 +77,7 @@ def get_interval_division(N, L):
         l, g = divmod(g, n)
         M = L + l
         inds = np.array([0] + [M] * (n - 1) + [M + g]).cumsum()
-        intervals = np.stack((inds[:-1], inds[1:]), axis=1)
+        intervals = np.stack((inds[:-1], inds[1:] - 1), axis=1)
         return intervals
 
 
