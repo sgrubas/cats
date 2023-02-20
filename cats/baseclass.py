@@ -122,6 +122,8 @@ class CATSBaseSTFT:
         self.cluster_distance_f_len = max(int(self.cluster_distance_f_Hz / self.STFT.df), 1)
         self.cluster_distance_trace_len = max(self.cluster_distance_trace or 1, 1)  # int(self.cluster_distance_trace / self.dx)
 
+        self.edge_cut = int(self.stft_window_len // 2 / self.stft_hop_len)
+
         if self.clustering_multitrace:
             msg = "For clustering on multiple traces, `cluster_size_trace_len` and `cluster_distance_trace_len`"
             msg += f"must be `int`, given `{type(self.cluster_size_trace_len)}` and `{type(self.cluster_distance_trace_len)}`"
@@ -151,6 +153,9 @@ class CATSBaseSTFT:
             return X, PSD, Eta, Sgm
 
         SNR = ThresholdingSNR(PSD, Sgm, Eta, frames)
+        if self.edge_cut > 0:
+            SNR[..., :self.edge_cut] = 0.0
+            SNR[..., -self.edge_cut-1:] = 0.0
         if 'threshold' in finish_on.casefold():
             return X, PSD, Eta, Sgm, SNR
 
@@ -202,10 +207,9 @@ class CATSResult:
                         label='3. Clustering: $C_{k,m} \cdot |X_{k,m}|$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
-        figsize = 250
-        cmap = 'viridis'
+        figsize = 250; cmap = 'viridis'; clim = (PSD.min(), PSD.max())
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, ylim=(1e-1, None),
-                                      xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
+                                    clim=clim, xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts  = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                        aspect_weight=0, sublabel_format='')

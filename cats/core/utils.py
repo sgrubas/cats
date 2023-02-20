@@ -71,7 +71,7 @@ def get_interval_division(N, L):
     `J` will be adjusted so that `N % J --> min` where the last frame will have `J + N % J`
     """
     if N < L: 
-        return np.array([[0, N]])
+        return np.array([[0, N - 1]])
     else:
         n, g = divmod(N, L)
         l, g = divmod(g, n)

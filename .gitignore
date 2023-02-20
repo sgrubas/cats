@@ -12,6 +12,7 @@ cats.egg-info/
 /figures
 /examples/Detection.ipynb
 /examples/Denoising.ipynb
+/examples/Test-IPGG.ipynb
 
 # Executables
 *.swf
