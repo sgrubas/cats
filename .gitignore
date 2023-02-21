@@ -13,6 +13,8 @@ cats.egg-info/
 /examples/Detection.ipynb
 /examples/Denoising.ipynb
 /examples/Test-IPGG.ipynb
+/cats/data/SampleDataset.npy
+/cats/data/SampleDatasetMeta.pkl
 
 # Executables
 *.swf
