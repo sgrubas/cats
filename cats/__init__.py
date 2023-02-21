@@ -8,3 +8,4 @@ from .core.plottingutils import plot_traces
 from .metrics import EvaluateDetection, BinaryCrossentropy
 from .detection import CATSDetector
 from .denoising import CATSDenoiser
+from .data import import_sample_data
