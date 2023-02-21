@@ -45,11 +45,11 @@ setup(
     classifiers=CLASSIFIERS,
     keywords=KEYWORDS,
     packages=find_packages(),
-    package_dir={"": NAME},
+    # package_dir={"": NAME},
     url=URL,
     zip_safe=False,
     install_requires=INSTALL_REQUIRES,
-    include_package_data=True,
+    # include_package_data=True,
     package_data={NAME: ["data/*.npy", "data/*.pkl"]}
     )
 
