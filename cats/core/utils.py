@@ -1,6 +1,7 @@
 import numpy as np
 import numba as nb
 from functools import wraps
+import pkg_resources, pickle, os
 
 #  Generic decorator for formatting inputs & outputs of function when N-dimensional array
 #  must be reshaped to predefined number of dimensions `dim`
@@ -89,3 +90,12 @@ def _scalarORarray_to_tuple(d, minsize):
         d = tuple(int(di) for di in d)
     return d
 
+
+def import_sample_data():
+    data_file = pkg_resources.resource_stream(__name__, "../data/SampleDataset.npy")
+    meta_file = pkg_resources.resource_stream(__name__, "../data/SampleDatasetMeta.pkl")
+    Data = {'data': np.load(data_file)}
+    with open(meta_file.name, mode='rb') as f:
+        meta = pickle.load(f)
+    Data.update(meta)
+    return Data
