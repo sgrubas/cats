@@ -1,11 +1,12 @@
 from setuptools import setup, find_packages
 
-NAME            = "CATS"
+NAME            = "cats"
 VERSION         = "0.1.0"
 DESCRIPTION     = "Cluster Analysis of Trimmed Spectrograms (CATS)"
 URL             = "https://github.com/sgrubas/CATS"
 LICENSE         = "MIT"
-AUTHOR          = "Serafim Grubas, Mirko van der Baan"
+MAINTAINER      = "Serafim Grubas"
+AUTHORS         = "Serafim Grubas, Mirko van der Baan"
 EMAIL           = "serafimgrubas@gmail.com, grubas@ualberta.ca"
 KEYWORDS        = ["Clustering", "Detection", "Denoising", "Noise estimation", 
                    "Spectrogram", "Time-Frequency", "Sparse", "Earthquake", "Voice"]
@@ -37,9 +38,9 @@ setup(
     description=DESCRIPTION,
     long_description=LONG_DESCRIPTION,
     long_description_content_type="text/markdown",
-    author=AUTHOR,
+    author=AUTHORS,
     author_email=EMAIL,
-    maintainer=AUTHOR,
+    maintainer=MAINTAINER,
     maintainer_email=EMAIL,
     classifiers=CLASSIFIERS,
     keywords=KEYWORDS,
