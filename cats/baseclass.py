@@ -219,12 +219,16 @@ class CATSResult:
                         label='3. Clustering: $C_{k,m} \cdot |X_{k,m}|$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
-        figsize = 250; cmap = 'viridis'; clim = (PSD.min(), PSD.max())
+        figsize = 250; cmap = 'viridis'
+        PSD_pos = PSD[PSD > 0]
+        cmin = 1e-1 if (PSD_pos.size == 0) else PSD_pos.min()
+        cmax = 1e1 if (PSD_pos.size == 0) else PSD_pos.max()
+        clim = (cmin, cmax)
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, ylim=(1e-1, None),
                                     clim=clim, xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts  = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
-                                       aspect_weight=0, sublabel_format='')
+                                     aspect_weight=0, sublabel_format='')
 
         figs = (fig0 + fig1 + fig2 + fig3)
         return figs, (layout_opts, spectr_opts, curve_opts)
