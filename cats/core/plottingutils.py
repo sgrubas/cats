@@ -22,13 +22,13 @@ def give_rectangles(events, time, yloc, dy):
     return rectangles
 
 
-def plot_traces(traces, detection, comp, gain=1, rsp=1, **kwargs):
+def plot_traces(traces, detection, gain=1, rsp=1, **kwargs):
     kwargs.setdefault('color', 'black')
     kwargs.setdefault('lw', 0.5)
     kwargs.setdefault('figsize', 400)
 
     t_dim = hv.Dimension('Time', unit='s')
-    dco = traces.sel(Component=comp)
+    dco = traces
 
     locy = dco.Receiver.values
     dy = min(np.diff(locy))
@@ -49,7 +49,7 @@ def plot_traces(traces, detection, comp, gain=1, rsp=1, **kwargs):
     rects = []
     if detection is not None:
         time = detection.Time.values
-        det = detection.sel(Component=comp).values
+        det = detection.values
         if det.ndim == 2:
             det = det[..., None]
 

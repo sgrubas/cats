@@ -26,10 +26,11 @@ class CATSDenoiser(CATSBaseSTFT):
         C = K > 0
         y = (self.STFT / (X * C))[..., :N]
 
-        kwargs = {"signal" : x, "coefficients" : X, "spectrogram" : PSD, "noise_thresholding" : Eta, "noise_std" : Sgm,
-                  "binary_spectrogram" : SNR > 0, "binary_spectrogram_clustered" : C, "spectrogram_clusters" : K,
-                  "denoised_signal" : y, "time" : time, "stft_time" : stft_time, "stft_frequency" : self.stft_frequency,
-                  "stationary_intervals" : frames}
+        kwargs = {"signal": x, "coefficients": X, "spectrogram": PSD, "noise_thresholding": Eta, "noise_std": Sgm,
+                  "binary_spectrogram": SNR > 0, "binary_spectrogram_clustered": C, "spectrogram_clusters": K,
+                  "denoised_signal": y, "detection": P > 0, "projected_clusters": P, "SNR_spectrogram": SNR,
+                  "time": time, "stft_time": stft_time, "stft_frequency": self.stft_frequency,
+                  "stationary_intervals": stft_time[frames]}
 
         return CATSDenoisingResult(**kwargs)
 
