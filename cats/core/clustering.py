@@ -13,7 +13,6 @@ from scipy import special, stats
 
 @nb.njit("Tuple((i8[:, :], i8[:]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)")
 def _Clustering2D(SNR, q, s, minSNR):
-
     B = SNR > 0
     shape = B.shape
     Nf, Nt = shape
@@ -21,7 +20,6 @@ def _Clustering2D(SNR, q, s, minSNR):
     q_f, q_t = q
     s_f, s_t = s
     clusters = []
-    move_clusters = []  # for combining the connecting clusters
 
     for (i, j), bij in np.ndenumerate(B):
         if bij:
@@ -45,39 +43,34 @@ def _Clustering2D(SNR, q, s, minSNR):
                         if (cl not in neighbor_clusters):
                             neighbor_clusters.append(cl)
                     else:
-                        l1, l2 = l[0] + i1, l[1] + j1
-                        cluster_k.append((l1, l2, snr[l]))
+                        cluster_k.append((i1 + l[0],
+                                          j1 + l[1],
+                                          snr[l]))
 
-            # combining different clusters into one
-            # and updating collection of clusters
             k = len(neighbor_clusters)
-            if k == 0:
+            if k == 0:  # updating collection of clusters
                 cluster_assigned = len(clusters)
                 clusters.append(cluster_k)
-            elif (k == 1) and (len(cluster_k) == 0):
+            elif (k == 1) and (len(cluster_k) == 0):  # nothing added
                 continue
-            else:
-                cluster_assigned = neighbor_clusters[0]
-                clusters[cluster_assigned] += cluster_k
-                for cli in neighbor_clusters[1:]:
-                    move_clusters.append((cluster_assigned, cli))
+            else:  # combining different clusters into one
+                cluster_assigned = min(neighbor_clusters)
+                neighbor_clusters.remove(cluster_assigned)
+                for cli in neighbor_clusters:
+                    cluster_k += clusters[cli]
+                    clusters[cli] = [(Nf, Nt, 0.0)]  # meaningless isolated point, will not be used
+                clusters[cluster_assigned] += cluster_k  # add new points
 
             # assigning clusters
             for (l1, l2, snr) in cluster_k:
                 C[l1, l2] = cluster_assigned
 
-    counted = []
-    for (di, dj) in move_clusters:
-        if (dj not in counted) and (di not in counted):
-            counted.append(dj)
-            clusters[di] += clusters[dj]
-            clusters[dj] = [(Nf, Nt, 0.0)]  # meaningless isolated point, will not be used
-
+    # filtering clusters and projection
     K = np.full(shape, 0)
     k = 1
     projection = np.zeros(Nt, dtype=np.int64)
     for cl in clusters:
-        if len(cl) > 1:
+        if len(cl) > 1:  # all isolated points are skipped
             cl_arr = np.array(cl)
             cl_f_min, cl_f_max = cl_arr[:, 0].min(), cl_arr[:, 0].max() + 1
             cl_t_min, cl_t_max = cl_arr[:, 1].min(), cl_arr[:, 1].max() + 1
@@ -116,7 +109,6 @@ def _Clustering3D(SNR, q, s, minSNR):
     q_c, q_f, q_t = q
     s_c, s_f, s_t = s
     clusters = []
-    move_clusters = []  # for combining the connecting clusters
 
     for (i, j, k), bijk in np.ndenumerate(B):
         if bijk:
@@ -141,34 +133,30 @@ def _Clustering3D(SNR, q, s, minSNR):
                         if (cl not in neighbor_clusters):
                             neighbor_clusters.append(cl)
                     else:
-                        l1, l2, l3 = l[0] + i1, l[1] + j1, l[2] + k1
-                        cluster_k.append((l1, l2, l3, snr[l]))
+                        cluster_k.append((i1 + l[0],
+                                          j1 + l[1],
+                                          k1 + l[2],
+                                          snr[l]))
 
-            # combining different clusters into one
-            # and updating collection of clusters
             k = len(neighbor_clusters)
-            if k == 0:
+            if k == 0:  # updating collection of clusters
                 cluster_assigned = len(clusters)
                 clusters.append(cluster_k)
-            elif (k == 1) and (len(cluster_k) == 0):
+            elif (k == 1) and (len(cluster_k) == 0):  # nothing added
                 continue
-            else:
-                cluster_assigned = neighbor_clusters[0]
-                clusters[cluster_assigned] += cluster_k
-                for cli in neighbor_clusters[1:]:
-                    move_clusters.append((cluster_assigned, cli))
+            else:  # combining different clusters into one
+                cluster_assigned = min(neighbor_clusters)
+                neighbor_clusters.remove(cluster_assigned)
+                for cli in neighbor_clusters:
+                    cluster_k += clusters[cli]
+                    clusters[cli] = [(Nc, Nf, Nt, 0.0)]  # meaningless isolated point for compiler, will not be used
+                clusters[cluster_assigned] += cluster_k  # add new points
 
             # assigning clusters
             for (l1, l2, l3, snr) in cluster_k:
                 C[l1, l2, l3] = cluster_assigned
 
-    counted = []
-    for (di, dj) in move_clusters:
-        if (dj not in counted) and (di not in counted):
-            counted.append(dj)
-            clusters[di] += clusters[dj]
-            clusters[dj] = [(Nc, Nf, Nt, 0.0)]  # meaningless isolated point, will not be used
-
+    # filtering clusters and projection
     K = np.full(shape, 0)
     projection = np.zeros((Nc, Nt), dtype=np.int64)
     k = 1
@@ -185,6 +173,7 @@ def _Clustering3D(SNR, q, s, minSNR):
                 for (l1, l2, l3, snr) in cl:
                     K[l1, l2, l3] = k
                 k += 1
+
     return K, projection
 
 
