@@ -40,10 +40,11 @@ class CATSDetector(CATSBaseSTFT):
 
 class CATSDetectionResult(CATSResult):
 
-    def plot(self, ind):
-        fig, opts = super().plot(ind)
+    def plot(self, ind, time_interval_sec=(None, None)):
+        fig, opts, tints = super().plot(ind, time_interval_sec)
         t_dim = hv.Dimension('Time', unit='s')
-        fig4 = hv.Curve((self.stft_time, self.detection[ind].astype(float)),
+        sti1, sti2 = tints[1]
+        fig4 = hv.Curve((self.stft_time[sti1: sti2], self.detection[ind][sti1: sti2].astype(float)),
                         kdims=[t_dim], vdims='Classification', label='4. Projection: $o_k$')
         return (fig + fig4).opts(*opts).cols(1)
 

@@ -37,14 +37,14 @@ class CATSDenoiser(CATSBaseSTFT):
 
 class CATSDenoisingResult(CATSResult):
 
-    def plot(self, ind):
-        fig, opts = super().plot(ind)
+    def plot(self, ind, time_interval_sec=(None, None)):
+        fig, opts, tints = super().plot(ind, time_interval_sec)
 
         t_dim = hv.Dimension('Time', unit='s')
-        f_dim = hv.Dimension('Frequency', unit='Hz')
         A_dim = hv.Dimension('Amplitude')
+        ti1, ti2 = tints[0]
 
-        fig = fig + hv.Curve((self.time, self.denoised_signal[ind]),
+        fig = fig + hv.Curve((self.time[ti1: ti2], self.denoised_signal[ind][ti1: ti2]),
                               kdims=[t_dim], vdims=A_dim,
                               label='5. Denoised signal: $y_n$').opts(xlabel='Time (s)')
 

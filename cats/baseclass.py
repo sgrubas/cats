@@ -200,22 +200,35 @@ class CATSResult:
         for kw, v in kwargs.items():
             self.__setattr__(kw, v)
 
-    def plot(self, ind):
+    def plot(self, ind, time_interval_sec=(None, None)):
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')
         A_dim = hv.Dimension('Amplitude')
 
-        PSD = self.spectrogram[ind]
-        B = PSD * self.binary_spectrogram[ind].astype(float)
-        C = PSD * self.binary_spectrogram_clustered[ind].astype(float)
+        if isinstance(time_interval_sec, tuple):
+            t1 = 0 if (y := time_interval_sec[0]) is None else y
+            t2 = self.time[-1] if (y := time_interval_sec[1]) is None else y
+        elif time_interval_sec is None:
+            t1, t2 = 0, 0
+        else:
+            t1, t2 = time_interval_sec
 
-        fig0 = hv.Curve((self.time, self.signal[ind]), kdims=[t_dim], vdims=A_dim,
+        dt = self.time[1] - self.time[0]
+        ti1, ti2 = int(t1 / dt), int(t2 / dt)
+        sdt = self.stft_time[1] - self.stft_time[0]
+        sti1, sti2 = int(t1 / sdt), int(t2 / sdt)
+
+        PSD = self.spectrogram[ind][:, sti1: sti2]
+        B = PSD * self.binary_spectrogram[ind][:, sti1: sti2].astype(float)
+        C = PSD * self.binary_spectrogram_clustered[ind][:, sti1: sti2].astype(float)
+
+        fig0 = hv.Curve((self.time[ti1: ti2], self.signal[ind][ti1: ti2]), kdims=[t_dim], vdims=A_dim,
                         label='0. Input data: $x_n$').opts(xlabel='', linewidth=0.2)
-        fig1 = hv.Image((self.stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
+        fig1 = hv.Image((self.stft_time[sti1: sti2], self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Spectrogram: $|X_{k,m}|$')
-        fig2 = hv.Image((self.stft_time, self.stft_frequency, B), kdims=[t_dim, f_dim],
+        fig2 = hv.Image((self.stft_time[sti1: sti2], self.stft_frequency, B), kdims=[t_dim, f_dim],
                         label='2. Trimming by B-E-DATE: $B_{k,m} \cdot |X_{k,m}|$')
-        fig3 = hv.Image((self.stft_time, self.stft_frequency, C), kdims=[t_dim, f_dim],
+        fig3 = hv.Image((self.stft_time[sti1: sti2], self.stft_frequency, C), kdims=[t_dim, f_dim],
                         label='3. Clustering: $C_{k,m} \cdot |X_{k,m}|$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
@@ -229,6 +242,6 @@ class CATSResult:
         curve_opts  = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      aspect_weight=0, sublabel_format='')
-
+        time_interval = [(ti1, ti2), (sti1, sti2)]
         figs = (fig0 + fig1 + fig2 + fig3)
-        return figs, (layout_opts, spectr_opts, curve_opts)
+        return figs, (layout_opts, spectr_opts, curve_opts), time_interval
