@@ -149,7 +149,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
             if hasattr(self, attribute):
                 setattr(self, attribute, value)
             else:
-                raise AttributeError(f'{self.__name__} has no attribute: {attribute}')
+                raise AttributeError(f'{type(self)} has no attribute: {attribute}')
         self._set_params()
 
     def _apply(self, x, finish_on='clustering'):
