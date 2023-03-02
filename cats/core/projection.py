@@ -215,7 +215,7 @@ def _projectIntervals(intervals, N, dt):
     b = np.full(N, False)
     for (t1, t2) in intervals:
         i1, i2 = int(t1 / dt), int(np.ceil(t2 / dt)) + 1
-        b[i1 : i2] = True
+        b[i1: i2] = True
     return b
 
 
