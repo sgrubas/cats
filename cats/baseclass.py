@@ -26,7 +26,8 @@ class CATSBaseSTFT:
 
     """
     def __init__(self, dt_sec, stft_window_sec, stft_overlap, stft_nfft,
-                 minSNR, stationary_frame_sec, cluster_size_t_sec, cluster_size_f_Hz,
+                 minSNR, stationary_frame_sec,
+                 cluster_size_t_sec, cluster_size_f_Hz, freq_bandpass_Hz=None,
                  cluster_distance_t_sec=None, cluster_distance_f_Hz=None,
                  clustering_multitrace=False, cluster_size_trace=None, cluster_distance_trace=None,
                  date_Q=0.95, date_detection_mode=True, stft_backend='ssqueezepy', stft_kwargs=None):
@@ -51,6 +52,9 @@ Length will be adjusted to have at least 256 elements in one frame.
 Can be estimated as length of the strongest phases.
 
                 cluster_size_f_Hz : float : minimum cluster size in frequency, in hertz, i.e. minimum frequency width.
+
+                freq_bandpass_Hz : tuple/list[int/float] : bandpass frequency range, in hertz, i.e. everything out of the \
+range is zero (e.g. (f_min, f_max)).
 
                 cluster_distance_t_sec : float : neighborhood distance in time for clustering, in seconds. \
 Minimum separation time between two different events.
@@ -92,6 +96,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.date_detection_mode = date_detection_mode
         self.stationary_frame_sec = stationary_frame_sec
         # Clustering params
+        self.freq_bandpass_Hz = freq_bandpass_Hz
         self.cluster_size_t_sec = cluster_size_t_sec
         self.cluster_size_f_Hz = cluster_size_f_Hz
         self.cluster_size_trace = cluster_size_trace
@@ -126,6 +131,16 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.stationary_frame_sec = self.stationary_frame_len * self.stft_hop_sec
 
         # Clustering params
+        if self.freq_bandpass_Hz is None:
+            self.freq_bandpass_Hz = (self.stft_frequency[0], self.stft_frequency[-1])
+        else:
+            if isinstance(self.freq_bandpass_Hz, (int, float)):
+                self.freq_bandpass_Hz = (self.stft_frequency[0], self.freq_bandpass_Hz)
+            elif isinstance(self.freq_bandpass_Hz, (tuple, list)):
+                self.freq_bandpass_Hz = self.freq_bandpass_Hz
+            else:
+                TypeError(f"`freq_range_Hz` must be `int`/`float` or tuple/list[`int`/`float`]")
+        self.freq_bandpass_len = tuple(int(fi / self.STFT.df) for fi in self.freq_bandpass_Hz)
         self.cluster_size_t_len = max(int(self.cluster_size_t_sec / self.stft_hop_sec), 1)
         self.cluster_size_f_len = max(int(self.cluster_size_f_Hz / self.STFT.df), 1)
         self.cluster_size_trace_len = max(self.cluster_size_trace or 1, 1)  # int(self.cluster_size_trace / self.dx)
@@ -153,29 +168,40 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self._set_params()
 
     def _apply(self, x, finish_on='clustering'):
+        # STFT
         X = self.STFT * x
         PSD = np.abs(X)
         if 'stft' in finish_on.casefold():
             return X, PSD
-
+        # bandpass
+        if1, if2 = self.freq_bandpass_len
+        bandpass = np.full(len(self.stft_frequency), False)
+        bandpass[if1: if2 + 1] = True
+        # BEDATE
         frames = get_interval_division(N=PSD.shape[-1], L=self.stationary_frame_len)
-        Eta = BEDATE(PSD, frames=frames, minSNR=self.minSNR, Q=self.date_Q, original_mode=self.date_noise_mode)
+        Eta = np.zeros(PSD.shape[:-1] + (len(frames),))
+        Eta[..., bandpass, :] = BEDATE(PSD[..., bandpass, :], frames=frames, minSNR=self.minSNR,
+                                       Q=self.date_Q, original_mode=self.date_noise_mode,
+                                       zero_Nyq_freqs=(if1 == 0, len(self.stft_frequency) == if2 + 1))
         Sgm = EtaToSigma(Eta, self.minSNR)
         if 'date' in finish_on.casefold():
             return X, PSD, Eta, Sgm
-
-        SNR = ThresholdingSNR(PSD, Sgm, Eta, frames)
+        # Thresholding and calculating SNR
+        SNR = np.zeros_like(PSD)
+        SNR[..., bandpass, :] = ThresholdingSNR(PSD[..., bandpass, :], Sgm[..., bandpass, :],
+                                                Eta[..., bandpass, :], frames)
         if self.edge_cut > 0:
             SNR[..., :self.edge_cut] = 0.0
-            SNR[..., -self.edge_cut-1:] = 0.0
+            SNR[..., -self.edge_cut - 1:] = 0.0
         if 'threshold' in finish_on.casefold():
             return X, PSD, Eta, Sgm, SNR
-
+        # Clustering
         mc = self.clustering_multitrace
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
         s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
         minSNR = self.minSNR * self.clustering_with_SNR
-        K, P = Clustering(SNR, q=q, s=s, minSNR=minSNR)
+        K = np.zeros_like(PSD, dtype=np.int64)
+        K[..., bandpass, :], P = Clustering(SNR[..., bandpass, :], q=q, s=s, minSNR=minSNR)
 
         return X, PSD, Eta, Sgm, SNR, K, P
 

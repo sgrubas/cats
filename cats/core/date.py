@@ -47,7 +47,7 @@ def _BEDATE_API(PSD, /, frames, Nmins, xi_lamb, original_mode):
     return _BEDATE(PSD, frames, Nmins, xi_lamb, original_mode)
 
 
-def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95, original_mode=False):
+def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95, original_mode=False, zero_Nyq_freqs=(True, True)):
     """
         Performs Block-Extended-DATE algorithm 
         
@@ -63,6 +63,7 @@ def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95, original_mode=False):
                             If `True`, noise is estimated on `Nmin` in the worst case.
                             Default `False`, i.e. we may overestimate noise,
                             but it is good for detection with high minSNR (`xi_lamb`)
+            zero_Nyq_freqs : tuple(bool, bool) : Does PSD contain `zero` and `Nyquist` frequencies? e.g. (True, True)
 
         Return:
             Eta : np.ndarray (..., Nf, n) : thresholding function
@@ -74,7 +75,10 @@ def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95, original_mode=False):
     """
     preshape, N = PSD.shape[:-1], PSD.shape[-1]
     d = np.full(preshape, 2)
-    d[..., 0] = 1; d[..., -1] = 1 # zero and Nyq frequencies are 1-dim samples (imag = 0)
+    if zero_Nyq_freqs[0]:  # zero frequency is 1-dim samples (imag = 0)
+        d[..., 0] = 1
+    if zero_Nyq_freqs[1]:  # Nyq frequency is 1-dim samples (imag = 0)
+        d[..., -1] = 1
 
     # Calculating constants depending on dimension and `minSNR`
     rho = minSNR if (minSNR is not None) else np.sqrt(2 * np.log(N * 2)) # `N * d` for `d = 2`

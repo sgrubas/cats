@@ -11,7 +11,8 @@ from scipy import special, stats
 ###################  CLUSTERING  ###################
 
 
-@nb.njit("Tuple((i8[:, :], i8[:]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)")
+@nb.njit(["Tuple((i8[:, :], i8[:]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)",
+          "Tuple((i8[:, :], i8[:]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)"])
 def _Clustering2D(SNR, q, s, minSNR):
     B = SNR > 0
     shape = B.shape
@@ -58,7 +59,7 @@ def _Clustering2D(SNR, q, s, minSNR):
                 neighbor_clusters.remove(cluster_assigned)
                 for cli in neighbor_clusters:
                     cluster_k += clusters[cli]
-                    clusters[cli] = [(Nf, Nt, 0.0)]  # meaningless isolated point, will not be used
+                    clusters[cli] = [(Nf, Nt, SNR[-1, -1])]  # meaningless isolated point, will not be used
                 clusters[cluster_assigned] += cluster_k  # add new points
 
             # assigning clusters
@@ -84,7 +85,8 @@ def _Clustering2D(SNR, q, s, minSNR):
     return K, projection
 
 
-@nb.njit("Tuple((i8[:, :, :], i8[:, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)", parallel=True)
+@nb.njit(["Tuple((i8[:, :, :], i8[:, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)",
+          "Tuple((i8[:, :, :], i8[:, :]))(f4[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)"], parallel=True)
 def _ClusteringN2D(SNR, q, s, minSNR):
 
     K = np.empty(SNR.shape, dtype=np.int64)
@@ -99,7 +101,8 @@ def _ClusteringN2D_API(SNR, /, q, s, minSNR):
     return _ClusteringN2D(SNR, q, s, minSNR)
 
 
-@nb.njit("Tuple((i8[:, :, :], i8[:, :]))(f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)")
+@nb.njit(["Tuple((i8[:, :, :], i8[:, :]))(f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)",
+          "Tuple((i8[:, :, :], i8[:, :]))(f4[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)"])
 def _Clustering3D(SNR, q, s, minSNR):
 
     B = SNR > 0
@@ -149,7 +152,7 @@ def _Clustering3D(SNR, q, s, minSNR):
                 neighbor_clusters.remove(cluster_assigned)
                 for cli in neighbor_clusters:
                     cluster_k += clusters[cli]
-                    clusters[cli] = [(Nc, Nf, Nt, 0.0)]  # meaningless isolated point for compiler, will not be used
+                    clusters[cli] = [(Nc, Nf, Nt, SNR[-1, -1, -1])]  # meaningless isolated point for compiler, will not be used
                 clusters[cluster_assigned] += cluster_k  # add new points
 
             # assigning clusters
@@ -177,7 +180,8 @@ def _Clustering3D(SNR, q, s, minSNR):
     return K, projection
 
 
-@nb.njit("Tuple((i8[:, :, :, :], i8[:, :, :]))(f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)", parallel=True)
+@nb.njit(["Tuple((i8[:, :, :, :], i8[:, :, :]))(f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)",
+          "Tuple((i8[:, :, :, :], i8[:, :, :]))(f4[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)"], parallel=True)
 def _ClusteringN3D(SNR, q, s, minSNR):
     N, Nc, Nf, Nt = SNR.shape
     K = np.empty(SNR.shape, dtype=np.int64)
