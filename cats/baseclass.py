@@ -164,6 +164,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         """
             Updates the instance with changed parameters.
         """
+        raise NotImplementedError("The method does not work as expected, STFT operator initialization must adjusted")
         for attribute, value in params.items():
             if hasattr(self, attribute):
                 setattr(self, attribute, value)
