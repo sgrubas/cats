@@ -142,6 +142,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
                 TypeError(f"`freq_range_Hz` must be `int`/`float` or tuple/list[`int`/`float`]")
         assert (fbw := (self.freq_bandpass_Hz[1] - self.freq_bandpass_Hz[0])) > (csf := self.cluster_size_f_Hz), \
                 f"Frequency bandpass width `{fbw}` must be bigger than min frequency cluster size `{csf}`"
+        self.freq_bandpass_Hz = (max(self.freq_bandpass_Hz[0], self.stft_frequency[0]),
+                                 min(self.freq_bandpass_Hz[1], self.stft_frequency[-1]))
         self.freq_bandpass_len = tuple(int(fi / self.STFT.df) for fi in self.freq_bandpass_Hz)
         self.cluster_size_t_len = max(int(self.cluster_size_t_sec / self.stft_hop_sec), 1)
         self.cluster_size_f_len = max(int(self.cluster_size_f_Hz / self.STFT.df), 1)
