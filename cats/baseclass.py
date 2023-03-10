@@ -268,9 +268,9 @@ class CATSResult:
         cmin = 1e-1 if (PSD_pos.size == 0) else PSD_pos.min()
         cmax = 1e1 if (PSD_pos.size == 0) else PSD_pos.max()
         clim = (cmin, cmax)
-        spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, ylim=(1e-1, None),
+        spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, ylim=(1e-1, None), xlim=(t1, t2),
                                     clim=clim, xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
-        curve_opts  = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize)
+        curve_opts  = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=(t1, t2))
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      aspect_weight=0, sublabel_format='')
         time_interval = [(ti1, ti2), (sti1, sti2)]
