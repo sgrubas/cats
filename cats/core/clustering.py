@@ -211,10 +211,8 @@ def Clustering(SNR, /, q, s, minSNR):
             s : tuple(int, 2) / tuple(int, 3) : minimum cluster sizes `(s_f, s_t)` or `(s_c, s_f, s_t)`.
                                                 `s_c` for traces, `s_f` for frequency, `s_t` for time.
     """
-    func = {2 : _ClusteringN2D_API, 3 : _ClusteringN3D_API}
-    dim = len(q)
-    K, P = func[dim](SNR, q, s, minSNR)
-    return K, P
+    func = {2: _ClusteringN2D_API, 3: _ClusteringN3D_API}
+    return func[len(q)](SNR, q, s, minSNR)
 
 
 ## Experimental ##
@@ -397,8 +395,7 @@ def _ClusteringToProjectionN2D(SNR, q, s, minSNR):
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
 def ClusteringToProjection(SNR, /, q, s, minSNR):
-    P = _ClusteringToProjectionN2D(SNR, q, s, minSNR)
-    return P
+    return _ClusteringToProjectionN2D(SNR, q, s, minSNR)
 
 
 def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
