@@ -63,7 +63,7 @@ def cpu_STA_LTA_backend(X, left, right, step, overlap):
 
 @ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=False, output_num=1, first_shape=True)
 def STA_LTA(x, long, short, step, overlap, padmode='reflect'):
-    X = np.pad(x, [(0, 0), (long - overlap, short)], mode=padmode)
+    X = np.pad(x, [(0, 0), (long - overlap, short - 1)], mode=padmode)
     return cpu_STA_LTA_backend(X, long, short, step, overlap)
 
 
