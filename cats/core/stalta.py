@@ -13,7 +13,7 @@ from .projection import ProjectFilterIntervals
 
 
 @nb.njit(["f8[:](f8[:], i8, i8, i8, i8, i8)",
-          "f8[:](f4[:], i8, i8, i8, i8, i8)"])
+          "f8[:](f4[:], i8, i8, i8, i8, i8)"], cache=True)
 def cpu_STA_LTA_backend_vector(x, left, lleft, right, rright, step):
     n = len(x)
     M = int((n - rright) / step) + 1
@@ -37,7 +37,7 @@ def cpu_STA_LTA_backend_vector(x, left, lleft, right, rright, step):
 
 
 @nb.njit(["f8[:, :](f8[:, :], i8, i8, i8, i8)",
-          "f8[:, :](f4[:, :], i8, i8, i8, i8)"], parallel=True)
+          "f8[:, :](f4[:, :], i8, i8, i8, i8)"], parallel=True, cache=True)
 def cpu_STA_LTA_backend(X, left, right, step, overlap):
     lleft = left - overlap
     rright = lleft + right

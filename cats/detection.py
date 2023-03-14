@@ -27,12 +27,11 @@ class CATSDetector(CATSBaseSTFT):
         stft_time = self.STFT.forward_time_axis(len(time))
         frames = get_interval_division(N=len(stft_time), L=self.stationary_frame_len)
 
-        X, PSD, Eta, Sgm, SNR, K, P = super()._apply(x, finish_on='clustering')
-
+        X, PSD, Eta, Sgm, SNR, SNRK, K = super()._apply(x, finish_on='clustering')
+        detection = K.max(axis=-2) > 0
         kwargs = {"signal": x, "coefficients": X, "spectrogram": PSD, "noise_thresholding": Eta, "noise_std": Sgm,
-                  "binary_spectrogram": SNR > 0, "binary_spectrogram_clustered": K > 0, "spectrogram_clusters": K,
-                  "detection": P > 0, "projected_clusters": P, "SNR_spectrogram": SNR, "time": time,
-                  "stft_time": stft_time, "stft_frequency": self.stft_frequency,
+                  "spectrogramSNR_trimmed": SNR, "spectrogramSNR_clustered": SNRK, "spectrogramID_cluster": K,
+                  "detection": detection, "time": time, "stft_time": stft_time, "stft_frequency": self.stft_frequency,
                   "stationary_intervals": stft_time[frames]}
 
         return CATSDetectionResult(**kwargs)
@@ -41,11 +40,13 @@ class CATSDetector(CATSBaseSTFT):
 class CATSDetectionResult(CATSResult):
 
     def plot(self, ind, time_interval_sec=(None, None)):
-        fig, opts, tints = super().plot(ind, time_interval_sec)
+        fig, opts, inds_slices = super().plot(ind, time_interval_sec)
         t_dim = hv.Dimension('Time', unit='s')
-        sti1, sti2 = tints[1]
-        fig4 = hv.Curve((self.stft_time[sti1: sti2], self.detection[ind][sti1: sti2].astype(float)),
-                        kdims=[t_dim], vdims='Classification', label='4. Projection: $o_k$')
+        i_st = inds_slices[2]
+        inds_st = inds_slices[0] + (slice(None), i_st)
+        fig4 = hv.Curve((self.stft_time[i_st], self.detection[inds_st].astype(float)),
+                        kdims=[t_dim], vdims='Classification',
+                        label='4. Projection: $o_k$')
         return (fig + fig4).opts(*opts).cols(1)
 
 

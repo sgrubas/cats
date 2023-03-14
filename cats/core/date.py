@@ -8,7 +8,7 @@ from scipy import special, optimize
 
 
 @nb.njit(["f8(f8[:], i8, f8, b1)",
-          "f8(f4[:], i8, f8, b1)"])
+          "f8(f4[:], i8, f8, b1)"], cache=True)
 def _DATE(Y, Nmin, xi_lamb, original_mode):
 
     N = len(Y)
@@ -29,7 +29,7 @@ def _DATE(Y, Nmin, xi_lamb, original_mode):
 
 
 @nb.njit(["f8[:, :](f8[:, :], i8[:, :], i8[:], f8[:], b1)",
-          "f8[:, :](f4[:, :], i8[:, :], i8[:], f8[:], b1)"], parallel=True)
+          "f8[:, :](f4[:, :], i8[:, :], i8[:], f8[:], b1)"], parallel=True, cache=True)
 def _BEDATE(PSD, frames, Nmins, xi_lamb, original_mode):
     M, N = PSD.shape
     n = len(frames)

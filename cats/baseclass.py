@@ -205,24 +205,25 @@ The fastest CPU version is 'ssqueezepy', which is default.
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
         s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
         minSNR = self.minSNR * self.clustering_with_SNR
-        K = np.zeros_like(PSD, dtype=np.int64)
-        K[..., bandpass, :], P = Clustering(SNR[..., bandpass, :], q=q, s=s, minSNR=minSNR)
+        SNRK = np.zeros_like(SNR)
+        K = np.zeros(SNR.shape, dtype=np.uint16)
+        SNRK[..., bandpass, :], K[..., bandpass, :] = Clustering(SNR[..., bandpass, :], q=q, s=s, minSNR=minSNR)
 
-        return X, PSD, Eta, Sgm, SNR, K, P
+        return X, PSD, Eta, Sgm, SNR, SNRK, K
 
 
 class CATSResult:
-    def __init__(self, signal, coefficients, spectrogram, noise_thresholding, noise_std, binary_spectrogram,
-                 binary_spectrogram_clustered, spectrogram_clusters, time, stft_time, stft_frequency,
+    def __init__(self, signal, coefficients, spectrogram, noise_thresholding, noise_std, spectrogramSNR_trimmed,
+                 spectrogramSNR_clustered, spectrogramID_cluster, time, stft_time, stft_frequency,
                  stationary_intervals, **kwargs):
         self.signal = signal
         self.coefficients = coefficients
         self.spectrogram = spectrogram
         self.noise_thresholding = noise_thresholding
         self.noise_std = noise_std
-        self.binary_spectrogram = binary_spectrogram
-        self.binary_spectrogram_clustered = binary_spectrogram_clustered
-        self.spectrogram_clusters = spectrogram_clusters
+        self.spectrogramSNR_trimmed = spectrogramSNR_trimmed
+        self.spectrogramSNR_clustered = spectrogramSNR_clustered
+        self.spectrogramID_cluster = spectrogramID_cluster
         self.time = time
         self.stft_time = stft_time
         self.stft_frequency = stft_frequency
@@ -236,30 +237,35 @@ class CATSResult:
         f_dim = hv.Dimension('Frequency', unit='Hz')
         A_dim = hv.Dimension('Amplitude')
 
+        ind = tuple(ind) if isinstance(ind, (tuple, list)) else (ind,)
+        assert len(ind) == self.signal.ndim - 1
+
         if isinstance(time_interval_sec, tuple):
             t1 = 0 if (y := time_interval_sec[0]) is None else y
             t2 = self.time[-1] if (y := time_interval_sec[1]) is None else y
         elif time_interval_sec is None:
-            t1, t2 = 0, 0
+            t1, t2 = 0, self.time[-1]
         else:
             t1, t2 = time_interval_sec
 
         dt = self.time[1] - self.time[0]
-        ti1, ti2 = int(t1 / dt), int(t2 / dt)
+        i_t = slice(int(t1 / dt), int(t2 / dt))
         sdt = self.stft_time[1] - self.stft_time[0]
-        sti1, sti2 = int(t1 / sdt), int(t2 / sdt)
+        i_st = slice(int(t1 / sdt), int(t2 / sdt))
+        inds_t = ind + (i_t,)
+        inds_St = ind + (slice(None), i_st)
 
-        PSD = self.spectrogram[ind][:, sti1: sti2]
-        B = PSD * self.binary_spectrogram[ind][:, sti1: sti2].astype(float)
-        C = PSD * self.binary_spectrogram_clustered[ind][:, sti1: sti2].astype(float)
+        PSD = self.spectrogram[inds_St]
+        B = PSD * (self.spectrogramSNR_trimmed[inds_St] > 0)
+        C = PSD * (self.spectrogramSNR_clustered[inds_St] > 0)
 
-        fig0 = hv.Curve((self.time[ti1: ti2], self.signal[ind][ti1: ti2]), kdims=[t_dim], vdims=A_dim,
+        fig0 = hv.Curve((self.time[i_t], self.signal[inds_t]), kdims=[t_dim], vdims=A_dim,
                         label='0. Input data: $x_n$').opts(xlabel='', linewidth=0.2)
-        fig1 = hv.Image((self.stft_time[sti1: sti2], self.stft_frequency, PSD), kdims=[t_dim, f_dim],
+        fig1 = hv.Image((self.stft_time[i_st], self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Spectrogram: $|X_{k,m}|$')
-        fig2 = hv.Image((self.stft_time[sti1: sti2], self.stft_frequency, B), kdims=[t_dim, f_dim],
+        fig2 = hv.Image((self.stft_time[i_st], self.stft_frequency, B), kdims=[t_dim, f_dim],
                         label='2. Trimming by B-E-DATE: $B_{k,m} \cdot |X_{k,m}|$')
-        fig3 = hv.Image((self.stft_time[sti1: sti2], self.stft_frequency, C), kdims=[t_dim, f_dim],
+        fig3 = hv.Image((self.stft_time[i_st], self.stft_frequency, C), kdims=[t_dim, f_dim],
                         label='3. Clustering: $C_{k,m} \cdot |X_{k,m}|$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
@@ -273,6 +279,6 @@ class CATSResult:
         curve_opts  = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=(t1, t2))
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      aspect_weight=0, sublabel_format='')
-        time_interval = [(ti1, ti2), (sti1, sti2)]
+        inds_slices = (ind, i_t, i_st)
         figs = (fig0 + fig1 + fig2 + fig3)
-        return figs, (layout_opts, spectr_opts, curve_opts), time_interval
+        return figs, (layout_opts, spectr_opts, curve_opts), inds_slices

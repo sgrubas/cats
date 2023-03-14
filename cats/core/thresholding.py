@@ -13,7 +13,7 @@ from .utils import ReshapeArraysDecorator
 
 
 @nb.njit(["b1[:, :](f8[:, :], f8[:, :], i8[:, :])",
-          "b1[:, :](f4[:, :], f8[:, :], i8[:, :])"], parallel=True)
+          "b1[:, :](f4[:, :], f8[:, :], i8[:, :])"], parallel=True, cache=True)
 def _Thresholding(PSD, Eta, frames):
     B = np.empty_like(PSD, dtype=np.bool_)
     M = len(frames)
@@ -31,7 +31,7 @@ def Thresholding(PSD, Eta, /, frames):
 
 
 @nb.njit(["b1[:, :](f8[:, :], f8[:, :], i8[:, :], f8)",
-          "b1[:, :](f4[:, :], f8[:, :], i8[:, :], f8)"], parallel=True)
+          "b1[:, :](f4[:, :], f8[:, :], i8[:, :], f8)"], parallel=True, cache=True)
 def _ThresholdingBySNR(PSD, Sgm, frames, minSNR):
     B = np.empty_like(PSD, dtype=np.bool_)
     M = len(frames)
@@ -50,7 +50,7 @@ def ThresholdingBySNR(PSD, Sgm, /, frames, minSNR):
 
 
 @nb.njit(["f8[:, :](f8[:, :], f8[:, :], f8[:, :], i8[:, :])",
-          "f8[:, :](f4[:, :], f8[:, :], f8[:, :], i8[:, :])"], parallel=True)
+          "f8[:, :](f4[:, :], f8[:, :], f8[:, :], i8[:, :])"], parallel=True, cache=True)
 def _ThresholdingSNR(PSD, Sgm, Eta, frames):
     SNR = np.empty(PSD.shape)
     M = len(frames)

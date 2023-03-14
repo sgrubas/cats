@@ -66,7 +66,7 @@ def ReshapeArraysDecorator(dim : int, input_num : int = 1, methodfunc : bool = F
     return decorator
 
 
-@nb.njit("i8[:, :](i8, i8)")
+@nb.njit("i8[:, :](i8, i8)", cache=True)
 def get_interval_division(N, L):
     """
     `J` will be adjusted so that `N % J --> min` where the last frame will have `J + N % J`

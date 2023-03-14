@@ -22,33 +22,37 @@ def give_rectangles(events, time, yloc, dy):
     return rectangles
 
 
-def plot_traces(traces, detection, gain=1, rsp=1, **kwargs):
+def plot_traces(data, detection=None, gain=1, each_receiver=1, **kwargs):
+    rsp = each_receiver
     kwargs.setdefault('color', 'black')
     kwargs.setdefault('lw', 0.5)
     kwargs.setdefault('figsize', 400)
-
     t_dim = hv.Dimension('Time', unit='s')
-    dco = traces
 
-    locy = dco.Receiver.values
+    assert (data.ndim == 2)
+    if 'time' in data.dims[0].casefold():
+        time_dim, traces_dim = data.dims
+    else:
+        traces_dim, time_dim = data.dims
+
+    location = data.coords[traces_dim]
+    locy = location.values
     dy = min(np.diff(locy))
     scale = ((rsp - 1) + 1) * gain * dy
-    dc = (dco / abs(dco).max(axis=-1).mean() * scale) + dco.Receiver
+    dc = (data / abs(data).max(time_dim).mean() * scale) + location
 
     ### Data
     traces = hv.Overlay([hv.Curve(xi, kdims=[t_dim]) for xi in dc])
-    traces = traces.opts(hv.opts.Curve(color=kwargs['color'],
-                                       linewidth=kwargs['lw']))
+    traces = traces.opts(hv.opts.Curve(color=kwargs['color'], linewidth=kwargs['lw']))
     trace_vis = [(i % rsp == 0) for i in range(len(dc))]
     traces = traces.opts(hv.opts.Curve(visible=hv.Cycle(trace_vis)))
 
     ### Events intervals
     vis = trace_vis
     colors = ['blue', 'green', 'red']
-    names = ['Detected', 'False Alarm', 'Missed Event']
     rects = []
     if detection is not None:
-        time = detection.Time.values
+        time = detection.coords[time_dim].values
         det = detection.values
         if det.ndim == 2:
             det = det[..., None]
@@ -56,8 +60,7 @@ def plot_traces(traces, detection, gain=1, rsp=1, **kwargs):
         for i in range(det.shape[-1]):
             intervals = GiveIntervals(det[..., i])
             intervals = [intvs for vi, intvs in zip(vis, intervals) if vi]
-            rectangles = give_rectangles(intervals, time, dc.Receiver[vis].values,
-                                         scale / gain / 2.2)
+            rectangles = give_rectangles(intervals, time, location[vis].values, scale / gain / 2.2)
             rects.append(hv.Rectangles(rectangles).opts(facecolor=colors[i], color=colors[i],
                                                         alpha=kwargs.get('alpha', 0.3)))
     rects = hv.Overlay(rects)

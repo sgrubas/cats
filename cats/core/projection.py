@@ -12,7 +12,7 @@ from .utils import ReshapeArraysDecorator
 ############################################################################
 
 
-@nb.njit("i8[:, :](b1[:])")
+@nb.njit("i8[:, :](b1[:])", cache=True)
 def _giveIntervals(detection):
     """
         Extracts time intervals of `True` values from boolean array.
@@ -48,7 +48,7 @@ def _giveIntervals(detection):
     return intervals[:j]
 
 
-@nb.njit("List(i8[:, :])(b1[:, :])")
+@nb.njit("List(i8[:, :])(b1[:, :])", cache=True)
 def _giveIntervalsN(detection):
     intervals = []
     for di in detection:
@@ -60,7 +60,8 @@ def _giveIntervalsN(detection):
 def GiveIntervals(detection, /):
     return _giveIntervalsN(detection)
 
-@nb.njit("b1[:, :](b1[:, :], i8, i8)")
+
+@nb.njit("b1[:, :](b1[:, :], i8, i8)", cache=True)
 def _removeGaps(detection, max_gap, min_width):
     M, Nt = detection.shape
     filtered = np.full_like(detection, False)
@@ -89,7 +90,7 @@ def RemoveGaps(detection, /, max_gap, min_width):
     return _removeGaps(detection, max_gap, min_width)
 
 
-@nb.njit("f8[:, :](b1[:], f8[:])")
+@nb.njit("f8[:, :](b1[:], f8[:])", cache=True)
 def _giveTimeIntervals(detection, time):
     """
         Extracts time intervals of `True` values from boolean array.
@@ -128,7 +129,7 @@ def _giveTimeIntervals(detection, time):
 
 
 @nb.njit(["f8[:, :](f8[:, :], f8, f8)",
-          "i8[:, :](i8[:, :], i8, i8)"])
+          "i8[:, :](i8[:, :], i8, i8)"], cache=True)
 def _filterIntervals(intervals, max_gap, min_width):
     """
         Filters intervals by combining close intervals with gap <= `max_gap` and removing short intervals < `min_width`.
@@ -162,7 +163,7 @@ def _filterIntervals(intervals, max_gap, min_width):
     return filtered
 
 
-@nb.njit("List(f8[:, :])(b1[:, :], f8[:], f8, f8)")
+@nb.njit("List(f8[:, :])(b1[:, :], f8[:], f8, f8)", cache=True)
 def _filterTimeIntervalsN(detection, time, max_gap, min_width):
     intervals = []
     for di in detection:
@@ -170,7 +171,7 @@ def _filterTimeIntervalsN(detection, time, max_gap, min_width):
     return intervals
 
 
-@nb.njit("List(i8[:, :])(b1[:, :], i8, i8)")
+@nb.njit("List(i8[:, :])(b1[:, :], i8, i8)", cache=True)
 def _filterIntervalsN(detection, max_gap, min_width):
     intervals = []
     for di in detection:
@@ -199,7 +200,7 @@ def FilterIntervals(detection, max_gap, min_width, time=None):
     return filtered
 
 
-@nb.njit("b1[:](f8[:, :], i8, f8)")
+@nb.njit("b1[:](f8[:, :], i8, f8)", cache=True)
 def _projectIntervals(intervals, N, dt):
     """
         Projects `True` values onto time axis with sampling `dt` and length `N`.
@@ -219,7 +220,7 @@ def _projectIntervals(intervals, N, dt):
     return b
 
 
-@nb.njit("b1[:, :](b1[:, :], f8[:], f8, f8, f8[:])", parallel=True)
+@nb.njit("b1[:, :](b1[:, :], f8[:], f8, f8, f8[:])", parallel=True, cache=True)
 def _projectFilterIntervalsN(detection, time, max_gap, min_width, new_time):
     """
         Filters boolean array `detection` by combining close `True` intervals with gap <= `max_gap`
