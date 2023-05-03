@@ -5,4 +5,4 @@ from .clustering import *
 from .projection import *
 from .utils import *
 from .plottingutils import *
-from .stalta import *
+from .association import *
