@@ -1,6 +1,9 @@
 import numpy as np
 import numba as nb
 from functools import wraps
+from pydantic import BaseModel, Extra
+from typing import Union, Dict
+from timeit import default_timer
 
 
 #  Generic decorator for formatting inputs & outputs of function when N-dimensional array
@@ -8,6 +11,7 @@ from functools import wraps
 def _ReshapeInputs(inputs, dim, input_num, methodfunc):
     mf = methodfunc * 1
     d = dim - 1
+    input_num = input_num if input_num >= 0 else len(inputs)
     new_args = [inputs[0]] if mf else []
     preshapes = []
     for i, X in enumerate(inputs[mf: input_num + mf]):
@@ -45,7 +49,7 @@ def _ReshapeOutputs(outputs, dim, output_num, methodfunc, first_shape, preshapes
 def ReshapeArraysDecorator(dim : int, input_num : int = 1, methodfunc : bool = False,
                            output_num : int = 1, first_shape : bool = True):
     """
-        Decorator for reshaping input and output arrays (positional arguments only) to a predefined number
+        Decorator for reshaping input **positional arguments only** and output arrays to a predefined number
         of dimensions `dim`. The last axis is always main axis over which all the computations are performed.
 
         Arguments:
@@ -64,6 +68,28 @@ def ReshapeArraysDecorator(dim : int, input_num : int = 1, methodfunc : bool = F
             return Z
         return wrapper
     return decorator
+
+
+class StatusMessenger(BaseModel, extra=Extra.allow):
+    verbose: bool
+    operation: str
+
+    def __enter__(self):
+        self.status = '...'
+        self.t0 = default_timer()
+        if self.verbose:
+            print(f"{self.operation}\t{self.status}", end='\t')
+        else:
+            pass
+
+    def __exit__(self, type, value, traceback):
+        self.dt = float('%.3g' % (default_timer() - self.t0))
+        self.status = f'Completed in {self.dt} sec'
+
+        if self.verbose:
+            print(self.status)
+        else:
+            pass
 
 
 @nb.njit("i8[:, :](i8, i8)", cache=True)
@@ -90,3 +116,70 @@ def _scalarORarray_to_tuple(d, minsize):
         d = tuple(int(di) for di in d)
     return d
 
+
+def format_index_by_dims(ind, reference_shape):
+    ind = tuple(ind) if isinstance(ind, (tuple, list)) else (ind,)
+    assert len(ind) == len(reference_shape) - 1, f"Index must correspond to data dimension shape {reference_shape}"
+    return ind
+
+
+def format_interval_by_limits(interval, limits):
+    if isinstance(interval, tuple):
+        t1 = limits[0] if (y := interval[0]) is None else y
+        t2 = limits[1] if (y := interval[1]) is None else y
+    elif interval is None:
+        t1, t2 = limits
+    else:
+        t1, t2 = interval
+    interval = tuple(np.clip((t1, t2), *limits))
+    return interval
+
+
+def give_index_slice_by_limits(interval, dt):
+    t1, t2 = interval
+
+    ind_slice = slice(round(t1 / dt), round(t2 / dt) + 1)
+    return ind_slice
+
+
+def cast_to_bool_dict(dictionary: Union[bool, Dict[str, bool]],
+                      reference_keys: Union[list, tuple, set]):
+    if isinstance(dictionary, bool):
+        dictionary = {kw: dictionary for kw in reference_keys}
+    else:
+        for kw in reference_keys:
+            dictionary.setdefault(kw, False)
+
+    return dictionary
+
+
+def del_vals_by_keys(dict_vals: dict,
+                     dict_cond: Dict[str, bool],
+                     keys: Union[list, tuple]):
+    for kw in keys:
+        if not dict_cond[kw]:
+            del dict_vals[kw]
+
+
+def aggregate_array_by_axis_and_func(array, axis, func, min_last_dims):
+    if axis is not None:
+        max_axis = axis if isinstance(axis, int) else max(axis)
+        assert max_axis < array.ndim - min_last_dims
+        array = func(array, axis=axis, keepdims=True)
+    return array
+
+
+@nb.njit("List(UniTuple(f8, 4))(i8[:, :], f8[:], f8, f8)")
+def _give_rectangles(events, time, yloc, dy):
+    rectangles = []
+    for e1, e2 in events:
+        rectangles.append((time[e1], yloc - dy, time[e2], yloc + dy))
+    return rectangles
+
+
+def give_rectangles(events, time, yloc, dy):
+    rectangles = []
+    for i, (trace, yi) in enumerate(zip(events, yloc)):
+        if len(trace) > 0:
+            rectangles += _give_rectangles(trace, time, yi, dy)
+    return rectangles

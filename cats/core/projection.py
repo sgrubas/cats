@@ -11,6 +11,8 @@ from .utils import ReshapeArraysDecorator
 #####################  TIME PROJECTION AND FIILTERING  #####################
 ############################################################################
 
+# TODO:
+#  - RemoveGaps may not work correctly
 
 @nb.njit("i8[:, :](b1[:])", cache=True)
 def _giveIntervals(detection):
@@ -62,19 +64,21 @@ def GiveIntervals(detection, /):
 
 
 @nb.njit("b1[:, :](b1[:, :], i8, i8)", cache=True)
-def _removeGaps(detection, max_gap, min_width):
+def _removeGaps(detection, min_separation, min_width):
     M, Nt = detection.shape
     filtered = np.full_like(detection, False)
     for i in nb.prange(M):
         intervals = _giveIntervals(detection[i])
         n = len(intervals)
-        if (max_gap > 0) and (n > 0):
+        if (min_separation > 0) and (n > 0):
             buffer = [(intervals[0, 0], intervals[0, 1])]
             for j in range(1, n):
                 intv_new = intervals[j]
                 intv_old = buffer[-1]
-                if ((intv_new[0] - intv_old[1] - 1) <= max_gap) and (((intv_new[1] - intv_new[0] + 1) < min_width) or
-                                                                     ((intv_old[1] - intv_old[0] + 1) < min_width)):
+                if ((intv_new[0] - intv_old[1] - 1) <= min_separation) and \
+                   (((intv_new[1] - intv_new[0] + 1) < min_width) or
+                    ((intv_old[1] - intv_old[0] + 1) < min_width)):
+
                     buffer[-1] = (intv_old[0], intv_new[1])
                 else:
                     buffer.append((intv_new[0], intv_new[1]))
@@ -82,12 +86,41 @@ def _removeGaps(detection, max_gap, min_width):
         else:
             buffer = intervals
         for j1, j2 in buffer:
-            filtered[i, j1 : j2 + 1] = True
+            filtered[i, j1: j2 + 1] = True
     return filtered
 
+
 @ReshapeArraysDecorator(dim=2)
-def RemoveGaps(detection, /, max_gap, min_width):
-    return _removeGaps(detection, max_gap, min_width)
+def RemoveGaps(detection, /, min_separation, min_width):
+    return _removeGaps(detection, min_separation, min_width)
+
+
+@nb.njit(["b1[:](i8[:])", "b1[:](i4[:])", "b1[:](u2[:])"])
+def _fill_gaps(labeled_sequence):
+    binary_sequence = np.full_like(labeled_sequence, False, dtype=np.bool_)
+    K = labeled_sequence.max()
+    for k in range(1, K + 1):
+        ids = np.argwhere(labeled_sequence == k)
+        if len(ids) > 0:
+            i1, i2 = np.min(ids), np.max(ids)
+            binary_sequence[i1: i2 + 1] = True
+    return binary_sequence
+
+
+@nb.njit(["b1[:, :](i8[:, :])",
+          "b1[:, :](i4[:, :])",
+          "b1[:, :](u2[:, :])"], parallel=True)
+def _fill_gaps_nd(labeled_sequences):
+    M, N = labeled_sequences.shape
+    binary_sequences = np.empty((M, N), dtype=np.bool_)
+    for i in nb.prange(M):
+        binary_sequences[i] = _fill_gaps(labeled_sequences[i])
+    return binary_sequences
+
+
+@ReshapeArraysDecorator(dim=2, input_num=1, output_num=1)
+def FillGaps(labeled_sequences):
+    return _fill_gaps_nd(labeled_sequences)
 
 
 @nb.njit("f8[:, :](b1[:], f8[:])", cache=True)

@@ -42,42 +42,46 @@ class STFTOperator:
                             win_exp = integer (Inverse STFT). Default `1`
 
         """
-        self.dt         =   dt
-        self.window     =   self.define_stft_window(window)
-        self.nperseg    =   len(self.window)
-        self.overlap    =   overlap 
-        self.noverlap   =   int(self.overlap * self.nperseg)
-        self.hop        =   (self.nperseg - self.noverlap)
-        self.fs         =   1 / dt
-        self.nfft       =   self.nperseg if (nfft is None) else nfft
+        self.dt = dt
+        self.window = self.define_stft_window(window)
+        self.nperseg = len(self.window)
+        self.overlap = overlap
+        self.noverlap = int(self.overlap * self.nperseg)
+        self.hop = (self.nperseg - self.noverlap)
+        self.fs = 1 / dt
+        self.nfft = self.nperseg if (nfft is None) else nfft
         if self.nfft < 0:
-            self.nfft   =   2**int(np.ceil(np.log2(self.nperseg)))
+            self.nfft = 2**int(np.ceil(np.log2(self.nperseg)))
         else:
-            self.nfft   =   max(self.nfft, self.nperseg)
-        self.nfft       =   self.nfft + self.nfft % 2
-        self.padtype    =   padtype
-        self.padedge    =   self.nperseg // 2 
-        self.f          =   np.linspace(0, 0.5 * self.fs, self.nfft // 2 + 1)
-        self.df         =   self.f[1] - self.f[0]
+            self.nfft = max(self.nfft, self.nperseg)
+        self.nfft = self.nfft + self.nfft % 2
+        self.padtype = padtype
+        self.padedge = self.nperseg // 2
+        self.f = np.linspace(0, 0.5 * self.fs, self.nfft // 2 + 1)
+        self.df = self.f[1] - self.f[0]
 
         # STFT Transform settings
-        self._backends  =   ['scipy', 'ssqueezepy', 'ssqueezepy_gpu']
+        self._backends = ['scipy', 'ssqueezepy', 'ssqueezepy_gpu']
         if backend not in self._backends:
             KeyError(f"Unknown `backend` = `{backend}`, must be one of {self._backends}")
-        self.backend    =   backend
-        self.kwargs     =   kwargs
+        self.backend = backend
+        self.kwargs = kwargs
         self._set_STFT_kwargs(kwargs)
 
     def define_stft_window(self, window):
-        if isinstance(window, (int, float)):
-            window = np.ones(int(window / self.dt))
+        if isinstance(window, tuple):
+            wtype, length = window
+        elif isinstance(window, (int, float)):
+            wtype, length = 'ones', window
         elif isinstance(window, np.ndarray):
-            window = window
-        elif isinstance(window, tuple):
-            assert (len(window) == 2) and isinstance(window[1], (int, float))
-            sec_perseg = window[1]
-            n_perseg   = int(sec_perseg / self.dt)
-            window = signal.get_window(window[0], n_perseg)
+            return window
+        else:
+            raise ValueError(f"Unknown type of window {type(window)}")
+        nperseg = round(length / self.dt) + 1
+        if ('one' in wtype) or (len(wtype) == 0) or (wtype is None):
+            window = np.ones(nperseg)
+        else:
+            window = signal.get_window(wtype, nperseg)
         return window
 
     def _set_STFT_kwargs(self, kwargs):

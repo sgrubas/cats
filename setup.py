@@ -23,11 +23,11 @@ INSTALL_REQUIRES = [
                     'numpy',
                     'numba',
                     'scipy',
+                    'pydantic',
                     'ssqueezepy',
                     'matplotlib',
                     'holoviews',
-                    'xarray',
-                    'colorednoise'
+                    'networkx',
                     ]
 with open("README.md", "r") as f:
     LONG_DESCRIPTION = f.read()
