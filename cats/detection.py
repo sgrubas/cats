@@ -53,8 +53,9 @@ class CATSDetector(CATSBaseSTFT):
             result['likelihood'] = result['SNRK'].sum(axis=-2) / counts
 
             # Detection projection
-            if full_info['detection']:
-                result['detection'] = FillGaps(result['K'].max(axis=-2))
+            # if full_info['detection']:
+
+            result['detection'] = FillGaps(result['K'].max(axis=-2))
 
         del counts
         del_vals_by_keys(result, full_info, ['SNRK', 'K'])
