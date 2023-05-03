@@ -70,7 +70,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         self.psd_noise_std = None
 
     def set_noise_model(self, *noisy_pieces):
-        psd_noise_models = np.concatenate([np.square(self.STFT * xi) for xi in noisy_pieces], axis=-1)
+        psd_noise_models = np.concatenate([np.abs(self.STFT * xi)**2 for xi in noisy_pieces], axis=-1)
         self.psd_noise_mean = psd_noise_models.mean(axis=-1, keepdims=True)
         self.psd_noise_std = psd_noise_models.std(axis=-1, keepdims=True)
         del psd_noise_models
@@ -93,7 +93,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 
         with StatusMessenger(verbose=verbose, operation='1. STFT'):
             result['X'] = self.STFT * x
-            result['PSD'] = np.square(np.abs(result['X']))
+            result['PSD'] = np.abs(result['X'])**2
 
         del_vals_by_keys(result, full_info, ['X'])
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
