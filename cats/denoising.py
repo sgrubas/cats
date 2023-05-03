@@ -32,10 +32,13 @@ class CATSDenoiser(CATSBaseSTFT):
                   "stft_frequency": self.stft_frequency, "stationary_intervals": stft_time[frames]}
         return CATSDenoisingResult(**kwargs)
 
+    def __mul__(self, x):
+        return self.denoise(x)
+
 
 class CATSDenoisingResult(CATSResult):
 
-    def plot(self, ind, time_interval_sec=(None, None)):
+    def plot(self, ind, time_interval_sec=None):
         fig, opts, inds_slices = super().plot(ind, time_interval_sec)
 
         t_dim = hv.Dimension('Time', unit='s')
