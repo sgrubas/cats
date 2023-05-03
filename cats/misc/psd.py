@@ -93,7 +93,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 
         with StatusMessenger(verbose=verbose, operation='1. STFT'):
             result['X'] = self.STFT * x
-            result['PSD'] = np.square(result['X'])
+            result['PSD'] = np.square(np.abs(result['X']))
 
         del_vals_by_keys(result, full_info, ['X'])
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
