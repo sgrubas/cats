@@ -213,7 +213,7 @@ def MatchSequences(*sequences, max_dist, aggregate='mean', metric_order=1, metho
 
 
 @ReshapeArraysDecorator(dim=2, input_num=-1, output_num=1)
-def PickWithFeatures(likelihood, /, *features, time, min_likelihood, min_width_sec, num_features, **kwargs):
+def PickFeatures(likelihood, /, *features, time, min_likelihood, min_width_sec, num_features, **kwargs):
     num_features = num_features or 2 + len(features)
     dt = time[1] - time[0]
     min_width = int(min_width_sec / dt)
@@ -268,12 +268,8 @@ def PickAssociateBySpectrogram(spectrogram, location, /, time, frequency, min_he
     likelihood = spectrogram.sum(axis=-2) / counts
     peak_freqs = frequency[np.argmax(spectrogram, axis=-2)]
 
-    features = PickWithFeatures(likelihood, peak_freqs,
-                                time=time,
-                                min_likelihood=min_height,
-                                min_width_sec=min_width_sec,
-                                feature_num=feature_num,
-                                **pick_kwargs)
+    features = PickFeatures(likelihood, peak_freqs, time=time, min_likelihood=min_height, min_width_sec=min_width_sec,
+                            feature_num=feature_num, **pick_kwargs)
 
     associated_features = Associate(features,
                                     location_order=location,
