@@ -11,8 +11,8 @@ import numba as nb
 from cats.core.utils import ReshapeArraysDecorator, give_rectangles
 from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.projection import RemoveGaps, GiveIntervals
-from cats.core.association import PickWithFeatures
-from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusMessenger
+from cats.core.association import PickFeatures
+from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
 
 
 ###### BACKENDS ######
@@ -106,44 +106,51 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         self.ch_func = self.ch_functions[self.characteristic]
 
     def detect(self, x, verbose=True, full_info=False):
-        result = {"likelihood": None, "detection": None}
+        result = {"likelihood": None, "detection": None, "picked_features": None}
 
         full_info = cast_to_bool_dict(full_info, list(result.keys()))
+        full_info['detection'] = True
+
+        History = StatusKeeper(verbose=verbose)
 
         time = np.arange(x.shape[-1]) * self.dt_sec
 
-        with StatusMessenger(verbose=verbose, operation='1. STA/LTA'):
+        with History(current_process='STA/LTA'):
             result['likelihood'] = STA_LTA(self.ch_func(x), self.long_window_len, self.short_window_len,
                                            self.step_len, self.windows_overlap_len, self.padmode)
 
-        with StatusMessenger(verbose=verbose, operation='2. Thresholding'):
+        with History(current_process='Thresholding'):
             result['likelihood'] = aggregate_array_by_axis_and_func(result['likelihood'],
                                                                     self.aggregate_axis_for_likelihood,
                                                                     self.aggregate_func_for_likelihood,
                                                                     min_last_dims=1)
 
-            result['detection'] = RemoveGaps(result['likelihood'] > self.threshold, self.min_separation_len,
+            result['detection'] = RemoveGaps(result['likelihood'] > self.threshold,
+                                             self.min_separation_len,
                                              self.min_duration_len)
 
         del_vals_by_keys(result, full_info, ['detection'])
 
+        stalta_time = np.arange(result['likelihood'].shape[-1]) * self.step_sec
+
         # Picking
-        with StatusMessenger(verbose=verbose, operation='3. Picking onsets'):
-            stalta_time = np.arange(result['likelihood'].shape[-1]) * self.step_sec
-            result['picked_features'] = PickWithFeatures(result['likelihood'],
+        if full_info['picked_features']:
+            with History(current_process='Picking'):
+                result['picked_features'] = PickFeatures(result['likelihood'],
                                                          time=stalta_time,
                                                          min_likelihood=self.threshold,
                                                          min_width_sec=self.min_duration_sec,
                                                          num_features=None)
         del_vals_by_keys(result, full_info, ['likelihood'])
 
-        return STALTAResult(x,
-                            result.get('likelihood', None),
-                            result.get('detection', None),
-                            result.get('picked_features', None),
-                            self.threshold,
-                            time,
-                            stalta_time)
+        return STALTAResult(signal=x,
+                            stalta=result.get('likelihood', None),
+                            detection=result.get('detection', None),
+                            picked_features=result.get('picked_features', None),
+                            threshold=self.threshold,
+                            time=time,
+                            stalta_time=stalta_time,
+                            history=History)
 
     def __mul__(self, x):
         return self.detect(x, verbose=False, full_info=False)
@@ -153,7 +160,7 @@ class STALTADetector(BaseModel, extra=Extra.allow):
 
 
 class STALTAResult:
-    def __init__(self, signal, stalta, detection, picked_features, threshold, time, stalta_time):
+    def __init__(self, signal, stalta, detection, picked_features, threshold, time, stalta_time, history):
         self.signal = signal
         self.stalta = stalta
         self.detection = detection
@@ -161,6 +168,7 @@ class STALTAResult:
         self.threshold = threshold
         self.time = time
         self.stalta_time = stalta_time
+        self.history = history
 
     def plot(self, ind, time_interval_sec=(None, None)):
         t_dim = hv.Dimension('Time', unit='s')

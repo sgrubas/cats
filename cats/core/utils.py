@@ -79,17 +79,35 @@ class StatusMessenger(BaseModel, extra=Extra.allow):
         self.t0 = default_timer()
         if self.verbose:
             print(f"{self.operation}\t{self.status}", end='\t')
-        else:
-            pass
 
-    def __exit__(self, type, value, traceback):
+    def __exit__(self, *args):
         self.dt = float('%.3g' % (default_timer() - self.t0))
         self.status = f'Completed in {self.dt} sec'
 
         if self.verbose:
             print(self.status)
-        else:
-            pass
+
+
+class StatusKeeper(BaseModel, extra=Extra.allow):
+    verbose: bool
+    current_process: str = None
+    wait_status: str = '...'
+    history: Dict[str, float] = {}
+
+    def __call__(self, current_process):
+        self.current_process = current_process
+        return self
+
+    def __enter__(self):
+        self.history[self.current_process] = default_timer()
+        if self.verbose:
+            print(f"{len(self.history)}. {self.current_process}\t{self.wait_status}", end='\t')
+
+    def __exit__(self, *args):
+        self.history[self.current_process] = dt = default_timer() - self.history[self.current_process]
+
+        if self.verbose:
+            print(f"Completed in {float('%.3g' % dt)} sec")
 
 
 @nb.njit("i8[:, :](i8, i8)", cache=True)

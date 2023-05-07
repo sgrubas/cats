@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, Extra
 from .core.timefrequency import STFTOperator
 from .core.clustering import Clustering
 from .core.date import BEDATE, EtaToSigma, MIN_DATE_BLOCK_SIZE
-from .core.utils import get_interval_division, format_index_by_dims, StatusMessenger, cast_to_bool_dict
+from .core.utils import get_interval_division, format_index_by_dims, cast_to_bool_dict, StatusKeeper
 from .core.utils import format_interval_by_limits, give_index_slice_by_limits, del_vals_by_keys
 from .core.thresholding import ThresholdingSNR
 
@@ -163,81 +163,88 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
     def _apply(self, x, /, finish_on='clustering', verbose=True, full_info=True):
 
-        result = {"X": None, "PSD": None, "Eta": None, "Sgm": None,
-                  "SNR": None, "SNRK": None, "K": None}
+        result = {"coefficients": None, "spectrogram": None, "noise_threshold": None, "noise_std": None,
+                  "spectrogram_SNR_trimmed": None, "spectrogram_SNR_clustered": None, "spectrogram_cluster_ID": None}
 
         full_info = cast_to_bool_dict(full_info, list(result.keys()))
 
-        # STFT
-        with StatusMessenger(verbose=verbose, operation='1. STFT'):
-            result['X'] = self.STFT * x
-            result['PSD'] = np.abs(result['X'])
+        History = StatusKeeper(verbose=verbose)
 
-        del_vals_by_keys(result, full_info, ['X'])
+        # STFT
+        with History(current_process='STFT'):
+            result['coefficients'] = self.STFT * x
+            result['spectrogram'] = np.abs(result['coefficients'])
+
+        del_vals_by_keys(result, full_info, ['coefficients'])
 
         if 'stft' in finish_on.casefold():
-            return result
+            return result, History
 
         # bandpass
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
 
         # B-E-DATE
-        with StatusMessenger(verbose=verbose, operation='2. B-E-DATE'):
-            frames = get_interval_division(N=result['PSD'].shape[-1], L=self.stationary_frame_len)
+        with History(current_process='B-E-DATE'):
+            frames = get_interval_division(N=result['spectrogram'].shape[-1], L=self.stationary_frame_len)
             zero_Nyq_freqs = (self.freq_bandpass_len[0] == 0,
                               len(self.stft_frequency) == self.freq_bandpass_len[1])
-            result['Eta'] = np.zeros(result['PSD'].shape[:-1] + (len(frames),))
-            result['Eta'][bandpass_slice] = BEDATE(result['PSD'][bandpass_slice],
+            result['noise_threshold'] = np.zeros(result['spectrogram'].shape[:-1] + (len(frames),))
+            result['noise_threshold'][bandpass_slice] = BEDATE(result['spectrogram'][bandpass_slice],
                                                    frames=frames,
                                                    minSNR=self.minSNR,
                                                    Q=self.date_Q,
                                                    original_mode=not self.date_detection_mode,
                                                    zero_Nyq_freqs=zero_Nyq_freqs)
-            result['Sgm'] = EtaToSigma(result['Eta'], self.minSNR)
+            result['noise_std'] = EtaToSigma(result['noise_threshold'], self.minSNR)
 
             # Thresholding
-            result['SNR'] = np.zeros_like(result['PSD'])
-            result['SNR'][bandpass_slice] = ThresholdingSNR(result['PSD'][bandpass_slice],
-                                                            result['Sgm'][bandpass_slice],
-                                                            result['Eta'][bandpass_slice],
-                                                            frames)
+            result['spectrogram_SNR_trimmed'] = np.zeros_like(result['spectrogram'])
+            result['spectrogram_SNR_trimmed'][bandpass_slice] = \
+                ThresholdingSNR(result['spectrogram'][bandpass_slice],
+                                result['noise_std'][bandpass_slice],
+                                result['noise_threshold'][bandpass_slice],
+                                frames)
 
             if self.edge_cut > 0:
-                result['SNR'][..., :self.edge_cut] = 0.0
-                result['SNR'][..., -self.edge_cut - 1:] = 0.0
+                result['spectrogram_SNR_trimmed'][..., :self.edge_cut] = 0.0
+                result['spectrogram_SNR_trimmed'][..., -self.edge_cut - 1:] = 0.0
 
-        del_vals_by_keys(result, full_info, ['PSD', 'Eta', 'Sgm'])
+        del_vals_by_keys(result, full_info, ['spectrogram', 'noise_threshold', 'noise_std'])
 
         if 'date' in finish_on.casefold():
-            return result
+            return result, History
 
         # Clustering
-        with StatusMessenger(verbose=verbose, operation='3. Clustering'):
+        with History(current_process='Clustering'):
             mc = self.clustering_multitrace
             q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
             s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
-            result['SNRK'] = np.zeros_like(result['SNR'])
-            result['K'] = np.zeros(result['SNR'].shape, dtype=np.uint16)
-            result['SNRK'][bandpass_slice], result['K'][bandpass_slice] = Clustering(result['SNR'][bandpass_slice],
-                                                                                     q=q, s=s, minSNR=self.minSNR)
 
-        del_vals_by_keys(result, full_info, ['SNR', 'SNRK', 'K'])
+            result['spectrogram_SNR_clustered'] = np.zeros_like(result['spectrogram_SNR_trimmed'])
+            result['spectrogram_cluster_ID'] = np.zeros(result['spectrogram_SNR_trimmed'].shape, dtype=np.uint16)
 
-        return result
+            result['spectrogram_SNR_clustered'][bandpass_slice], result['spectrogram_cluster_ID'][bandpass_slice] = \
+                Clustering(result['spectrogram_SNR_trimmed'][bandpass_slice], q=q, s=s, minSNR=self.minSNR)
+
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed',
+                                             'spectrogram_SNR_clustered',
+                                             'spectrogram_cluster_ID'])
+
+        return result, History
 
 
 class CATSResult:
-    def __init__(self, signal, coefficients, spectrogram, noise_thresholding, noise_std, spectrogramSNR_trimmed,
-                 spectrogramSNR_clustered, spectrogramID_cluster, likelihood, picked_features,
-                 time, stft_time, stft_frequency, stationary_intervals, minSNR, **kwargs):
+    def __init__(self, signal, coefficients, spectrogram, noise_threshold, noise_std, spectrogram_SNR_trimmed,
+                 spectrogram_SNR_clustered, spectrogram_cluster_ID, likelihood, picked_features,
+                 time, stft_time, stft_frequency, stationary_intervals, minSNR, history, **kwargs):
         self.signal = signal
         self.coefficients = coefficients
         self.spectrogram = spectrogram
-        self.noise_thresholding = noise_thresholding
+        self.noise_threshold = noise_threshold
         self.noise_std = noise_std
-        self.spectrogramSNR_trimmed = spectrogramSNR_trimmed
-        self.spectrogramSNR_clustered = spectrogramSNR_clustered
-        self.spectrogramID_cluster = spectrogramID_cluster
+        self.spectrogram_SNR_trimmed = spectrogram_SNR_trimmed
+        self.spectrogram_SNR_clustered = spectrogram_SNR_clustered
+        self.spectrogram_cluster_ID = spectrogram_cluster_ID
         self.likelihood = likelihood
         self.picked_features = picked_features
         self.time = time
@@ -245,6 +252,7 @@ class CATSResult:
         self.stft_frequency = stft_frequency
         self.stationary_intervals = stationary_intervals
         self.minSNR = minSNR
+        self.history = history
 
         for kw, v in kwargs.items():
             self.__setattr__(kw, v)
@@ -256,22 +264,22 @@ class CATSResult:
 
         ind = format_index_by_dims(ind, self.signal.shape)
         time_interval_sec = format_interval_by_limits(time_interval_sec, (self.time[0], self.time[-1]))
-        i_t = give_index_slice_by_limits(time_interval_sec, self.time[1] - self.time[0])
-        i_st = give_index_slice_by_limits(time_interval_sec, self.stft_time[1] - self.stft_time[0])
-        inds_t = ind + (i_t,)
-        inds_St = ind + (slice(None), i_st)
+        i_time = give_index_slice_by_limits(time_interval_sec, self.time[1] - self.time[0])
+        i_stft = give_index_slice_by_limits(time_interval_sec, self.stft_time[1] - self.stft_time[0])
+        inds_time = ind + (i_time,)
+        inds_stft = ind + (slice(None), i_stft)
 
-        PSD = self.spectrogram[inds_St]
-        B = PSD * (self.spectrogramSNR_trimmed[inds_St] > 0)
-        C = PSD * (self.spectrogramSNR_clustered[inds_St] > 0)
+        PSD = self.spectrogram[inds_stft]
+        B = PSD * (self.spectrogram_SNR_trimmed[inds_stft] > 0)
+        C = PSD * (self.spectrogram_SNR_clustered[inds_stft] > 0)
 
-        fig0 = hv.Curve((self.time[i_t], self.signal[inds_t]), kdims=[t_dim], vdims=A_dim,
+        fig0 = hv.Curve((self.time[i_time], self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
                         label='0. Input data: $x_n$').opts(xlabel='', linewidth=0.2)
-        fig1 = hv.Image((self.stft_time[i_st], self.stft_frequency, PSD), kdims=[t_dim, f_dim],
+        fig1 = hv.Image((self.stft_time[i_stft], self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Spectrogram: $|X_{k,m}|$')
-        fig2 = hv.Image((self.stft_time[i_st], self.stft_frequency, B), kdims=[t_dim, f_dim],
+        fig2 = hv.Image((self.stft_time[i_stft], self.stft_frequency, B), kdims=[t_dim, f_dim],
                         label='2. Trimming by B-E-DATE: $B_{k,m} \cdot |X_{k,m}|$')
-        fig3 = hv.Image((self.stft_time[i_st], self.stft_frequency, C), kdims=[t_dim, f_dim],
+        fig3 = hv.Image((self.stft_time[i_stft], self.stft_frequency, C), kdims=[t_dim, f_dim],
                         label='3. Clustering: $C_{k,m} \cdot |X_{k,m}|$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
@@ -288,6 +296,6 @@ class CATSResult:
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      aspect_weight=0, sublabel_format='')
-        inds_slices = (ind, i_t, i_st)
+        inds_slices = (ind, i_time, i_stft)
         figs = (fig0 + fig1 + fig2 + fig3)
         return figs, (layout_opts, spectr_opts, curve_opts), inds_slices

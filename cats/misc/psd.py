@@ -9,9 +9,9 @@ import numpy as np
 import holoviews as hv
 from cats.core.projection import RemoveGaps, GiveIntervals
 from cats.core.timefrequency import STFTOperator
-from cats.core.association import PickWithFeatures
+from cats.core.association import PickFeatures
 from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
-from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusMessenger
+from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
 from cats.core.utils import give_rectangles
 
 
@@ -83,44 +83,52 @@ class PSDDetector(BaseModel, extra=Extra.allow):
     def detect(self, x, verbose=True, full_info=False):
         assert self.psd_noise_mean is not None, f"Noise model must be set priorly, use `.set_noise_model(...)`"
 
-        result = {"X": None, "PSD": None, "SNR": None,
-                  "likelihood": None, "detection": None}
+        result = {"coefficients": None, "spectrogram": None, "spectrogram_SNR_trimmed": None,
+                  "likelihood": None, "detection": None, "picked_features": None}
+
+        History = StatusKeeper(verbose=verbose)
 
         full_info = cast_to_bool_dict(full_info, list(result.keys()))
+        result['detection'] = True
 
         time = np.arange(x.shape[-1]) * self.dt_sec
         stft_time = self.STFT.forward_time_axis(len(time))
 
-        with StatusMessenger(verbose=verbose, operation='1. STFT'):
-            result['X'] = self.STFT * x
-            result['PSD'] = np.abs(result['X'])**2
+        with History(current_process='STFT'):
+            result['coefficients'] = self.STFT * x
+            result['spectrogram'] = np.abs(result['coefficients'])**2
 
-        del_vals_by_keys(result, full_info, ['X'])
+        del_vals_by_keys(result, full_info, ['coefficients'])
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
 
-        with StatusMessenger(verbose=verbose, operation='2. Thresholding'):
-            result['SNR'] = np.zeros_like(result['PSD'])
-            result['SNR'][bandpass_slice] = result['PSD'][bandpass_slice] - self.psd_noise_mean[bandpass_slice]
-            result['SNR'][bandpass_slice] /= self.psd_noise_std[bandpass_slice] + 1e-16
-            del_vals_by_keys(result, full_info, ['PSD'])
-            result['SNR'] = np.where(result['SNR'] >= 1.0, self.ch_func(result['SNR']), 0.0)
+        with History(current_process='Thresholding'):
+            result['spectrogram_SNR_trimmed'] = np.zeros_like(result['spectrogram'])
+            result['spectrogram_SNR_trimmed'][bandpass_slice] = \
+                result['spectrogram'][bandpass_slice] - self.psd_noise_mean[bandpass_slice]
+            result['spectrogram_SNR_trimmed'][bandpass_slice] /= self.psd_noise_std[bandpass_slice] + 1e-16
+            del_vals_by_keys(result, full_info, ['spectrogram'])
+            result['spectrogram_SNR_trimmed'] = \
+                np.where(result['spectrogram_SNR_trimmed'] >= 1.0,
+                         self.ch_func(result['spectrogram_SNR_trimmed']), 0.0)
 
-        with StatusMessenger(verbose=verbose, operation='3. Likelihood'):
-            result['SNR'] = aggregate_array_by_axis_and_func(result['SNR'],
-                                                             self.aggregate_axis_for_likelihood,
-                                                             self.aggregate_func_for_likelihood,
-                                                             min_last_dims=2)
+        with History(current_process='Likelihood'):
+            result['spectrogram_SNR_trimmed'] = \
+                aggregate_array_by_axis_and_func(result['spectrogram_SNR_trimmed'],
+                                                 self.aggregate_axis_for_likelihood,
+                                                 self.aggregate_func_for_likelihood,
+                                                 min_last_dims=2)
 
-            result['likelihood'] = result['SNR'].mean(axis=-2)
+            result['likelihood'] = result['spectrogram_SNR_trimmed'].mean(axis=-2)
             result['detection'] = RemoveGaps(result['likelihood'] > self.threshold,
                                              self.min_separation_len,
                                              self.min_duration_len)
 
-        del_vals_by_keys(result, full_info, ['SNR', 'detection'])
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed'])
 
         # Picking
-        with StatusMessenger(verbose=verbose, operation='4. Picking onsets'):
-            result['picked_features'] = PickWithFeatures(result['likelihood'],
+        if full_info['picked_features']:
+            with History(current_process='Picking'):
+                result['picked_features'] = PickFeatures(result['likelihood'],
                                                          time=stft_time,
                                                          min_likelihood=self.threshold,
                                                          min_width_sec=self.min_duration_sec,
@@ -129,9 +137,9 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         del_vals_by_keys(result, full_info, ['likelihood'])
 
         return PSDResult(signal=x,
-                         coefficients=result.get('X', None),
-                         spectrogram=result.get('PSD', None),
-                         spectrogramSNR_trimmed=result.get('SNR', None),
+                         coefficients=result.get('coefficients', None),
+                         spectrogram=result.get('spectrogram', None),
+                         spectrogram_SNR_trimmed=result.get('spectrogram_SNR_trimmed', None),
                          likelihood=result.get('likelihood', None),
                          detection=result.get('detection', None),
                          picked_features=result.get('picked_features', None),
@@ -140,7 +148,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                          time=time,
                          stft_time=stft_time,
                          stft_frequency=self.stft_frequency,
-                         threshold=self.threshold)
+                         threshold=self.threshold,
+                         history=History)
 
     def __mul__(self, x):
         return self.detect(x, verbose=False, full_info=False)
@@ -150,12 +159,12 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 
 
 class PSDResult:
-    def __init__(self, signal, coefficients, spectrogram, spectrogramSNR_trimmed, likelihood, detection,
-                 picked_features, noise_mean, noise_std, time, stft_time, stft_frequency, threshold):
+    def __init__(self, signal, coefficients, spectrogram, spectrogram_SNR_trimmed, likelihood, detection,
+                 picked_features, noise_mean, noise_std, time, stft_time, stft_frequency, threshold, history):
         self.signal = signal
         self.coefficients = coefficients
         self.spectrogram = spectrogram
-        self.spectrogramSNR_trimmed = spectrogramSNR_trimmed
+        self.spectrogram_SNR_trimmed = spectrogram_SNR_trimmed
         self.likelihood = likelihood
         self.detection = detection
         self.picked_features = picked_features
@@ -165,6 +174,7 @@ class PSDResult:
         self.stft_time = stft_time
         self.stft_frequency = stft_frequency
         self.threshold = threshold
+        self.history = history
 
     def plot(self, ind, time_interval_sec=None):
         t_dim = hv.Dimension('Time', unit='s')
@@ -182,7 +192,7 @@ class PSDResult:
         inds_St = ind + (slice(None), i_st)
 
         PSD = self.spectrogram[inds_St]
-        B = PSD * (self.spectrogramSNR_trimmed[inds_St] > 0)
+        B = PSD * (self.spectrogram_SNR_trimmed[inds_St] > 0)
 
         fig0 = hv.Curve((self.time[i_t], self.signal[inds_t]), kdims=[t_dim], vdims=A_dim,
                         label='0. Input data: $x_n$').opts(xlabel='', linewidth=0.2)
