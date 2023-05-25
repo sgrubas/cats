@@ -12,3 +12,4 @@ from .denoising import CATSDenoiser
 from .data import import_sample_data
 from .baseclass import MIN_DATE_BLOCK_SIZE
 from .misc import STALTADetector, PSDDetector
+from . import io
