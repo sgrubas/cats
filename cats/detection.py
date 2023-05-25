@@ -22,6 +22,7 @@ class CATSDetector(CATSBaseSTFT):
     """
     aggregate_axis_for_likelihood: Union[int, Tuple[int]] = None
     aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
+    pick_features: bool = False
 
     def detect(self, x, /, verbose=False, full_info=False):
         """
@@ -41,24 +42,25 @@ class CATSDetector(CATSBaseSTFT):
                             - "spectrogram_SNR_clustered" - clustered `spectrogram_SNR_trimmed`
                             - "spectrogram_cluster_ID" - cluster indexes on `spectrogram_SNR_clustered`
                             - "likelihood" - projected `spectrogram_SNR_clustered`
-                            - "picked_features - extracted peak values and their onset times of `likelihood`
+                            - "picked_features - extract peak values and their onset times of `likelihood`
         """
 
         full_info = cast_to_bool_dict(full_info,
                                       ["coefficients", "spectrogram", "noise_threshold", "noise_std",
                                        "spectrogram_SNR_trimmed", "spectrogram_SNR_clustered",
-                                       "spectrogram_cluster_ID", "likelihood", "picked_features"])
+                                       "spectrogram_cluster_ID", "likelihood"])
+        full_info["picked_features"] = self.pick_features
         save_clustered = full_info['spectrogram_SNR_clustered']
         save_cluster_ID = full_info['spectrogram_cluster_ID']
         full_info['spectrogram_SNR_clustered'] = True
         full_info['spectrogram_cluster_ID'] = True
 
-        result, History = super()._apply(x, finish_on='clustering', verbose=verbose, full_info=full_info)
+        result, history = super()._apply(x, finish_on='clustering', verbose=verbose, full_info=full_info)
 
         full_info['spectrogram_SNR_clustered'] = save_clustered
         full_info['spectrogram_cluster_ID'] = save_cluster_ID
 
-        with History(current_process='Likelihood'):
+        with history(current_process='Likelihood'):
             # Aggregation
             result['spectrogram_SNR_clustered'] = \
                 aggregate_array_by_axis_and_func(result['spectrogram_SNR_clustered'],
@@ -79,7 +81,7 @@ class CATSDetector(CATSBaseSTFT):
         # Picking
         # peak_freqs = self.stft_frequency[np.argmax(SNRK_aggr, axis=-2)]
         if full_info['picked_features']:
-            with History(current_process='Picking'):
+            with history(current_process='Picking'):
                 result['picked_features'] = PickFeatures(result['likelihood'],
                                                          time=stft_time,
                                                          min_likelihood=self.minSNR,
@@ -87,6 +89,8 @@ class CATSDetector(CATSBaseSTFT):
                                                          num_features=None)
 
         del_vals_by_keys(result, full_info, ['likelihood'])
+
+        history.print_total_time()
 
         time = np.arange(x.shape[-1]) * self.dt_sec
         frames = get_interval_division(N=len(stft_time), L=self.stationary_frame_len)
@@ -107,7 +111,7 @@ class CATSDetector(CATSBaseSTFT):
                   "stft_frequency": self.stft_frequency,
                   "stationary_intervals": stft_time[frames],
                   "minSNR": self.minSNR,
-                  "history": History}
+                  "history": history}
 
         return CATSDetectionResult(**kwargs)
 
@@ -130,23 +134,34 @@ class CATSDetectionResult(CATSResult):
 
         ref_kw_opts = opts[-1].kwargs
         t1, t2 = ref_kw_opts['xlim']
-        likelihood = self.likelihood[inds_stft]
+        likelihood = np.nan_to_num(self.likelihood[inds_stft],
+                                   posinf=10*self.minSNR,
+                                   neginf=-10*self.minSNR)  # POSSIBLE `NAN` AND `INF` VALUES!
         likelihood_fig = hv.Curve((self.stft_time[i_stft], likelihood),
                                   kdims=[t_dim], vdims=L_dim)
 
-        P = self.picked_features[ind]
-        P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
-        peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
-        peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
+        if self.picked_features is not None:
+            P = self.picked_features[ind]
+            P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
+            peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
+            peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
+        else:
+            peaks_fig = None
 
         intervals = GiveIntervals(self.detection[inds_stft])
         interv_height = (likelihood.max() / 2) * 1.1
         rectangles = give_rectangles(intervals, self.stft_time[i_stft], [interv_height], interv_height)
-        intervals_fig = hv.Rectangles(rectangles, kdims=[t_dim, L_dim, 't2', 'l2']).opts(color='blue',
-                                                                                         linewidth=0, alpha=0.1)
+        intervals_fig = hv.Rectangles(rectangles,
+                                      kdims=[t_dim, L_dim, 't2', 'l2']).opts(color='blue',
+                                                                             linewidth=0,
+                                                                             alpha=0.2)
         snr_level_fig = hv.HLine(self.minSNR, kdims=[t_dim, L_dim]).opts(color='k', linestyle='--', alpha=0.7)
 
-        fig4 = hv.Overlay([intervals_fig, snr_level_fig, likelihood_fig, peaks_fig],
+        last_figs = [intervals_fig, snr_level_fig, likelihood_fig]
+        if peaks_fig is not None:
+            last_figs.append(peaks_fig)
+
+        fig4 = hv.Overlay(last_figs,
                           label='4. Projection: $L_k$').opts(**ref_kw_opts)
 
         return (fig + fig4).opts(*opts).cols(1)
