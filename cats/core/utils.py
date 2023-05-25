@@ -90,9 +90,12 @@ class StatusMessenger(BaseModel, extra=Extra.allow):
 
 class StatusKeeper(BaseModel, extra=Extra.allow):
     verbose: bool
-    current_process: str = None
-    wait_status: str = '...'
-    history: Dict[str, float] = {}
+    wait_message: str = '...'
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.current_process = None
+        self.history = {'Total': 0.0}
 
     def __call__(self, current_process):
         self.current_process = current_process
@@ -101,13 +104,17 @@ class StatusKeeper(BaseModel, extra=Extra.allow):
     def __enter__(self):
         self.history[self.current_process] = default_timer()
         if self.verbose:
-            print(f"{len(self.history)}. {self.current_process}\t{self.wait_status}", end='\t')
+            print(f"{len(self.history) - 1}. {self.current_process}\t{self.wait_message}", end='\t')
 
     def __exit__(self, *args):
         self.history[self.current_process] = dt = default_timer() - self.history[self.current_process]
-
+        self.history['Total'] += dt
         if self.verbose:
             print(f"Completed in {float('%.3g' % dt)} sec")
+
+    def print_total_time(self):
+        if self.verbose:
+            print(f"Total elapsed time:\t{float('%.3g' % self.history['Total'])} sec\n")
 
 
 @nb.njit("i8[:, :](i8, i8)", cache=True)
