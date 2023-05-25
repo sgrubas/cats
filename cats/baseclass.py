@@ -148,7 +148,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.cluster_distance_f_len = max(round(self.cluster_distance_f_Hz / self.stft_df), 1)
         self.cluster_distance_trace_len = self.cluster_distance_trace
 
-        self.edge_cut = int(self.stft_window_len // 2 / self.stft_hop_len)
+        self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
     def reset_params(self, **params):
         """
@@ -168,23 +168,23 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         full_info = cast_to_bool_dict(full_info, list(result.keys()))
 
-        History = StatusKeeper(verbose=verbose)
+        history = StatusKeeper(verbose=verbose)
 
         # STFT
-        with History(current_process='STFT'):
+        with history(current_process='STFT'):
             result['coefficients'] = self.STFT * x
             result['spectrogram'] = np.abs(result['coefficients'])
 
         del_vals_by_keys(result, full_info, ['coefficients'])
 
         if 'stft' in finish_on.casefold():
-            return result, History
+            return result, history
 
         # bandpass
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
 
         # B-E-DATE
-        with History(current_process='B-E-DATE'):
+        with history(current_process='B-E-DATE'):
             frames = get_interval_division(N=result['spectrogram'].shape[-1], L=self.stationary_frame_len)
             zero_Nyq_freqs = (self.freq_bandpass_len[0] == 0,
                               len(self.stft_frequency) == self.freq_bandpass_len[1])
@@ -205,17 +205,17 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                 result['noise_threshold'][bandpass_slice],
                                 frames)
 
-            if self.edge_cut > 0:
-                result['spectrogram_SNR_trimmed'][..., :self.edge_cut] = 0.0
-                result['spectrogram_SNR_trimmed'][..., -self.edge_cut - 1:] = 0.0
+            if self.time_edge > 0:
+                result['spectrogram_SNR_trimmed'][..., :self.time_edge] = 0.0
+                result['spectrogram_SNR_trimmed'][..., -self.time_edge - 1:] = 0.0
 
         del_vals_by_keys(result, full_info, ['spectrogram', 'noise_threshold', 'noise_std'])
 
         if 'date' in finish_on.casefold():
-            return result, History
+            return result, history
 
         # Clustering
-        with History(current_process='Clustering'):
+        with history(current_process='Clustering'):
             mc = self.clustering_multitrace
             q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
             s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
@@ -230,7 +230,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                              'spectrogram_SNR_clustered',
                                              'spectrogram_cluster_ID'])
 
-        return result, History
+        return result, history
 
 
 class CATSResult:
