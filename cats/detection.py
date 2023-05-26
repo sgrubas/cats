@@ -8,15 +8,19 @@
 import numpy as np
 import holoviews as hv
 from typing import Callable, Union, Tuple
+import psutil
 
-from .baseclass import CATSBaseSTFT, CATSResult
+from .baseclass import CATSBase, CATSResult
 from .core.utils import get_interval_division, aggregate_array_by_axis_and_func
 from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles
 from .core.association import PickFeatures
 from .core.projection import GiveIntervals, FillGaps
 
+# TODO:
+#   - memory manager: estimation, auto graph, ... for big data processing
 
-class CATSDetector(CATSBaseSTFT):
+
+class CATSDetector(CATSBase):
     """
         Detector of events based on Cluster Analysis of Trimmed Spectrograms
     """
@@ -42,23 +46,11 @@ class CATSDetector(CATSBaseSTFT):
                             - "spectrogram_SNR_clustered" - clustered `spectrogram_SNR_trimmed`
                             - "spectrogram_cluster_ID" - cluster indexes on `spectrogram_SNR_clustered`
                             - "likelihood" - projected `spectrogram_SNR_clustered`
-                            - "picked_features - extract peak values and their onset times of `likelihood`
         """
 
-        full_info = cast_to_bool_dict(full_info,
-                                      ["coefficients", "spectrogram", "noise_threshold", "noise_std",
-                                       "spectrogram_SNR_trimmed", "spectrogram_SNR_clustered",
-                                       "spectrogram_cluster_ID", "likelihood"])
-        full_info["picked_features"] = self.pick_features
-        save_clustered = full_info['spectrogram_SNR_clustered']
-        save_cluster_ID = full_info['spectrogram_cluster_ID']
-        full_info['spectrogram_SNR_clustered'] = True
-        full_info['spectrogram_cluster_ID'] = True
+        full_info, pre_full_info = self._parse_info_dict(full_info)
 
-        result, history = super()._apply(x, finish_on='clustering', verbose=verbose, full_info=full_info)
-
-        full_info['spectrogram_SNR_clustered'] = save_clustered
-        full_info['spectrogram_cluster_ID'] = save_cluster_ID
+        result, history = super()._apply(x, finish_on='clustering', verbose=verbose, full_info=pre_full_info)
 
         with history(current_process='Likelihood'):
             # Aggregation
@@ -69,15 +61,18 @@ class CATSDetector(CATSBaseSTFT):
                                                  min_last_dims=2)
 
             counts = np.count_nonzero(result['spectrogram_SNR_clustered'], axis=-2)
-            counts = np.where(counts == 0, 1, counts)
+            counts = np.where(counts == 0, 1, counts).astype(result['spectrogram_SNR_clustered'].dtype)
 
             result['likelihood'] = result['spectrogram_SNR_clustered'].sum(axis=-2) / counts
             result['detection'] = FillGaps(result['spectrogram_cluster_ID'].max(axis=-2))
 
         del counts
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR_clustered', 'spectrogram_cluster_ID'])
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR_clustered',
+                                             'spectrogram_cluster_ID',
+                                             'detection'])
 
         stft_time = self.STFT.forward_time_axis(x.shape[-1])
+
         # Picking
         # peak_freqs = self.stft_frequency[np.argmax(SNRK_aggr, axis=-2)]
         if full_info['picked_features']:
@@ -95,17 +90,9 @@ class CATSDetector(CATSBaseSTFT):
         time = np.arange(x.shape[-1]) * self.dt_sec
         frames = get_interval_division(N=len(stft_time), L=self.stationary_frame_len)
 
+        from_full_info = {kw: result.get(kw, None) for kw in full_info}
         kwargs = {"signal": x,
-                  "coefficients": result.get('coefficients', None),
-                  "spectrogram": result.get('spectrogram', None),
-                  "noise_threshold": result.get('noise_threshold', None),
-                  "noise_std": result.get('noise_std', None),
-                  "spectrogram_SNR_trimmed": result.get('spectrogram_SNR_trimmed', None),
-                  "spectrogram_SNR_clustered": result.get('spectrogram_SNR_clustered', None),
-                  "spectrogram_cluster_ID": result.get('spectrogram_cluster_ID', None),
-                  "detection": result.get('detection', None),
-                  "likelihood": result.get('likelihood', None),
-                  "picked_features": result.get('picked_features', None),
+                  **from_full_info,
                   "time": time,
                   "stft_time": stft_time,
                   "stft_frequency": self.stft_frequency,
@@ -120,6 +107,57 @@ class CATSDetector(CATSBaseSTFT):
 
     def __pow__(self, x):
         return self.detect(x, verbose=True, full_info=True)
+
+    def _parse_info_dict(self, full_info):
+        info_keys = self._info_keys()
+        info_keys.extend(["likelihood", "detection", "picked_features"])
+        full_info = cast_to_bool_dict(full_info, info_keys)
+
+        full_info["detection"] = True  # default saved result
+        full_info["picked_features"] = self.pick_features  # non-default result
+
+        pre_full_info = full_info.copy()
+        pre_full_info['spectrogram_SNR_clustered'] = True  # needed for `CATSBase._apply`
+        pre_full_info['spectrogram_cluster_ID'] = True     # needed for `CATSBase._apply`
+        return full_info, pre_full_info
+
+    def estimate_memory_usage(self, x, /, full_info=False):
+        memory_usage_bytes, used_together = self._estimate_memory_usage(x)
+        full_info, pre_full_info = self._parse_info_dict(full_info)
+
+        stft_time_len = len(self.STFT.forward_time_axis(x.shape[-1]))
+
+        likelihood_shape = x.shape[:-1] + (stft_time_len,)
+        likelihood_size = np.prod(likelihood_shape)
+
+        precision_order = memory_usage_bytes['signal'] / x.size
+
+        memory_usage_bytes_new = {
+            "likelihood":        precision_order * likelihood_size,     # float
+            "detection":         likelihood_size,                       # bool always
+        }
+        memory_usage_bytes.update(memory_usage_bytes_new)
+
+        used_together.append(('spectrogram_SNR_clustered', 'spectrogram_cluster_ID', 'likelihood', 'detection'))
+        used_together_bytes = [0] * len(used_together)
+        for i, ut in enumerate(used_together):
+            used_together_bytes[i] += sum([memory_usage_bytes[kw] for kw in ut])
+
+        base_info = ["time", "stft_time", "stft_frequency", "stationary_intervals", "signal"]
+        base_bytes = sum([memory_usage_bytes[kw] for kw in base_info])
+        min_required = base_bytes + max(used_together_bytes)
+        max_required = sum(memory_usage_bytes.values())
+        info_required = base_bytes + sum([memory_usage_bytes.get(kw, 0) for kw, v in full_info.items() if v])
+
+        memory_resources = psutil.virtual_memory()
+        memory_info = {'total': memory_resources.total,
+                       'available': memory_resources.available,
+                       'min_required': min_required,
+                       'max_required': max_required,
+                       'required_by_info': info_required,
+                       'safe_to_proceed_on_min': min_required < memory_resources.available,
+                       'detailed_memory_usage': memory_usage_bytes}
+        return memory_info
 
 
 class CATSDetectionResult(CATSResult):

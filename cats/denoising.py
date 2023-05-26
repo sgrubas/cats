@@ -8,11 +8,11 @@
 import numpy as np
 import holoviews as hv
 
-from .baseclass import CATSBaseSTFT, CATSResult
+from .baseclass import CATSBase, CATSResult
 from .core.utils import get_interval_division
 
 
-class CATSDenoiser(CATSBaseSTFT):
+class CATSDenoiser(CATSBase):
     """
         Denoiser based on Cluster Analysis of Trimmed Spectrograms
     """

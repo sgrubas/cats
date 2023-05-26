@@ -1,7 +1,7 @@
 """
     Implements baseclasses for Cluster Analysis of Trimmed Spectrograms (CATS)
 
-        CATSBaseSTFT : baseclass to perform CATS
+        CATSBase : baseclass to perform CATS
         CATSResult : baseclass for keeping the results of CATS
 """
 
@@ -18,7 +18,7 @@ from .core.utils import format_interval_by_limits, give_index_slice_by_limits, d
 from .core.thresholding import ThresholdingSNR
 
 
-class CATSBaseSTFT(BaseModel, extra=Extra.allow):
+class CATSBase(BaseModel, extra=Extra.allow):
     """
         Base class for CATS based on STFT. Implements unpacking of the main parameters.
         Implements 4 main steps:
@@ -161,12 +161,9 @@ The fastest CPU version is 'ssqueezepy', which is default.
                 raise AttributeError(f'{type(self)} has no attribute: {attribute}')
         self._set_params()
 
-    def _apply(self, x, /, finish_on='clustering', verbose=True, full_info=True):
+    def _apply(self, x, /, finish_on='clustering', verbose=True, full_info=None):
 
-        result = {"coefficients": None, "spectrogram": None, "noise_threshold": None, "noise_std": None,
-                  "spectrogram_SNR_trimmed": None, "spectrogram_SNR_clustered": None, "spectrogram_cluster_ID": None}
-
-        full_info = cast_to_bool_dict(full_info, list(result.keys()))
+        result = dict.fromkeys(full_info.keys())
 
         history = StatusKeeper(verbose=verbose)
 
@@ -188,7 +185,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
             frames = get_interval_division(N=result['spectrogram'].shape[-1], L=self.stationary_frame_len)
             zero_Nyq_freqs = (self.freq_bandpass_len[0] == 0,
                               len(self.stft_frequency) == self.freq_bandpass_len[1])
-            result['noise_threshold'] = np.zeros(result['spectrogram'].shape[:-1] + (len(frames),))
+            result['noise_threshold'] = np.zeros(result['spectrogram'].shape[:-1] + (len(frames),),
+                                                 dtype=result['spectrogram'].dtype)
             result['noise_threshold'][bandpass_slice] = BEDATE(result['spectrogram'][bandpass_slice],
                                                    frames=frames,
                                                    minSNR=self.minSNR,
@@ -231,6 +229,54 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                              'spectrogram_cluster_ID'])
 
         return result, history
+
+    @staticmethod
+    def _info_keys():
+        info_keys = ["coefficients",
+                     "spectrogram",
+                     "noise_threshold",
+                     "noise_std",
+                     "spectrogram_SNR_trimmed",
+                     "spectrogram_SNR_clustered",
+                     "spectrogram_cluster_ID"]
+        return info_keys
+
+    def _parse_info_dict(self, full_info):
+        return cast_to_bool_dict(full_info, self._info_keys())
+
+    def _estimate_memory_usage(self, x):
+
+        stft_time_len = len(self.STFT.forward_time_axis(x.shape[-1]))
+        stft_shape = x.shape[:-1] + (len(self.stft_frequency), stft_time_len)
+        stft_size = np.prod(stft_shape)
+
+        bedate_shape = x.shape[:-1] + (len(self.stft_frequency),
+                                       len(get_interval_division(N=stft_time_len,
+                                                                 L=self.stationary_frame_len)))
+        bedate_size = np.prod(bedate_shape)
+
+        x_bytes = x.nbytes
+        precision_order = x_bytes / x.size
+
+        memory_usage_bytes = {
+            "time":                       8 * x.shape[-1],                  # float64 always
+            "stft_time":                  8 * stft_time_len,                # float64 always
+            "stft_frequency":             8 * stft_shape[-2],               # float64 always
+            "stationary_intervals":       8 * bedate_shape[-1],             # float64 always
+            "signal":                     x_bytes,                          # float / int
+            "coefficients":               2 * precision_order * stft_size,  # complex
+            "spectrogram":                precision_order * stft_size,      # float
+            "noise_threshold":            precision_order * bedate_size,    # float
+            "noise_std":                  precision_order * bedate_size,    # float
+            "spectrogram_SNR_trimmed":    precision_order * stft_size,      # float
+            "spectrogram_SNR_clustered":  precision_order * stft_size,      # float
+            "spectrogram_cluster_ID":     2 * stft_size,                    # uint16 always
+        }
+        used_together = [('coefficients', 'spectrogram'),
+                         ('spectrogram', 'noise_threshold', 'noise_std', 'spectrogram_SNR_trimmed'),
+                         ('spectrogram_SNR_trimmed', 'spectrogram_SNR_clustered', 'spectrogram_cluster_ID')]
+
+        return memory_usage_bytes, used_together
 
 
 class CATSResult:
