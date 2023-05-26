@@ -50,9 +50,9 @@ def ThresholdingBySNR(PSD, Sgm, /, frames, minSNR):
 
 
 @nb.njit(["f8[:, :](f8[:, :], f8[:, :], f8[:, :], i8[:, :])",
-          "f8[:, :](f4[:, :], f8[:, :], f8[:, :], i8[:, :])"], parallel=True, cache=True)
+          "f4[:, :](f4[:, :], f4[:, :], f4[:, :], i8[:, :])"], parallel=True, cache=True)
 def _ThresholdingSNR(PSD, Sgm, Eta, frames):
-    SNR = np.empty(PSD.shape)
+    SNR = np.empty_like(PSD)
     M = len(frames)
     N = len(PSD)
     for j in nb.prange(M):

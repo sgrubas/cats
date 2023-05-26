@@ -9,7 +9,7 @@ MIN_DATE_BLOCK_SIZE = 250
 
 
 @nb.njit(["f8(f8[:], i8, f8, b1)",
-          "f8(f4[:], i8, f8, b1)"], cache=True)
+          "f4(f4[:], i8, f8, b1)"], cache=True)
 def _DATE(Y, Nmin, xi_lamb, original_mode):
 
     N = len(Y)
@@ -23,23 +23,24 @@ def _DATE(Y, Nmin, xi_lamb, original_mode):
         M_s = M / (ni + 1)
         eta = M_s * xi_lamb
         found = (Y_sort[ni] <= eta < Y_sort[ni + 1])
-        if found: break
+        if found:
+            break
     if original_mode:
         eta = eta if found else eta0  # if not found in loop, then minimum
     return eta
 
 
 @nb.njit(["f8[:, :](f8[:, :], i8[:, :], i8[:], f8[:], b1)",
-          "f8[:, :](f4[:, :], i8[:, :], i8[:], f8[:], b1)"], parallel=True, cache=True)
+          "f4[:, :](f4[:, :], i8[:, :], i8[:], f8[:], b1)"], parallel=True, cache=True)
 def _BEDATE(PSD, frames, Nmins, xi_lamb, original_mode):
     M, N = PSD.shape
     n = len(frames)
-    Eta = np.zeros((M, n))
+    Eta = np.zeros((M, n), dtype=PSD.dtype)
     for i in nb.prange(M):
         ci, xi_lamb_i = PSD[i], xi_lamb[i]
         for j in range(n):
             j1, j2 = frames[j]
-            Eta[i, j] = _DATE(ci[j1 : j2], Nmins[j], xi_lamb_i, original_mode)
+            Eta[i, j] = _DATE(ci[j1: j2], Nmins[j], xi_lamb_i, original_mode)
     return Eta
 
 
@@ -138,7 +139,7 @@ def _Xi_Lambda(d, rho, d_unique=None):
         return _xi(d, rho) / _Lambda(d)
     else:
         d_unique = d_unique if d_unique else np.unique(d)
-        xi_lamd_kw = {di : _xi(di, rho) / _Lambda(di) for di in d_unique}
+        xi_lamd_kw = {di: _xi(di, rho) / _Lambda(di) for di in d_unique}
 
         xi_lamd = np.empty_like(d, dtype=float)
         for ind, di in np.ndenumerate(d):
@@ -158,8 +159,8 @@ def EtaToSigma(eta, rho):
         Returns:
             sigma : np.ndarray (..., Nf, n) : converted standard deviation
     """
-    d = np.full(eta.shape[:-1], 2)
+    d = np.full(eta.shape[:-1], 2, dtype=int)
     d[..., 0] = 1
     d[..., -1] = 1      # zero and Nyq frequencies are 1-dim samples (imag = 0)
-    xi = _Xi(d, rho, d_unique=[1, 2])
+    xi = _Xi(d, rho, d_unique=[1, 2]).astype(eta.dtype)
     return eta / xi[..., None]
