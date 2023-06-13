@@ -5,6 +5,9 @@
         CATSDenoisingResult : keeps all the results and can plot sample trace with step-by-step visualization
 """
 
+# TODO:
+#  - outdated, many updates are needed
+
 import numpy as np
 import holoviews as hv
 
