@@ -7,9 +7,9 @@ from .core.association import MatchSequences, PickFeatures, Associate, PickAssoc
 from .core import utils
 from .core.plottingutils import plot_traces
 from .metrics import EvaluateDetection, BinaryCrossentropy
-from .detection import CATSDetector
+from .detection import CATSDetector, CATSDetectionResult
 from .denoising import CATSDenoiser
 from .data import import_sample_data
-from .baseclass import MIN_DATE_BLOCK_SIZE
-from .misc import STALTADetector, PSDDetector
+from .baseclass import MIN_DATE_BLOCK_SIZE, MAX_MEMORY_USAGE
+from . import misc
 from . import io

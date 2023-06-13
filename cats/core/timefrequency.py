@@ -77,7 +77,9 @@ class STFTOperator:
             return window
         else:
             raise ValueError(f"Unknown type of window {type(window)}")
+
         nperseg = round(length / self.dt) + 1
+
         if ('one' in wtype) or (len(wtype) == 0) or (wtype is None):
             window = np.ones(nperseg)
         else:
