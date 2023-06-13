@@ -2,7 +2,7 @@ import numpy as np
 import numba as nb
 from functools import wraps
 from pydantic import BaseModel, Extra
-from typing import Union, Dict
+from typing import Union, Dict, List, Set, Tuple
 from timeit import default_timer
 
 
@@ -116,6 +116,10 @@ class StatusKeeper(BaseModel, extra=Extra.allow):
         if self.verbose:
             print(f"Total elapsed time:\t{float('%.3g' % self.history['Total'])} sec\n")
 
+    def merge(self, other):
+        for proc, dt in other.history.items():
+            self.history[proc] += dt
+
 
 @nb.njit("i8[:, :](i8, i8)", cache=True)
 def get_interval_division(N, L):
@@ -167,15 +171,17 @@ def give_index_slice_by_limits(interval, dt):
     return ind_slice
 
 
-def cast_to_bool_dict(dictionary: Union[bool, Dict[str, bool]],
+def cast_to_bool_dict(iterable: Union[bool, List[str], Tuple[str], Set[str], Dict[str, bool]],
                       reference_keys: Union[list, tuple, set]):
-    if isinstance(dictionary, bool):
-        dictionary = {kw: dictionary for kw in reference_keys}
-    else:
+    if isinstance(iterable, bool):
+        output_dict = dict.fromkeys(reference_keys, iterable)
+    elif isinstance(iterable, (list, tuple, set, dict)):
+        output_dict = iterable if isinstance(iterable, dict) else dict.fromkeys(iterable, True)
         for kw in reference_keys:
-            dictionary.setdefault(kw, False)
-
-    return dictionary
+            output_dict.setdefault(kw, False)
+    else:
+        raise TypeError(f"Unknown input data type of `iterable` - {type(iterable)}, must be [bool, dict, list]")
+    return output_dict
 
 
 def del_vals_by_keys(dict_vals: dict,

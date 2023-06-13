@@ -6,9 +6,11 @@
 """
 
 import numpy as np
+from scipy.io import loadmat, savemat
 import holoviews as hv
 from typing import Tuple
 from pydantic import BaseModel, Field, Extra
+import psutil
 
 from .core.timefrequency import STFTOperator
 from .core.clustering import Clustering
@@ -16,6 +18,9 @@ from .core.date import BEDATE, EtaToSigma, MIN_DATE_BLOCK_SIZE
 from .core.utils import get_interval_division, format_index_by_dims, cast_to_bool_dict, StatusKeeper
 from .core.utils import format_interval_by_limits, give_index_slice_by_limits, del_vals_by_keys
 from .core.thresholding import ThresholdingSNR
+
+# Constants
+MAX_MEMORY_USAGE = -1  # IS NOT WORKING PROPERLY, UPDATING DOES NOT CHANGE ANYTHING
 
 
 class CATSBase(BaseModel, extra=Extra.allow):
@@ -77,8 +82,8 @@ Can be estimated as length of the strongest phases.
 
                 cluster_size_f_Hz : float : minimum cluster size in frequency, in hertz, i.e. minimum frequency width.
 
-                freq_bandpass_Hz : tuple/list[int/float] : bandpass frequency range, in hertz, i.e. everything out of the \
-range is zero (e.g. (f_min, f_max)).
+                freq_bandpass_Hz : tuple/list[int/float] : bandpass frequency range, in hertz, i.e. everything out of \
+the range is zero (e.g. (f_min, f_max)).
 
                 cluster_distance_t_sec : float : neighborhood distance in time for clustering, in seconds. \
 Minimum separation time between two different events.
@@ -122,7 +127,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.stft_df = self.STFT.df
         self.stft_nfft = self.STFT.nfft
         self.stft_hop_len = self.STFT.hop
-        self.stft_hop_sec = (self.stft_hop_len - 1) * self.dt_sec
+        self.stft_hop_sec = self.stft_hop_len * self.dt_sec
 
         # DATE params
         self.stationary_frame_sec = v if (v := self.stationary_frame_sec) is not None else 0.0
@@ -135,7 +140,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.freq_bandpass_Hz = (min(self.freq_bandpass_Hz), max(self.freq_bandpass_Hz))
         self.freq_bandwidth_Hz = self.freq_bandpass_Hz[1] - self.freq_bandpass_Hz[0]
         assert (fbw := self.freq_bandwidth_Hz) > (csf := self.cluster_size_f_Hz), \
-                f"Frequency bandpass width `{fbw}` must be bigger than min frequency cluster size `{csf}`"
+            f"Frequency bandpass width `{fbw}` must be bigger than min frequency cluster size `{csf}`"
         self.freq_bandpass_slice = give_index_slice_by_limits(self.freq_bandpass_Hz, self.STFT.df)
         self.freq_bandpass_len = (self.freq_bandpass_slice.start, self.freq_bandpass_slice.stop)
         self.cluster_size_t_len = max(round(self.cluster_size_t_sec / self.stft_hop_sec), 1)
@@ -164,6 +169,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
     def _apply(self, x, /, finish_on='clustering', verbose=True, full_info=None):
 
         result = dict.fromkeys(full_info.keys())
+        result['signal'] = x if full_info['signal'] else None
 
         history = StatusKeeper(verbose=verbose)
 
@@ -183,16 +189,16 @@ The fastest CPU version is 'ssqueezepy', which is default.
         # B-E-DATE
         with history(current_process='B-E-DATE'):
             frames = get_interval_division(N=result['spectrogram'].shape[-1], L=self.stationary_frame_len)
-            zero_Nyq_freqs = (self.freq_bandpass_len[0] == 0,
+            zero_nyq_freqs = (self.freq_bandpass_len[0] == 0,
                               len(self.stft_frequency) == self.freq_bandpass_len[1])
             result['noise_threshold'] = np.zeros(result['spectrogram'].shape[:-1] + (len(frames),),
                                                  dtype=result['spectrogram'].dtype)
             result['noise_threshold'][bandpass_slice] = BEDATE(result['spectrogram'][bandpass_slice],
-                                                   frames=frames,
-                                                   minSNR=self.minSNR,
-                                                   Q=self.date_Q,
-                                                   original_mode=not self.date_detection_mode,
-                                                   zero_Nyq_freqs=zero_Nyq_freqs)
+                                                               frames=frames,
+                                                               minSNR=self.minSNR,
+                                                               Q=self.date_Q,
+                                                               original_mode=not self.date_detection_mode,
+                                                               zero_Nyq_freqs=zero_nyq_freqs)
             result['noise_std'] = EtaToSigma(result['noise_threshold'], self.minSNR)
 
             # Thresholding
@@ -232,19 +238,19 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
     @staticmethod
     def _info_keys():
-        info_keys = ["coefficients",
-                     "spectrogram",
-                     "noise_threshold",
-                     "noise_std",
-                     "spectrogram_SNR_trimmed",
-                     "spectrogram_SNR_clustered",
-                     "spectrogram_cluster_ID"]
-        return info_keys
+        return ["signal",
+                "coefficients",
+                "spectrogram",
+                "noise_threshold",
+                "noise_std",
+                "spectrogram_SNR_trimmed",
+                "spectrogram_SNR_clustered",
+                "spectrogram_cluster_ID"]
 
     def _parse_info_dict(self, full_info):
         return cast_to_bool_dict(full_info, self._info_keys())
 
-    def _estimate_memory_usage(self, x):
+    def _memory_usage(self, x):
 
         stft_time_len = len(self.STFT.forward_time_axis(x.shape[-1]))
         stft_shape = x.shape[:-1] + (len(self.stft_frequency), stft_time_len)
@@ -259,18 +265,16 @@ The fastest CPU version is 'ssqueezepy', which is default.
         precision_order = x_bytes / x.size
 
         memory_usage_bytes = {
-            "time":                       8 * x.shape[-1],                  # float64 always
-            "stft_time":                  8 * stft_time_len,                # float64 always
-            "stft_frequency":             8 * stft_shape[-2],               # float64 always
-            "stationary_intervals":       8 * bedate_shape[-1],             # float64 always
-            "signal":                     x_bytes,                          # float / int
-            "coefficients":               2 * precision_order * stft_size,  # complex
-            "spectrogram":                precision_order * stft_size,      # float
-            "noise_threshold":            precision_order * bedate_size,    # float
-            "noise_std":                  precision_order * bedate_size,    # float
-            "spectrogram_SNR_trimmed":    precision_order * stft_size,      # float
-            "spectrogram_SNR_clustered":  precision_order * stft_size,      # float
-            "spectrogram_cluster_ID":     2 * stft_size,                    # uint16 always
+            "stft_frequency":             8. * stft_shape[-2],               # float64 always
+            "stationary_intervals":       8. * bedate_shape[-1],             # float64 always
+            "signal":                     1. * x_bytes,                          # float / int
+            "coefficients":               2. * precision_order * stft_size,      # complex
+            "spectrogram":                1. * precision_order * stft_size,      # float
+            "noise_threshold":            1. * precision_order * bedate_size,    # float
+            "noise_std":                  1. * precision_order * bedate_size,    # float
+            "spectrogram_SNR_trimmed":    1. * precision_order * stft_size,      # float
+            "spectrogram_SNR_clustered":  1. * precision_order * stft_size,      # float
+            "spectrogram_cluster_ID":     2. * stft_size,                    # uint16 always
         }
         used_together = [('coefficients', 'spectrogram'),
                          ('spectrogram', 'noise_threshold', 'noise_std', 'spectrogram_SNR_trimmed'),
@@ -278,11 +282,65 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         return memory_usage_bytes, used_together
 
+    @staticmethod
+    def memory_info(memory_usage_bytes, used_together, base_info, full_info):
+        used_together_bytes = [0] * len(used_together)
+        for i, ut in enumerate(used_together):
+            used_together_bytes[i] += sum([memory_usage_bytes[kw] for kw in ut])
+
+        base_bytes = sum([memory_usage_bytes[kw] for kw in base_info])
+
+        min_required = base_bytes + max(used_together_bytes)  # minimum needed to process
+        max_required = sum(memory_usage_bytes.values())  # maximum needed to store everything
+        info_required = base_bytes + sum([memory_usage_bytes.get(kw, 0)
+                                          for kw, v in full_info.items() if v])  # to store only the final result
+
+        memory_resources = psutil.virtual_memory()
+        memory_info = {'total': memory_resources.total,
+                       'available': memory_resources.available,
+                       'min_required': min_required,
+                       'max_required': max_required,
+                       'required_by_info': info_required,
+                       'detailed_memory_usage': memory_usage_bytes}
+        return memory_info
+
+    @staticmethod
+    def memory_chunks(memory_info, to_file):
+        if memory_info["required_by_info"] > memory_info["available"]:
+            if not to_file:
+                raise MemoryError("The final result cannot fit the memory, "
+                                  f"min required {memory_info['required_by_info']} bytes, "
+                                  f"available memory {memory_info['available']} bytes. "
+                                  "Consider function `detect_to_file` instead, or use less info in `full_info`.")
+            else:
+                n_chunks = int(np.ceil(memory_info["required_by_info"] / memory_info["available"]))
+        else:
+            n_chunks = int(np.ceil(memory_info["min_required"] / memory_info["available"]))
+
+        return n_chunks
+
 
 class CATSResult:
-    def __init__(self, signal, coefficients, spectrogram, noise_threshold, noise_std, spectrogram_SNR_trimmed,
-                 spectrogram_SNR_clustered, spectrogram_cluster_ID, likelihood, picked_features,
-                 time, stft_time, stft_frequency, stationary_intervals, minSNR, history, **kwargs):
+    def __init__(self,
+                 signal=None,
+                 coefficients=None,
+                 spectrogram=None,
+                 noise_threshold=None,
+                 noise_std=None,
+                 spectrogram_SNR_trimmed=None,
+                 spectrogram_SNR_clustered=None,
+                 spectrogram_cluster_ID=None,
+                 dt_sec=None,
+                 stft_dt_sec=None,
+                 stft_t0_sec=None,
+                 npts=None,
+                 stft_npts=None,
+                 stft_frequency=None,
+                 stationary_intervals=None,
+                 minSNR=None,
+                 history=None,
+                 **kwargs):
+        # Numpy arrays
         self.signal = signal
         self.coefficients = coefficients
         self.spectrogram = spectrogram
@@ -291,47 +349,67 @@ class CATSResult:
         self.spectrogram_SNR_trimmed = spectrogram_SNR_trimmed
         self.spectrogram_SNR_clustered = spectrogram_SNR_clustered
         self.spectrogram_cluster_ID = spectrogram_cluster_ID
-        self.likelihood = likelihood
-        self.picked_features = picked_features
-        self.time = time
-        self.stft_time = stft_time
         self.stft_frequency = stft_frequency
         self.stationary_intervals = stationary_intervals
+
+        # Scalars
+        self.dt_sec = dt_sec
+        self.stft_dt_sec = stft_dt_sec
+        self.stft_t0_sec = stft_t0_sec
+        self.npts = npts
+        self.stft_npts = stft_npts
         self.minSNR = minSNR
         self.history = history
 
+        # Optional
         for kw, v in kwargs.items():
             self.__setattr__(kw, v)
+
+    def time(self, time_interval_sec=None):
+        if time_interval_sec is None:
+            return np.arange(self.npts) * self.dt_sec
+        else:
+            return np.arange(time_interval_sec[0], time_interval_sec[1] + self.dt_sec, self.dt_sec)
+
+    def stft_time(self, time_interval_sec=None):
+        if time_interval_sec is None:
+            return self.stft_t0_sec + np.arange(self.stft_npts) * self.stft_dt_sec
+        else:
+            return np.arange(time_interval_sec[0], time_interval_sec[1] + self.stft_dt_sec, self.stft_dt_sec)
 
     def plot(self, ind, time_interval_sec=None):
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')
-        A_dim = hv.Dimension('Amplitude')
+        a_dim = hv.Dimension('Amplitude')
 
         ind = format_index_by_dims(ind, self.signal.shape)
-        time_interval_sec = format_interval_by_limits(time_interval_sec, (self.time[0], self.time[-1]))
-        i_time = give_index_slice_by_limits(time_interval_sec, self.time[1] - self.time[0])
-        i_stft = give_index_slice_by_limits(time_interval_sec, self.stft_time[1] - self.stft_time[0])
+        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
+
+        i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
+        i_stft = give_index_slice_by_limits(time_interval_sec, self.stft_dt_sec)
         inds_time = ind + (i_time,)
         inds_stft = ind + (slice(None), i_stft)
 
-        PSD = self.spectrogram[inds_stft]
-        B = PSD * (self.spectrogram_SNR_trimmed[inds_stft] > 0)
-        C = PSD * (self.spectrogram_SNR_clustered[inds_stft] > 0)
+        psd = self.spectrogram[inds_stft]
+        B = psd * (self.spectrogram_SNR_trimmed[inds_stft] > 0)
+        C = psd * (self.spectrogram_SNR_clustered[inds_stft] > 0)
 
-        fig0 = hv.Curve((self.time[i_time], self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
+        time = self.time(time_interval_sec)
+        stft_time = self.stft_time(time_interval_sec)
+
+        fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
                         label='0. Input data: $x_n$').opts(xlabel='', linewidth=0.2)
-        fig1 = hv.Image((self.stft_time[i_stft], self.stft_frequency, PSD), kdims=[t_dim, f_dim],
+        fig1 = hv.Image((stft_time, self.stft_frequency, psd), kdims=[t_dim, f_dim],
                         label='1. Spectrogram: $|X_{k,m}|$')
-        fig2 = hv.Image((self.stft_time[i_stft], self.stft_frequency, B), kdims=[t_dim, f_dim],
+        fig2 = hv.Image((stft_time, self.stft_frequency, B), kdims=[t_dim, f_dim],
                         label='2. Trimming by B-E-DATE: $B_{k,m} \cdot |X_{k,m}|$')
-        fig3 = hv.Image((self.stft_time[i_stft], self.stft_frequency, C), kdims=[t_dim, f_dim],
+        fig3 = hv.Image((stft_time, self.stft_frequency, C), kdims=[t_dim, f_dim],
                         label='3. Clustering: $C_{k,m} \cdot |X_{k,m}|$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250
         cmap = 'viridis'
-        PSD_pos = PSD[PSD > 0]
+        PSD_pos = psd[psd > 0]
         cmin = 1e-1 if (PSD_pos.size == 0) else PSD_pos.min()
         cmax = 1e1 if (PSD_pos.size == 0) else PSD_pos.max()
         clim = (cmin, cmax)
@@ -345,3 +423,71 @@ class CATSResult:
         inds_slices = (ind, i_time, i_stft)
         figs = (fig0 + fig1 + fig2 + fig3)
         return figs, (layout_opts, spectr_opts, curve_opts), inds_slices
+
+    def append(self, other):
+
+        concat_attrs = ["signal",
+                        "coefficients",
+                        "spectrogram",
+                        "noise_threshold",
+                        "noise_std",
+                        "spectrogram_SNR_trimmed",
+                        "spectrogram_SNR_clustered",
+                        "spectrogram_cluster_ID",
+                        "likelihood"]
+
+        for name in concat_attrs:
+            self._concat(other, name, -1)
+
+        stft_t0 = self.stft_dt_sec * self.stft_npts
+
+        self._concat(other, "picked_features", -2, stft_t0, (..., 0))
+        self._concat(other, "stationary_intervals", 0, stft_t0)
+
+        self.npts += other.npts
+        self.stft_npts += other.stft_npts
+
+        self.history.merge(other.history)
+
+        assert self.minSNR == other.minSNR
+        assert self.dt_sec == other.dt_sec
+        assert self.stft_dt_sec == other.stft_dt_sec
+        assert np.all(self.stft_frequency == other.stft_frequency)
+
+    def _concat(self, other, attr, axis, increment=None, increment_ind=None):
+        if ((self_attr := getattr(self, attr, None)) is not None) and \
+                ((other_attr := getattr(other, attr, None)) is not None):
+            if increment is not None:
+                if increment_ind is not None:
+                    other_attr[increment_ind] += increment
+                else:
+                    other_attr += increment
+
+            delattr(self, attr)
+            delattr(other, attr)
+            concatenated = np.concatenate((self_attr, other_attr), axis=axis)
+            del self_attr, other_attr
+            setattr(self, attr, concatenated)
+        else:
+            pass
+
+    @staticmethod
+    def concatenate(*objects):
+        obj0 = objects[0]
+        for obj in objects[1:]:
+            obj0.append(obj)
+            del obj
+        return obj0
+
+    def save(self, filepath, compress=False):
+        mdict = {name: attr for name, attr in self.__dict__.items() if (attr is not None)}
+        savemat(filepath, mdict, do_compression=compress)
+        del mdict
+
+    @classmethod
+    def load(cls, filepath):
+        mdict = loadmat(filepath, simplify_cells=True)
+        return cls(**mdict)
+
+    def dict(self):
+        return self.__dict__
