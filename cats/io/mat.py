@@ -9,6 +9,7 @@ from scipy.io import savemat, loadmat
 
 
 HDRC_FIELDS_INFO = {
+
     # Experiment data
     'b':         'begin time (sec.)',
     'e':         'end time (sec.)',
@@ -66,7 +67,8 @@ HDRC_FIELDS_INFO = {
     'rms':          'rms residuals from absolute location',
     'unc':          'uncertainties in absolute location ([uncx uncy, uncz])',
     'parentsname':  'name and path of file from which the event file is coming from',
-    'parentstime':  'beginning time of event data file in `parentsname` data file',
+    'parentstime':  'beginning time of event data file in `parentsname` data file'
+
 }
 
 
