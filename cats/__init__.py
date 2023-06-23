@@ -8,8 +8,10 @@ from .core import utils
 from .core.plottingutils import plot_traces
 from .metrics import EvaluateDetection, BinaryCrossentropy
 from .detection import CATSDetector, CATSDetectionResult
-from .denoising import CATSDenoiser
+# from .denoising import CATSDenoiser
 from .data import import_sample_data
-from .baseclass import MIN_DATE_BLOCK_SIZE, MAX_MEMORY_USAGE
 from . import misc
 from . import io
+from .core import env_variables
+from .core.env_variables import get_max_memory_available_for_cats
+
