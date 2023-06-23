@@ -13,6 +13,7 @@ cats.egg-info/
 /examples/Detection.ipynb
 /examples/Denoising.ipynb
 /examples/DetectionTests.ipynb
+/examples/ScipyLabel_vs_CATS_clustering.ipynb
 
 # Executables
 *.swf
