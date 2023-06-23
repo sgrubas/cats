@@ -2,6 +2,8 @@
 Framework for detection and denoising of sparse signals in time-frequency domain. Useful for detection and 
 wavelet estimation of earthquakes and (micro)-seismic events.
 
+Package was tested on Python 3.9
+
 Usage:
 1. Clone repository: `git clone https://github.com/sgrubas/cats.git`
 2. Open the `cats` directory with `setup.py` file
