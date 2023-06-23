@@ -10,6 +10,9 @@ from scipy import special, stats
 
 ###################  CLUSTERING  ###################
 
+# TODO:
+#  - make sure that uint16 for cluster indexes is enough
+
 
 @nb.njit(["Tuple((f8[:, :], u2[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)",
           "Tuple((f4[:, :], u2[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)"], cache=True)
