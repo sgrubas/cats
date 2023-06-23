@@ -214,3 +214,15 @@ def give_rectangles(events, time, yloc, dy):
         if len(trace) > 0:
             rectangles += _give_rectangles(trace, time, yi, dy)
     return rectangles
+
+
+def update_object_params(obj, **params):
+    """
+        Updates the object instance with changed parameters by calling `_set_params()` method
+    """
+    for attribute, value in params.items():
+        if hasattr(obj, attribute):
+            setattr(obj, attribute, value)
+        else:
+            raise AttributeError(f'{type(obj)} has no attribute: {attribute}')
+    obj._set_params()

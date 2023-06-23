@@ -104,6 +104,7 @@ class CATSDetector(CATSBase):
                         If `True`, then all stages are saved, if `False` then only the `detection` is saved.
                         If string "plot" or "plt" is given, then only stages needed for plotting are saved.
                         Available workflow stages, if any is listed then saved to result:
+                            - "signal" - input signal
                             - "coefficients" - STFT coefficients
                             - "spectrogram" - absolute value of `coefficients`
                             - "noise_threshold" - threshold defined by `noise_std`
@@ -170,7 +171,7 @@ class CATSDetector(CATSBase):
 
         return self.memory_info(memory_usage_bytes, used_together, base_info, full_info)
 
-    def _split_data_by_memory(self, x, /, full_info, to_file=False):
+    def _split_data_by_memory(self, x, /, full_info, to_file):
         memory_info = self.memory_usage_estimate(x, full_info=full_info)
         return self.memory_chunks(memory_info, to_file)
 
@@ -185,15 +186,15 @@ class CATSDetector(CATSBase):
             filepath = path_destination.as_posix()
 
         n_chunks = detector._split_data_by_memory(x, full_info=full_info, to_file=True)
-        single_chunk = n_chunks > 1
+        multiple_chunks = n_chunks > 1
         file_chunks = np.array_split(x, n_chunks, axis=-1)
         for i, fc in enumerate(tqdm(file_chunks,
                                     desc='File chunks',
-                                    display=single_chunk)):
-            path_i = filepath + (f'_chunk_{i}' * single_chunk) + '.mat'
+                                    display=multiple_chunks)):
+            path_i = filepath + (f'_chunk_{i}' * multiple_chunks) + '.mat'
             detector.detect(fc, verbose=verbose, full_info=full_info).save(path_i, compress=compress)
             if verbose:
-                print("Result" + f" chunk {i}" * single_chunk, f"has been saved to `{path_i}`",
+                print("Result" + f" chunk {i}" * multiple_chunks, f"has been saved to `{path_i}`",
                       sep=' ', end='\n\n')
 
     def detect_to_file(self, x, /, path_destination, verbose=False, full_info=False, compress=False):

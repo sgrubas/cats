@@ -10,18 +10,17 @@ from scipy.io import loadmat, savemat
 import holoviews as hv
 from typing import Tuple
 from pydantic import BaseModel, Field, Extra
-import psutil
 
 from .core.timefrequency import STFTOperator
 from .core.clustering import Clustering
-from .core.date import BEDATE, EtaToSigma, MIN_DATE_BLOCK_SIZE
+from .core.date import BEDATE, EtaToSigma
+from .core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
 from .core.utils import get_interval_division, format_index_by_dims, cast_to_bool_dict, StatusKeeper
-from .core.utils import format_interval_by_limits, give_index_slice_by_limits, del_vals_by_keys
+from .core.utils import format_interval_by_limits, give_index_slice_by_limits, del_vals_by_keys, update_object_params
 from .core.thresholding import ThresholdingSNR
 
-# Constants
-MAX_MEMORY_USAGE = -1  # IS NOT WORKING PROPERLY, UPDATING DOES NOT CHANGE ANYTHING
 
+####################### BASE CLASSES #######################
 
 class CATSBase(BaseModel, extra=Extra.allow):
     """
@@ -131,7 +130,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         # DATE params
         self.stationary_frame_sec = v if (v := self.stationary_frame_sec) is not None else 0.0
-        self.stationary_frame_len = max(round(self.stationary_frame_sec / self.stft_hop_sec), MIN_DATE_BLOCK_SIZE)
+        self.stationary_frame_len = max(round(self.stationary_frame_sec / self.stft_hop_sec),
+                                        get_min_bedate_block_size())
         self.stationary_frame_sec = self.stationary_frame_len * self.stft_hop_sec
 
         # Clustering params
@@ -159,12 +159,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         """
             Updates the instance with changed parameters.
         """
-        for attribute, value in params.items():
-            if hasattr(self, attribute):
-                setattr(self, attribute, value)
-            else:
-                raise AttributeError(f'{type(self)} has no attribute: {attribute}')
-        self._set_params()
+        update_object_params(self, **params)
 
     def _apply(self, x, /, finish_on='clustering', verbose=True, full_info=None):
 
@@ -295,9 +290,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         info_required = base_bytes + sum([memory_usage_bytes.get(kw, 0)
                                           for kw, v in full_info.items() if v])  # to store only the final result
 
-        memory_resources = psutil.virtual_memory()
-        memory_info = {'total': memory_resources.total,
-                       'available': memory_resources.available,
+        memory_info = {'available_for_cats': get_max_memory_available_for_cats(),
                        'min_required': min_required,
                        'max_required': max_required,
                        'required_by_info': info_required,
@@ -306,16 +299,16 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
     @staticmethod
     def memory_chunks(memory_info, to_file):
-        if memory_info["required_by_info"] > memory_info["available"]:
-            if not to_file:
-                raise MemoryError("The final result cannot fit the memory, "
-                                  f"min required {memory_info['required_by_info']} bytes, "
-                                  f"available memory {memory_info['available']} bytes. "
-                                  "Consider function `detect_to_file` instead, or use less info in `full_info`.")
-            else:
-                n_chunks = int(np.ceil(memory_info["required_by_info"] / memory_info["available"]))
+        large_result = memory_info["required_by_info"] > memory_info["available_for_cats"]
+        if large_result and not to_file:
+            raise MemoryError("The final result cannot fit the memory, "
+                              f"min required {memory_info['required_by_info']} bytes, "
+                              f"available memory {memory_info['available_for_cats']} bytes. "
+                              "Consider function `detect_to_file` instead, or use less info in `full_info`.")
+        elif to_file:
+            n_chunks = int(np.ceil(memory_info["required_by_info"] / memory_info["available_for_cats"]))
         else:
-            n_chunks = int(np.ceil(memory_info["min_required"] / memory_info["available"]))
+            n_chunks = int(np.ceil(memory_info["min_required"] / memory_info["available_for_cats"]))
 
         return n_chunks
 
