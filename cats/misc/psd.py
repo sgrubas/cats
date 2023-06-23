@@ -3,7 +3,7 @@
 """
 
 from pydantic import BaseModel, Field, Extra
-from typing import Callable, Union, Tuple
+from typing import Callable, Union, Tuple, List
 from pathlib import Path
 from tqdm.notebook import tqdm
 
@@ -14,7 +14,7 @@ from cats.core.timefrequency import STFTOperator
 from cats.core.association import PickFeatures
 from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
-from cats.core.utils import give_rectangles
+from cats.core.utils import give_rectangles, update_object_params
 from cats.baseclass import CATSResult, CATSBase
 from cats.detection import CATSDetector
 from cats.io import read_data
@@ -42,7 +42,9 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._set_params()
 
+    def _set_params(self):
         self.STFT = STFTOperator(window=self.stft_window_sec, overlap=self.stft_overlap, dt=self.dt_sec,
                                  nfft=self.stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
         self.stft_overlap_len = self.STFT.noverlap
@@ -72,6 +74,12 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         self.psd_noise_mean = None
         self.psd_noise_std = None
 
+    def reset_params(self, **params):
+        """
+            Updates the instance with changed parameters. Will delete the noise model
+        """
+        update_object_params(self, **params)
+
     def set_noise_model(self, noisy_pieces):
         psd_noise_models = np.concatenate([np.abs(self.STFT * xi)**2 for xi in noisy_pieces], axis=-1)
         self.psd_noise_mean = psd_noise_models.mean(axis=-1, keepdims=True)
@@ -86,7 +94,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
     def set_noise_model_by_intervals(self, data, intervals_sec):
         self.set_noise_model(self.split_data_by_intervals(data, intervals_sec))
 
-    def detect(self, x, verbose=True, full_info=False):
+    def _detect(self, x, verbose=True, full_info=False):
         assert self.psd_noise_mean is not None, f"Noise model must be set priorly, use `.set_noise_model(...)`"
 
         full_info = self._parse_info_dict(full_info)
@@ -157,6 +165,38 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 
         return PSDDetectionResult(**kwargs)
 
+    def detect(self, x: np.ndarray,
+               /,
+               verbose: bool = False,
+               full_info: Union[bool, str, List[str]] = False):
+        """
+            Performs the detection on the given dataset. If the data processing does not fit the available memory,
+            the data are split into chunks.
+
+            Arguments:
+                x : np.ndarray (..., N) : input data with any number of dimensions, but the last axis `N` must be Time.
+                verbose : bool : whether to print status and timing
+                full_info : bool / str / List[str] : whether to save workflow stages for further quality control.
+                        If `True`, then all stages are saved, if `False` then only the `detection` is saved.
+                        If string "plot" or "plt" is given, then only stages needed for plotting are saved.
+                        Available workflow stages, if any is listed then saved to result:
+                            - "signal" - input signal
+                            - "coefficients" - STFT coefficients
+                            - "spectrogram" - absolute value of `coefficients`
+                            - "noise_mean" - average of noise model
+                            - "noise_std" - average std of noise level
+                            - "spectrogram_SNR_trimmed" - `spectrogram / noise_std` trimmed by `noise_threshold`
+                            - "likelihood" - projected `spectrogram_SNR_clustered`
+                            - "detection" - binary classification [noise / signal], always returned.
+        """
+        n_chunks = self._split_data_by_memory(x, full_info=full_info, to_file=False)
+        single_chunk = n_chunks > 1
+        data_chunks = np.array_split(x, n_chunks, axis=-1)
+        results = []
+        for dc in tqdm(data_chunks, desc='Data chunks', display=single_chunk):
+            results.append(self._detect(dc, verbose=verbose, full_info=full_info))
+        return PSDDetectionResult.concatenate(*results)
+
     def __mul__(self, x):
         return self.detect(x, verbose=False, full_info=False)
 
@@ -221,7 +261,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 
         return CATSBase.memory_info(memory_usage_bytes, used_together, base_info, full_info)
 
-    def _split_data_by_memory(self, x, /, full_info, to_file=False):
+    def _split_data_by_memory(self, x, /, full_info, to_file):
         memory_info = self.memory_usage_estimate(x, full_info=full_info)
         return CATSBase.memory_chunks(memory_info, to_file)
 

@@ -3,13 +3,14 @@
 """
 
 from pydantic import BaseModel, Extra
-from typing import Callable, Union, Tuple
+from typing import Callable, Union, Tuple, List
 
 import numpy as np
 import holoviews as hv
 import numba as nb
+from tqdm.notebook import tqdm
 
-from cats.core.utils import ReshapeArraysDecorator, give_rectangles
+from cats.core.utils import ReshapeArraysDecorator, give_rectangles, update_object_params
 from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.projection import RemoveGaps, GiveIntervals
 from cats.core.association import PickFeatures
@@ -96,6 +97,9 @@ class STALTADetector(BaseModel, extra=Extra.allow):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._set_params()
+
+    def _set_params(self):
         self.windows_overlap_sec = max(self.windows_overlap_sec or 0, 0)
         self.step_sec = max(self.step_sec or self.dt_sec, self.dt_sec)
 
@@ -109,7 +113,13 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         self.ch_functions = {'abs': np.abs, 'square': np.square}
         self.ch_func = self.ch_functions[self.characteristic]
 
-    def detect(self, x, verbose=True, full_info=False):
+    def reset_params(self, **params):
+        """
+            Updates the instance with changed parameters.
+        """
+        update_object_params(self, **params)
+
+    def _detect(self, x, verbose=True, full_info=False):
         full_info = self._parse_info_dict(full_info)
 
         result = dict.fromkeys(full_info.keys())
@@ -157,6 +167,34 @@ class STALTADetector(BaseModel, extra=Extra.allow):
                   "history": history}
 
         return STALTADetectionResult(**kwargs)
+
+    def detect(self, x: np.ndarray,
+               /,
+               verbose: bool = False,
+               full_info: Union[bool, str, List[str]] = False):
+        """
+            Performs the detection on the given dataset. If the data processing does not fit the available memory,
+            the data are split into chunks.
+
+            Arguments:
+                x : np.ndarray (..., N) : input data with any number of dimensions, but the last axis `N` must be Time.
+                verbose : bool : whether to print status and timing
+                full_info : bool / str / List[str] : whether to save workflow stages for further quality control.
+                        If `True`, then all stages are saved, if `False` then only the `detection` is saved.
+                        If string "plot" or "plt" is given, then only stages needed for plotting are saved.
+                        Available workflow stages, if any is listed then saved to result:
+                            - "signal" - input signal
+                            - "likelihood" - calculated STA/LTA
+                            - "detection" - binary classification [noise / signal], always returned.
+        """
+
+        n_chunks = self._split_data_by_memory(x, full_info=full_info, to_file=False)
+        single_chunk = n_chunks > 1
+        data_chunks = np.array_split(x, n_chunks, axis=-1)
+        results = []
+        for dc in tqdm(data_chunks, desc='Data chunks', display=single_chunk):
+            results.append(self._detect(dc, verbose=verbose, full_info=full_info))
+        return STALTADetectionResult.concatenate(*results)
 
     def __mul__(self, x):
         return self.detect(x, verbose=False, full_info=False)
