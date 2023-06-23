@@ -232,7 +232,8 @@ def PickFeatures(likelihood, /, *features, time, min_likelihood, min_width_sec, 
 
 @ReshapeArraysDecorator(dim=0, input_num=2, output_num=1)
 def Associate(sequences, location_order, /, vote_rate,
-              max_dist_assignment, assignment_aggregate='mean', metric_order=1, method='manual'):
+              max_dist_assignment, assignment_aggregate='mean',
+              metric_order=1, method='manual'):
 
     # Ordering traces
     location = location_order.squeeze()
