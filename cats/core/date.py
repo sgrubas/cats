@@ -3,7 +3,6 @@ import numba as nb
 from .utils import ReshapeArraysDecorator
 from scipy import special, optimize
 
-MIN_DATE_BLOCK_SIZE = 250
 
 ########################  B-E-DATE   ########################
 
