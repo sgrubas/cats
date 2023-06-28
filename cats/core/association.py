@@ -5,6 +5,7 @@
 from typing import Union
 from pydantic import BaseModel
 from functools import partial
+from tqdm.notebook import tqdm
 
 import numpy as np
 import numba as nb
@@ -192,18 +193,21 @@ def sort_sequences(*sequences, aggregator=np.nanmin, sort_key=0):
     return stacked[:, sort_inds]
 
 
-def MatchSequences(*sequences, max_dist, aggregate='mean', metric_order=1, method='manual'):
+def MatchSequences(*sequences, max_dist, aggregate='mean', metric_order=1, method='manual', verbose=True):
     sequences = atleast_2d(*sequences)
     match_func = partial(MinWeightBipartiteMatching, max_dist=max_dist, order=metric_order, method=method)
 
-    seq_12 = sequences[:2]
-    inds_12 = match_func(*seq_12)
-    matched = list(map(fill_with_nan, seq_12, inds_12))
-    for seq_i in sequences[2:]:
-        seq_prev = Aggregator(method=aggregate)(matched)
-        inds_prev, inds_next = match_func(seq_prev, seq_i)
-        matched = list(map(partial(fill_with_nan, inds=inds_prev), matched))
-        matched.append(fill_with_nan(seq_i, inds_next))
+    with tqdm(desc="Association", total=len(sequences) - 1, disable=not verbose) as pbar:
+        seq_12 = sequences[:2]
+        inds_12 = match_func(*seq_12)
+        matched = list(map(fill_with_nan, seq_12, inds_12))
+        pbar.update()
+        for seq_i in sequences[2:]:
+            seq_prev = Aggregator(method=aggregate)(matched)
+            inds_prev, inds_next = match_func(seq_prev, seq_i)
+            matched = list(map(partial(fill_with_nan, inds=inds_prev), matched))
+            matched.append(fill_with_nan(seq_i, inds_next))
+            pbar.update()
 
     return sort_sequences(*matched).squeeze()
 
@@ -233,7 +237,7 @@ def PickFeatures(likelihood, /, *features, time, min_likelihood, min_width_sec, 
 @ReshapeArraysDecorator(dim=0, input_num=2, output_num=1)
 def Associate(sequences, location_order, /, vote_rate,
               max_dist_assignment, assignment_aggregate='mean',
-              metric_order=1, method='manual'):
+              metric_order=1, method='manual', verbose=True):
 
     # Ordering traces
     location = location_order.squeeze()
@@ -246,7 +250,7 @@ def Associate(sequences, location_order, /, vote_rate,
     # Association
     associated_sequences = MatchSequences(*sorted_sequences, max_dist=max_dist_assignment,
                                           aggregate=assignment_aggregate, metric_order=metric_order,
-                                          method=method)
+                                          method=method, verbose=verbose)
     del sorted_sequences
 
     associated_sequences = associated_sequences[unsort_inds]
