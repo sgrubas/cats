@@ -186,15 +186,16 @@ class CATSDetector(CATSBase):
             filepath = path_destination.as_posix()
 
         n_chunks = detector._split_data_by_memory(x, full_info=full_info, to_file=True)
-        multiple_chunks = n_chunks > 1
+        single_chunk = n_chunks <= 1
         file_chunks = np.array_split(x, n_chunks, axis=-1)
         for i, fc in enumerate(tqdm(file_chunks,
                                     desc='File chunks',
-                                    display=multiple_chunks)):
-            path_i = filepath + (f'_chunk_{i}' * multiple_chunks) + '.mat'
+                                    disable=single_chunk)):
+            chunk_suffix = (f'_chunk_{i}' * (not single_chunk))
+            path_i = filepath + chunk_suffix + '.mat'
             detector.detect(fc, verbose=verbose, full_info=full_info).save(path_i, compress=compress)
             if verbose:
-                print("Result" + f" chunk {i}" * multiple_chunks, f"has been saved to `{path_i}`",
+                print("Result" + f" chunk {i}" * (not single_chunk), f"has been saved to `{path_i}`",
                       sep=' ', end='\n\n')
 
     def detect_to_file(self, x, /, path_destination, verbose=False, full_info=False, compress=False):
