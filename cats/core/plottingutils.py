@@ -30,7 +30,7 @@ def plot_traces(data, time, detection=None, detection_time=None, picks=None, tra
 
     dloc = min(np.diff(loc_slice))
     scale = gain * dloc
-    amax = abs(data_slice).max(axis=-1).mean()
+    amax = np.median(abs(data_slice).max(axis=-1))
     dc = (data_slice / amax * scale)
     if clip:
         level = dloc / 2.1
