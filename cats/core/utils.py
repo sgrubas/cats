@@ -166,7 +166,6 @@ def format_interval_by_limits(interval, limits):
 
 def give_index_slice_by_limits(interval, dt):
     t1, t2 = interval
-
     ind_slice = slice(round(t1 / dt), round(t2 / dt) + 1)
     return ind_slice
 
@@ -193,7 +192,7 @@ def del_vals_by_keys(dict_vals: dict,
 
 
 def aggregate_array_by_axis_and_func(array, axis, func, min_last_dims):
-    if axis is not None:
+    if (array.ndim > min_last_dims) and (axis is not None):
         max_axis = axis if isinstance(axis, int) else max(axis)
         assert max_axis < array.ndim - min_last_dims
         array = func(array, axis=axis, keepdims=True)
@@ -226,3 +225,18 @@ def update_object_params(obj, **params):
         else:
             raise AttributeError(f'{type(obj)} has no attribute: {attribute}')
     obj._set_params()
+
+
+def give_nonzero_limits(array, initials=(1e-1, 1e1)):
+    arr_pos = array[array > 0]
+    zerosize = arr_pos.size == 0
+    cmin = initials[0] if zerosize else arr_pos.min()
+    cmax = initials[1] if zerosize else arr_pos.max()
+    return cmin, cmax
+
+
+@nb.vectorize(["f8(c16)", "f4(c8)"], cache=True)
+def complex_abs_square(x):
+    return x.real ** 2 + x.imag ** 2
+
+
