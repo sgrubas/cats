@@ -11,9 +11,10 @@ import holoviews as hv
 import numpy as np
 from pathlib import Path
 from tqdm.notebook import tqdm
+# import gc
 
 from .baseclass import CATSBase, CATSResult
-from .core.association import PickFeatures
+from .core.association import PickDetectedPeaks
 from .core.projection import GiveIntervals, FillGaps
 from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles
 from .core.utils import get_interval_division, aggregate_array_by_axis_and_func
@@ -21,7 +22,8 @@ from .io import read_data
 
 
 # TODO:
-#   - add StatusKeeper to auto data processing on files
+#   ? add StatusKeeper to auto data processing on files
+#   ? Incorporate Garbage Collector
 
 
 class CATSDetector(CATSBase):
@@ -54,25 +56,20 @@ class CATSDetector(CATSBase):
 
         del counts
         del_vals_by_keys(result, full_info, ['spectrogram_SNR_clustered',
-                                             'spectrogram_cluster_ID',
-                                             'detection'])
-
-        stft_time = self.STFT.forward_time_axis(x.shape[-1])
+                                             'spectrogram_cluster_ID'])
 
         # Picking
         # peak_freqs = self.stft_frequency[np.argmax(SNRK_aggr, axis=-2)]
         if full_info['picked_features']:
             with history(current_process='Picking'):
-                result['picked_features'] = PickFeatures(result['likelihood'],
-                                                         time=stft_time,
-                                                         min_likelihood=self.minSNR,
-                                                         min_width_sec=self.cluster_size_t_sec,
-                                                         num_features=None)
+                result['picked_features'] = PickDetectedPeaks(result['likelihood'], result['detection'],
+                                                              dt=self.stft_hop_sec)
 
-        del_vals_by_keys(result, full_info, ['likelihood'])
+        del_vals_by_keys(result, full_info, ['likelihood', 'detection'])
 
         history.print_total_time()
 
+        stft_time = self.STFT.forward_time_axis(x.shape[-1])
         frames = get_interval_division(N=len(stft_time), L=self.stationary_frame_len)
 
         from_full_info = {kw: result.get(kw, None) for kw in full_info}
@@ -244,13 +241,13 @@ class CATSDetector(CATSBase):
 
 class CATSDetectionResult(CATSResult):
 
-    def plot(self, ind, time_interval_sec=None):
-        fig, opts, inds_slices = super().plot(ind, time_interval_sec)
+    def plot(self, ind=None, time_interval_sec=None):
+        fig, opts, inds_slices, time_interval_sec = super().plot(ind, time_interval_sec)
         t_dim = hv.Dimension('Time', unit='s')
         L_dim = hv.Dimension('Likelihood')
 
-        i_stft = inds_slices[2]
-        inds_stft = inds_slices[0] + (i_stft,)
+        ind = inds_slices[0]
+        inds_stft = ind + (inds_slices[2],)
 
         stft_time = self.stft_time(time_interval_sec)
 
@@ -262,7 +259,7 @@ class CATSDetectionResult(CATSResult):
         likelihood_fig = hv.Curve((stft_time, likelihood),
                                   kdims=[t_dim], vdims=L_dim)
 
-        if self.picked_features is not None:
+        if getattr(self, 'picked_features', None) is not None:
             P = self.picked_features[ind]
             P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
             peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
@@ -271,7 +268,7 @@ class CATSDetectionResult(CATSResult):
             peaks_fig = None
 
         intervals = GiveIntervals(self.detection[inds_stft])
-        interv_height = (likelihood.max() / 2) * 1.1
+        interv_height = (np.max(likelihood) / 2) * 1.1
         rectangles = give_rectangles(intervals, stft_time, [interv_height], interv_height)
         intervals_fig = hv.Rectangles(rectangles,
                                       kdims=[t_dim, L_dim, 't2', 'l2']).opts(color='blue',
@@ -283,7 +280,8 @@ class CATSDetectionResult(CATSResult):
         if peaks_fig is not None:
             last_figs.append(peaks_fig)
 
-        fig4 = hv.Overlay(last_figs, label='4. Projection: $L_k$').opts(**ref_kw_opts)
+        fig4 = hv.Overlay(last_figs, label='4. Likelihood and Detection:'
+                                           ' $\mathcal{L}(t)$ and $\mathcal{D}(t)$').opts(**ref_kw_opts)
 
         return (fig + fig4).opts(*opts).cols(1)
 
