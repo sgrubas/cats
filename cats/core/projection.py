@@ -60,7 +60,7 @@ def _giveIntervalsN(detection):
 
 @ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=False, output_num=0, first_shape=True)
 def GiveIntervals(detection, /):
-    return _giveIntervalsN(detection)
+    return np.array(_giveIntervalsN(detection).astype(bool), dtype=object)
 
 
 @nb.njit("b1[:, :](b1[:, :], i8, i8)", cache=True)
