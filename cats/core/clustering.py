@@ -14,8 +14,8 @@ from scipy import special, stats
 #  - make sure that uint16 for cluster indexes is enough
 
 
-@nb.njit(["Tuple((f8[:, :], u2[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)",
-          "Tuple((f4[:, :], u2[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)"], cache=True)
+@nb.njit(["Tuple((f8[:, :], u4[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)",
+          "Tuple((f4[:, :], u4[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)"], cache=True)
 def _Clustering2D(SNR, q, s, minSNR):
     B = SNR > 0
     shape = B.shape
@@ -70,7 +70,7 @@ def _Clustering2D(SNR, q, s, minSNR):
                 C[l1, l2] = cluster_assigned
 
     # filtering clusters and projection
-    K = np.full(shape, 0, dtype=np.uint16)
+    K = np.full(shape, 0, dtype=np.uint32)
     SNRK = np.zeros_like(SNR)
     k = 1
     for cl in clusters:
@@ -88,12 +88,12 @@ def _Clustering2D(SNR, q, s, minSNR):
     return SNRK, K
 
 
-@nb.njit(["Tuple((f8[:, :, :], u2[:, :, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)",
-          "Tuple((f4[:, :, :], u2[:, :, :]))(f4[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)"],
+@nb.njit(["Tuple((f8[:, :, :], u4[:, :, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)",
+          "Tuple((f4[:, :, :], u4[:, :, :]))(f4[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)"],
          parallel=True, cache=True)
 def _ClusteringN2D(SNR, q, s, minSNR):
     SNRK = np.empty_like(SNR)
-    K = np.empty(SNR.shape, dtype=np.uint16)
+    K = np.empty(SNR.shape, dtype=np.uint32)
     for i in nb.prange(SNR.shape[0]):
         SNRK[i], K[i] = _Clustering2D(SNR[i], q, s, minSNR)
     return SNRK, K
@@ -104,8 +104,8 @@ def _ClusteringN2D_API(SNR, /, q, s, minSNR):
     return _ClusteringN2D(SNR, q, s, minSNR)
 
 
-@nb.njit(["Tuple((f8[:, :, :], u2[:, :, :]))(f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)",
-          "Tuple((f4[:, :, :], u2[:, :, :]))(f4[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)"], cache=True)
+@nb.njit(["Tuple((f8[:, :, :], u4[:, :, :]))(f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)",
+          "Tuple((f4[:, :, :], u4[:, :, :]))(f4[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)"], cache=True)
 def _Clustering3D(SNR, q, s, minSNR):
     B = SNR > 0
     shape = B.shape
@@ -162,7 +162,7 @@ def _Clustering3D(SNR, q, s, minSNR):
                 C[l1, l2, l3] = cluster_assigned
 
     # filtering clusters and projection
-    K = np.full(shape, 0, dtype=np.uint16)
+    K = np.full(shape, 0, dtype=np.uint32)
     SNRK = np.zeros_like(SNR)
     k = 1
     for cl in clusters:
@@ -182,12 +182,12 @@ def _Clustering3D(SNR, q, s, minSNR):
     return SNRK, K
 
 
-@nb.njit(["Tuple((f8[:, :, :, :], u2[:, :, :, :]))(f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)",
-          "Tuple((f4[:, :, :, :], u2[:, :, :, :]))(f4[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)"],
+@nb.njit(["Tuple((f8[:, :, :, :], u4[:, :, :, :]))(f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)",
+          "Tuple((f4[:, :, :, :], u4[:, :, :, :]))(f4[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)"],
          parallel=True, cache=True)
 def _ClusteringN3D(SNR, q, s, minSNR):
     SNRK = np.empty_like(SNR)
-    K = np.empty(SNR.shape, dtype=np.uint16)
+    K = np.empty(SNR.shape, dtype=np.uint32)
     for i in nb.prange(SNR.shape[0]):
         SNRK[i], K[i] = _Clustering3D(SNR[i], q, s, minSNR)
     return SNRK, K
@@ -212,6 +212,7 @@ def Clustering(SNR, /, q, s, minSNR):
                                                 `q_c` for traces, `q_f` for frequency, `q_t` for time.
             s : tuple(int, 2) / tuple(int, 3) : minimum cluster sizes `(s_f, s_t)` or `(s_c, s_f, s_t)`.
                                                 `s_c` for traces, `s_f` for frequency, `s_t` for time.
+            minSNR : float : minimum SNR of clusters
     """
     func = {2: _ClusteringN2D_API, 3: _ClusteringN3D_API}
     return func[len(q)](SNR, q, s, minSNR)
