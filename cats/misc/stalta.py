@@ -13,7 +13,7 @@ from tqdm.notebook import tqdm
 from cats.core.utils import ReshapeArraysDecorator, give_rectangles, update_object_params
 from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.projection import RemoveGaps, GiveIntervals
-from cats.core.association import PickFeatures
+from cats.core.association import PickDetectedPeaks
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
 from cats.baseclass import CATSResult, CATSBase
 from cats.detection import CATSDetector
@@ -148,11 +148,8 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         # Picking
         if full_info['picked_features']:
             with history(current_process='Picking'):
-                result['picked_features'] = PickFeatures(result['likelihood'],
-                                                         time=stalta_time,
-                                                         min_likelihood=self.threshold,
-                                                         min_width_sec=self.min_duration_sec,
-                                                         num_features=None)
+                result['picked_features'] = PickDetectedPeaks(result['likelihood'], result['detection'],
+                                                              dt=self.step_sec)
         del_vals_by_keys(result, full_info, ['likelihood'])
 
         history.print_total_time()
@@ -280,7 +277,9 @@ class STALTADetectionResult(CATSResult):
         self.threshold = threshold
         self.history = history
 
-    def plot(self, ind, time_interval_sec=(None, None)):
+    def plot(self, ind=None, time_interval_sec=(None, None)):
+        if ind is None:
+            ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')
         L_dim = hv.Dimension('Likelihood')
 
@@ -289,7 +288,7 @@ class STALTADetectionResult(CATSResult):
         t1, t2 = time_interval_sec
 
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
-        i_stalta = give_index_slice_by_limits(time_interval_sec, self.stft_dt_sec)
+        i_stalta = give_index_slice_by_limits(time_interval_sec, self.stalta_dt_sec)
         inds_time = ind + (i_time,)
         inds_stalta = ind + (i_stalta,)
 
@@ -297,15 +296,15 @@ class STALTADetectionResult(CATSResult):
         stalta_time = self.stalta_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims='Amplitude',
-                        label='0. Input data: $x_n$').opts(xlabel='', linewidth=0.2)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
 
         likelihood = np.nan_to_num(self.likelihood[inds_stalta],
-                                   posinf=10 * self.minSNR,
-                                   neginf=-10 * self.minSNR)  # POSSIBLE `NAN` AND `INF` VALUES!
+                                   posinf=10 * self.threshold,
+                                   neginf=-10 * self.threshold)  # POSSIBLE `NAN` AND `INF` VALUES!
         likelihood_fig = hv.Curve((stalta_time, likelihood), kdims=[t_dim], vdims=L_dim)
 
         # Peaks
-        if self.picked_features is not None:
+        if getattr(self, 'picked_features', None) is not None:
             P = self.picked_features[ind]
             P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
             peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
@@ -315,7 +314,7 @@ class STALTADetectionResult(CATSResult):
 
         # Intervals
         intervals = GiveIntervals(self.detection[inds_stalta])
-        interv_height = (likelihood.max() / 2) * 1.1
+        interv_height = (np.max(likelihood) / 2) * 1.1
         rectangles = give_rectangles(intervals, stalta_time, [interv_height], interv_height)
         intervals_fig = hv.Rectangles(rectangles,
                                       kdims=[t_dim, L_dim, 't2', 'l2']).opts(color='blue',
@@ -327,7 +326,8 @@ class STALTADetectionResult(CATSResult):
         if peaks_fig is not None:
             last_figs.append(peaks_fig)
 
-        fig1 = hv.Overlay(last_figs, label='1. STA/LTA: $r_n$')
+        fig1 = hv.Overlay(last_figs, label='1. Likelihood and Detection:'
+                                           ' $\mathcal{L}(t)$ and $\mathcal{D}(t)$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250

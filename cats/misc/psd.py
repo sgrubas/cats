@@ -3,7 +3,7 @@
 """
 
 from pydantic import BaseModel, Field, Extra
-from typing import Callable, Union, Tuple, List
+from typing import Callable, Union, Tuple, List, Any
 from pathlib import Path
 from tqdm.notebook import tqdm
 
@@ -11,10 +11,10 @@ import numpy as np
 import holoviews as hv
 from cats.core.projection import RemoveGaps, GiveIntervals
 from cats.core.timefrequency import STFTOperator
-from cats.core.association import PickFeatures
+from cats.core.association import PickDetectedPeaks
 from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
-from cats.core.utils import give_rectangles, update_object_params
+from cats.core.utils import give_rectangles, update_object_params, give_nonzero_limits, complex_abs_square
 from cats.baseclass import CATSResult, CATSBase
 from cats.detection import CATSDetector
 from cats.io import read_data
@@ -40,13 +40,17 @@ class PSDDetector(BaseModel, extra=Extra.allow):
     aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
     pick_features: bool = False
 
+    psd_noise_models: Any = None
+    psd_noise_mean: Any = None
+    psd_noise_std: Any = None
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._set_params()
 
     def _set_params(self):
-        self.STFT = STFTOperator(window=self.stft_window_sec, overlap=self.stft_overlap, dt=self.dt_sec,
-                                 nfft=self.stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
+        self.STFT = STFTOperator(window_specs=(self.stft_window_type, self.stft_window_sec), overlap=self.stft_overlap,
+                                 dt_sec=self.dt_sec, nfft=self.stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
         self.stft_overlap_len = self.STFT.noverlap
         self.stft_overlap_sec = self.stft_overlap_len * self.dt_sec
         self.stft_window = self.STFT.window
@@ -70,10 +74,6 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         self.ch_functions = {'abs': lambda x: x, 'square': np.square}
         self.ch_func = self.ch_functions[self.characteristic]
 
-        self.psd_noise_models = None
-        self.psd_noise_mean = None
-        self.psd_noise_std = None
-
     def reset_params(self, **params):
         """
             Updates the instance with changed parameters. Will delete the noise model
@@ -81,7 +81,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         update_object_params(self, **params)
 
     def set_noise_model(self, noisy_pieces):
-        psd_noise_models = np.concatenate([np.abs(self.STFT * xi)**2 for xi in noisy_pieces], axis=-1)
+        psd_noise_models = np.concatenate([complex_abs_square(self.STFT * xi) for xi in noisy_pieces], axis=-1)
         self.psd_noise_mean = psd_noise_models.mean(axis=-1, keepdims=True)
         self.psd_noise_std = psd_noise_models.std(axis=-1, keepdims=True)
         del psd_noise_models
@@ -141,11 +141,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         # Picking
         if full_info['picked_features']:
             with history(current_process='Picking'):
-                result['picked_features'] = PickFeatures(result['likelihood'],
-                                                         time=stft_time,
-                                                         min_likelihood=self.threshold,
-                                                         min_width_sec=self.min_duration_sec,
-                                                         num_features=None)
+                result['picked_features'] = PickDetectedPeaks(result['likelihood'], result['detection'],
+                                                              dt=self.stft_hop_sec)
         del_vals_by_keys(result, full_info, ['likelihood'])
 
         history.print_total_time()
@@ -304,8 +301,7 @@ class PSDDetectionResult(CATSResult):
                  stft_npts=None,
                  stft_frequency=None,
                  threshold=None,
-                 history=None,
-                 **kwargs
+                 history=None
                  ):
 
         # Numpy arrays
@@ -329,7 +325,9 @@ class PSDDetectionResult(CATSResult):
         self.threshold = threshold
         self.history = history
 
-    def plot(self, ind, time_interval_sec=None):
+    def plot(self, ind=None, time_interval_sec=None):
+        if ind is None:
+            ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')
         A_dim = hv.Dimension('Amplitude')
@@ -347,25 +345,28 @@ class PSDDetectionResult(CATSResult):
         inds_Stft = ind + (slice(None), i_stft)
 
         PSD = self.spectrogram[inds_Stft]
-        B = PSD * (self.spectrogram_SNR_trimmed[inds_Stft] > 0)
+        SNR = self.spectrogram_SNR_trimmed[inds_Stft]
+
+        PSD_clims = give_nonzero_limits(PSD, initials=(1e-1, 1e1))
+        SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
 
         time = self.time(time_interval_sec)
         stft_time = self.stft_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
-                        label='0. Input data: $x_n$').opts(xlabel='', linewidth=0.2)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
-                        label='1. Spectrogram: $|X_{k,m}|$')
-        fig2 = hv.Image((stft_time, self.stft_frequency, B), kdims=[t_dim, f_dim],
-                        label='2. Trimming by noise level: $B_{k,m} \cdot |X_{k,m}|$')
+                        label='1. Spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims)
+        fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
+                        label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
 
         likelihood = np.nan_to_num(self.likelihood[inds_stft],
-                                   posinf=10 * self.minSNR,
-                                   neginf=-10 * self.minSNR)  # POSSIBLE `NAN` AND `INF` VALUES!
+                                   posinf=10 * self.threshold,
+                                   neginf=-10 * self.threshold)  # POSSIBLE `NAN` AND `INF` VALUES!
         likelihood_fig = hv.Curve((stft_time, likelihood),
                                   kdims=[t_dim], vdims=L_dim)
 
-        if self.picked_features is not None:
+        if getattr(self, 'picked_features', None) is not None:
             P = self.picked_features[ind]
             P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
             peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
@@ -374,7 +375,7 @@ class PSDDetectionResult(CATSResult):
             peaks_fig = None
 
         intervals = GiveIntervals(self.detection[inds_stft])
-        interv_height = (likelihood.max() / 2) * 1.1
+        interv_height = (np.max(likelihood) / 2) * 1.1
         rectangles = give_rectangles(intervals, stft_time, [interv_height], interv_height)
         intervals_fig = hv.Rectangles(rectangles,
                                       kdims=[t_dim, L_dim, 't2', 'l2']).opts(color='blue',
@@ -386,17 +387,14 @@ class PSDDetectionResult(CATSResult):
         if peaks_fig is not None:
             last_figs.append(peaks_fig)
 
-        fig3 = hv.Overlay(last_figs, label='3. Projection: $L_k$')
+        fig3 = hv.Overlay(last_figs, label='3. Likelihood and Detection:'
+                                           ' $\mathcal{L}(t)$ and $\mathcal{D}(t)$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250; cmap = 'viridis'
-        PSD_pos = PSD[PSD > 0]
-        cmin = 1e-1 if (PSD_pos.size == 0) else PSD_pos.min()
-        cmax = 1e1 if (PSD_pos.size == 0) else PSD_pos.max()
-        clim = (cmin, cmax)
         xlim = time_interval_sec
         ylim = (1e-1, None)
-        spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim, clim=clim,
+        spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts  = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, show_legend=False)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
