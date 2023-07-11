@@ -17,6 +17,7 @@ from .core.date import BEDATE, EtaToSigma
 from .core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
 from .core.utils import get_interval_division, format_index_by_dims, cast_to_bool_dict, StatusKeeper
 from .core.utils import format_interval_by_limits, give_index_slice_by_limits, del_vals_by_keys, update_object_params
+from .core.utils import give_nonzero_limits
 from .core.thresholding import ThresholdingSNR
 
 
@@ -115,10 +116,11 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
     def _set_params(self):
         # Setting STFT
-        self.STFT = STFTOperator(window=(self.stft_window_type, self.stft_window_sec), overlap=self.stft_overlap,
-                                 dt=self.dt_sec, nfft=self.stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
+        self.STFT = STFTOperator(window_specs=(self.stft_window_type, self.stft_window_sec), overlap=self.stft_overlap,
+                                 dt_sec=self.dt_sec, nfft=self.stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
         self.stft_overlap_len = self.STFT.noverlap
         self.stft_overlap_sec = (self.stft_overlap_len - 1) * self.dt_sec
+
         self.stft_window = self.STFT.window
         self.stft_window_len = len(self.stft_window)
         self.stft_window_sec = (self.stft_window_len - 1) * self.dt_sec
@@ -220,7 +222,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
             s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
 
             result['spectrogram_SNR_clustered'] = np.zeros_like(result['spectrogram_SNR_trimmed'])
-            result['spectrogram_cluster_ID'] = np.zeros(result['spectrogram_SNR_trimmed'].shape, dtype=np.uint16)
+            result['spectrogram_cluster_ID'] = np.zeros(result['spectrogram_SNR_trimmed'].shape, dtype=np.uint32)
 
             result['spectrogram_SNR_clustered'][bandpass_slice], result['spectrogram_cluster_ID'][bandpass_slice] = \
                 Clustering(result['spectrogram_SNR_trimmed'][bandpass_slice], q=q, s=s, minSNR=self.minSNR)
@@ -269,7 +271,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
             "noise_std":                  1. * precision_order * bedate_size,    # float
             "spectrogram_SNR_trimmed":    1. * precision_order * stft_size,      # float
             "spectrogram_SNR_clustered":  1. * precision_order * stft_size,      # float
-            "spectrogram_cluster_ID":     2. * stft_size,                    # uint16 always
+            "spectrogram_cluster_ID":     4. * stft_size,                    # uint32 always
         }
         used_together = [('coefficients', 'spectrogram'),
                          ('spectrogram', 'noise_threshold', 'noise_std', 'spectrogram_SNR_trimmed'),
@@ -362,15 +364,22 @@ class CATSResult:
         if time_interval_sec is None:
             return np.arange(self.npts) * self.dt_sec
         else:
-            return np.arange(time_interval_sec[0], time_interval_sec[1] + self.dt_sec, self.dt_sec)
+            time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
+            time_slice = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
+            return np.arange(time_slice.start, time_slice.stop) * self.dt_sec
 
     def stft_time(self, time_interval_sec=None):
         if time_interval_sec is None:
             return self.stft_t0_sec + np.arange(self.stft_npts) * self.stft_dt_sec
         else:
-            return np.arange(time_interval_sec[0], time_interval_sec[1] + self.stft_dt_sec, self.stft_dt_sec)
+            time_interval_sec = format_interval_by_limits(time_interval_sec,
+                                                          (0, (self.stft_npts - 1) * self.stft_dt_sec))
+            time_slice = give_index_slice_by_limits(time_interval_sec, self.stft_dt_sec)
+            return self.stft_t0_sec + np.arange(time_slice.start, time_slice.stop) * self.stft_dt_sec
 
-    def plot(self, ind, time_interval_sec=None):
+    def plot(self, ind=None, time_interval_sec=None):
+        if ind is None:
+            ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')
         a_dim = hv.Dimension('Amplitude')
@@ -383,39 +392,38 @@ class CATSResult:
         inds_time = ind + (i_time,)
         inds_stft = ind + (slice(None), i_stft)
 
-        psd = self.spectrogram[inds_stft]
-        B = psd * (self.spectrogram_SNR_trimmed[inds_stft] > 0)
-        C = psd * (self.spectrogram_SNR_clustered[inds_stft] > 0)
+        PSD = self.spectrogram[inds_stft]
+        SNR = self.spectrogram_SNR_trimmed[inds_stft]
+        C = self.spectrogram_SNR_clustered[inds_stft]
+
+        PSD_clims = give_nonzero_limits(PSD, initials=(1e-1, 1e1))
+        SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
 
         time = self.time(time_interval_sec)
         stft_time = self.stft_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
-                        label='0. Input data: $x_n$').opts(xlabel='', linewidth=0.2)
-        fig1 = hv.Image((stft_time, self.stft_frequency, psd), kdims=[t_dim, f_dim],
-                        label='1. Spectrogram: $|X_{k,m}|$')
-        fig2 = hv.Image((stft_time, self.stft_frequency, B), kdims=[t_dim, f_dim],
-                        label='2. Trimming by B-E-DATE: $B_{k,m} \cdot |X_{k,m}|$')
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
+        fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
+                        label='1. Spectrogram: $|X(t,f)|$').opts(clim=PSD_clims)
+        fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
+                        label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
         fig3 = hv.Image((stft_time, self.stft_frequency, C), kdims=[t_dim, f_dim],
-                        label='3. Clustering: $C_{k,m} \cdot |X_{k,m}|$')
+                        label='3. Clustered SNR spectrogram: $\mathcal{L}(t,f)$').opts(clim=SNR_clims)
 
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250
         cmap = 'viridis'
-        PSD_pos = psd[psd > 0]
-        cmin = 1e-1 if (PSD_pos.size == 0) else PSD_pos.min()
-        cmax = 1e1 if (PSD_pos.size == 0) else PSD_pos.max()
-        clim = (cmin, cmax)
         xlim = time_interval_sec
         ylim = (1e-1, None)
-        spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim, clim=clim,
+        spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      aspect_weight=0, sublabel_format='')
         inds_slices = (ind, i_time, i_stft)
         figs = (fig0 + fig1 + fig2 + fig3)
-        return figs, (layout_opts, spectr_opts, curve_opts), inds_slices
+        return figs, (layout_opts, spectr_opts, curve_opts), inds_slices, time_interval_sec
 
     def append(self, other):
 
