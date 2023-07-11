@@ -125,7 +125,7 @@ def _Xi(d, rho, d_unique=None):
         return _xi(d, rho)
     else:
         d_unique = d_unique if d_unique else np.unique(d).ravel()
-        xsi_kw = {di : _xi(di, rho) for di in d_unique}
+        xsi_kw = {di: _xi(di, rho) for di in d_unique}
         
         xsi = np.empty_like(d, dtype=float)
         for ind, di in np.ndenumerate(d):
