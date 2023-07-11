@@ -77,7 +77,7 @@ def _removeGaps(detection, min_separation, min_width):
                 intv_old = buffer[-1]
                 if ((intv_new[0] - intv_old[1] - 1) <= min_separation) and \
                    (((intv_new[1] - intv_new[0] + 1) < min_width) or
-                    ((intv_old[1] - intv_old[0] + 1) < min_width)):
+                   ((intv_old[1] - intv_old[0] + 1) < min_width)):
 
                     buffer[-1] = (intv_old[0], intv_new[1])
                 else:
@@ -95,7 +95,7 @@ def RemoveGaps(detection, /, min_separation, min_width):
     return _removeGaps(detection, min_separation, min_width)
 
 
-@nb.njit(["b1[:](i8[:])", "b1[:](i4[:])", "b1[:](u2[:])"])
+@nb.njit(["b1[:](i8[:])", "b1[:](i4[:])", "b1[:](u2[:])", "b1[:](u4[:])"])
 def _fill_gaps(labeled_sequence):
     binary_sequence = np.full_like(labeled_sequence, False, dtype=np.bool_)
     K = labeled_sequence.max()
@@ -107,9 +107,8 @@ def _fill_gaps(labeled_sequence):
     return binary_sequence
 
 
-@nb.njit(["b1[:, :](i8[:, :])",
-          "b1[:, :](i4[:, :])",
-          "b1[:, :](u2[:, :])"], parallel=True)
+@nb.njit(["b1[:, :](i8[:, :])", "b1[:, :](i4[:, :])",
+          "b1[:, :](u2[:, :])", "b1[:, :](u4[:, :])"], parallel=True)
 def _fill_gaps_nd(labeled_sequences):
     M, N = labeled_sequences.shape
     binary_sequences = np.empty((M, N), dtype=np.bool_)
@@ -236,7 +235,7 @@ def FilterIntervals(detection, max_gap, min_width, time=None):
 @nb.njit("b1[:](f8[:, :], i8, f8)", cache=True)
 def _projectIntervals(intervals, N, dt):
     """
-        Projects `True` values onto time axis with sampling `dt` and length `N`.
+        Projects `True` values onto time axis with sampling `dt_sec` and length `N`.
 
         Arguments:
             intervals : np.ndarray (nt, 2) : `nt` time intervals
