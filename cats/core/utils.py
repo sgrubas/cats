@@ -146,9 +146,9 @@ def _scalarORarray_to_tuple(d, minsize):
     return d
 
 
-def format_index_by_dims(ind, reference_shape):
+def format_index_by_dims(ind, reference_shape, min_dims=1):
     ind = tuple(ind) if isinstance(ind, (tuple, list)) else (ind,)
-    assert len(ind) == len(reference_shape) - 1, f"Index must correspond to data dimension shape {reference_shape}"
+    assert len(ind) == len(reference_shape) - min_dims, f"Index must correspond to data dimension shape {reference_shape}"
     return ind
 
 
@@ -164,9 +164,9 @@ def format_interval_by_limits(interval, limits):
     return interval
 
 
-def give_index_slice_by_limits(interval, dt):
+def give_index_slice_by_limits(interval, dt, t0=0):
     t1, t2 = interval
-    ind_slice = slice(round(t1 / dt), round(t2 / dt) + 1)
+    ind_slice = slice(round((t1 - t0) / dt), round((t2 - t0) / dt) + 1)
     return ind_slice
 
 
@@ -199,19 +199,21 @@ def aggregate_array_by_axis_and_func(array, axis, func, min_last_dims):
     return array
 
 
-@nb.njit("List(UniTuple(f8, 4))(i8[:, :], f8[:], f8, f8)")
-def _give_rectangles(events, time, yloc, dy):
+@nb.njit(["List(UniTuple(f8, 4))(f8[:, :], f8, f8)",
+          "List(Tuple((i8, f8, i8, f8)))(i8[:, :], f8, f8)"])
+def _give_rectangles(events, yloc, dy):
     rectangles = []
-    for e1, e2 in events:
-        rectangles.append((time[e1], yloc - dy, time[e2], yloc + dy))
+    for t1, t2 in events:
+        rectangles.append((t1, yloc - dy, t2, yloc + dy))
     return rectangles
 
 
-def give_rectangles(events, time, yloc, dy):
+def give_rectangles(events, yloc, dy):
     rectangles = []
-    for i, (trace, yi) in enumerate(zip(events, yloc)):
-        if len(trace) > 0:
-            rectangles += _give_rectangles(trace, time, yi, dy)
+    if len(events) > 0:
+        for trace, yi in zip(events, yloc):
+            if len(trace) > 0:
+                rectangles += _give_rectangles(trace, yi, dy)
     return rectangles
 
 
