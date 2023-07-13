@@ -9,14 +9,14 @@ from tqdm.notebook import tqdm
 
 import numpy as np
 import holoviews as hv
-from cats.core.projection import RemoveGaps, GiveIntervals
+from cats.core.projection import FilterDetection
 from cats.core.timefrequency import STFTOperator
 from cats.core.association import PickDetectedPeaks
 from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
 from cats.core.utils import give_rectangles, update_object_params, give_nonzero_limits, complex_abs_square
-from cats.baseclass import CATSResult, CATSBase
-from cats.detection import CATSDetector
+from cats.baseclass import CATSBase
+from cats.detection import CATSDetector, CATSDetectionResult
 from cats.io import read_data
 
 
@@ -38,7 +38,6 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 
     aggregate_axis_for_likelihood: Union[int, Tuple[int]] = None
     aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
-    pick_features: bool = False
 
     psd_noise_models: Any = None
     psd_noise_mean: Any = None
@@ -114,7 +113,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         del_vals_by_keys(result, full_info, ['coefficients'])
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
 
-        with history(current_process='Thresholding'):
+        with history(current_process='Trimming'):
             result['spectrogram_SNR_trimmed'] = np.zeros_like(result['spectrogram'])
             result['spectrogram_SNR_trimmed'][bandpass_slice] = \
                 result['spectrogram'][bandpass_slice] - self.psd_noise_mean[bandpass_slice]
@@ -125,25 +124,26 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                          self.ch_func(result['spectrogram_SNR_trimmed']), 0.0)
 
         with history(current_process='Likelihood'):
-            result['spectrogram_SNR_trimmed'] = \
-                aggregate_array_by_axis_and_func(result['spectrogram_SNR_trimmed'],
-                                                 self.aggregate_axis_for_likelihood,
-                                                 self.aggregate_func_for_likelihood,
-                                                 min_last_dims=2)
-
+            # Aggregation
             result['likelihood'] = result['spectrogram_SNR_trimmed'].mean(axis=-2)
-            result['detection'] = RemoveGaps(result['likelihood'] > self.threshold,
-                                             self.min_separation_len,
-                                             self.min_duration_len)
+            result['likelihood'] = aggregate_array_by_axis_and_func(result['likelihood'],
+                                                                    self.aggregate_axis_for_likelihood,
+                                                                    self.aggregate_func_for_likelihood,
+                                                                    min_last_dims=1)
 
         del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed'])
 
-        # Picking
-        if full_info['picked_features']:
-            with history(current_process='Picking'):
-                result['picked_features'] = PickDetectedPeaks(result['likelihood'], result['detection'],
-                                                              dt=self.stft_hop_sec)
-        del_vals_by_keys(result, full_info, ['likelihood'])
+        with history(current_process='Detecting intervals'):
+            result['detection'], result['detected_intervals'] = \
+                FilterDetection(result['likelihood'] > self.threshold,
+                                min_separation=self.min_separation_len, min_duration=self.min_duration_len)
+
+            result['picked_features'] = PickDetectedPeaks(result['likelihood'], result['detected_intervals'],
+                                                          dt=self.stft_hop_sec, t0=stft_time[0])
+
+            result['detected_intervals'] = result['detected_intervals'] * self.stft_hop_sec + stft_time[0]
+
+        del_vals_by_keys(result, full_info, ['likelihood', 'detection', 'detected_intervals', 'picked_features'])
 
         history.print_total_time()
 
@@ -158,7 +158,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                   "stft_npts": len(stft_time),
                   "stft_frequency": self.stft_frequency,
                   "threshold": self.threshold,
-                  "history": history}
+                  "history": history,
+                  "aggregate_axis_for_likelihood": self.aggregate_axis_for_likelihood}
 
         return PSDDetectionResult(**kwargs)
 
@@ -185,6 +186,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                             - "spectrogram_SNR_trimmed" - `spectrogram / noise_std` trimmed by `noise_threshold`
                             - "likelihood" - projected `spectrogram_SNR_clustered`
                             - "detection" - binary classification [noise / signal], always returned.
+                            - "detected_intervals" - detected intervals (start, end) in seconds (always returned)
+                            - "picked_features" - features in intervals [onset, peak likelihood] (always returned)
         """
         n_chunks = self._split_data_by_memory(x, full_info=full_info, to_file=False)
         single_chunk = n_chunks > 1
@@ -207,6 +210,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                      "spectrogram_SNR_trimmed",
                      "likelihood",
                      "detection",
+                     "detected_intervals",
                      "picked_features"]
 
         if isinstance(full_info, str) and \
@@ -214,12 +218,13 @@ class PSDDetector(BaseModel, extra=Extra.allow):
             full_info = {'signal':                  True,
                          'spectrogram':             True,
                          'spectrogram_SNR_trimmed': True,
-                         'likelihood':              True}
-
+                         'likelihood':              True,
+                         'detected_intervals':      True,
+                         'picked_features':         True}
         full_info = cast_to_bool_dict(full_info, info_keys)
 
-        full_info["detection"] = True  # default saved result
-        full_info["picked_features"] = self.pick_features  # non-default result
+        full_info["detected_intervals"] = True  # default saved result
+        full_info["picked_features"] = True     # default saved result
 
         return full_info
 
@@ -237,6 +242,11 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         x_bytes = x.nbytes
         precision_order = x_bytes / x.size
 
+        aggregated_axis_len = x.shape[ax] if (ax := self.aggregate_axis_for_likelihood) is not None else 1
+        n, mod = divmod(stft_time_len, self.min_duration_len + self.min_separation_len)
+        num_intervals = n + mod // self.min_duration_len  # upper bound estimate
+        intervals_size = 2 * np.prod(x.shape[:-1]) / aggregated_axis_len * num_intervals
+
         memory_usage_bytes = {
             "stft_frequency":           8. * stft_shape[-2],                     # float64 always
             "signal":                   1. * x_bytes,                            # float / int
@@ -247,12 +257,14 @@ class PSDDetector(BaseModel, extra=Extra.allow):
             "noise_std":                1. * precision_order * noise_size,       # float
             "likelihood":               1. * precision_order * likelihood_size,  # float
             "detection":                1. * likelihood_size,                    # bool always
+            "detected_intervals":       8. * intervals_size,                     # ~ float64, upper bound
+            "picked_features":          8. * intervals_size,                     # ~ float64, upper bound
         }
 
         used_together = [('coefficients', 'spectrogram'),
                          ('spectrogram', 'spectrogram_SNR_trimmed'),
-                         ('spectrogram_SNR_trimmed', 'likelihood', 'detection'),
-                         ('likelihood', 'detection')]
+                         ('spectrogram_SNR_trimmed', 'likelihood'),
+                         ('likelihood', 'detection', 'detected_intervals', 'picked_features')]
         base_info = ["signal", "stft_frequency", "noise_mean", "noise_std"]
         full_info = self._parse_info_dict(full_info)
 
@@ -263,7 +275,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         return CATSBase.memory_chunks(memory_info, to_file)
 
     def detect_to_file(self, x, /, path_destination, verbose=False, full_info=False, compress=False):
-        CATSDetector._detect_to_file(self, x, path_destination, verbose, full_info, compress)
+        CATSDetector.basefunc_detect_to_file(self, x, path_destination, verbose, full_info, compress)
 
     def detect_on_files(self, data_folder, data_format, noise_model_intervals_sec=None, result_folder=None,
                         verbose=False, full_info=False, compress=False):
@@ -283,47 +295,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
             del x
 
 
-class PSDDetectionResult(CATSResult):
-    def __init__(self,
-                 signal=None,
-                 coefficients=None,
-                 spectrogram=None,
-                 spectrogram_SNR_trimmed=None,
-                 likelihood=None,
-                 detection=None,
-                 picked_features=None,
-                 noise_mean=None,
-                 noise_std=None,
-                 dt_sec=None,
-                 stft_dt_sec=None,
-                 stft_t0_sec=None,
-                 npts=None,
-                 stft_npts=None,
-                 stft_frequency=None,
-                 threshold=None,
-                 history=None
-                 ):
-
-        # Numpy arrays
-        self.signal = signal
-        self.coefficients = coefficients
-        self.spectrogram = spectrogram
-        self.spectrogram_SNR_trimmed = spectrogram_SNR_trimmed
-        self.likelihood = likelihood
-        self.detection = detection
-        self.picked_features = picked_features
-        self.noise_mean = noise_mean
-        self.noise_std = noise_std
-        self.stft_frequency = stft_frequency
-
-        # Scalars
-        self.dt_sec = dt_sec
-        self.stft_dt_sec = stft_dt_sec
-        self.stft_t0_sec = stft_t0_sec
-        self.npts = npts
-        self.stft_npts = stft_npts
-        self.threshold = threshold
-        self.history = history
+class PSDDetectionResult(CATSDetectionResult):
+    noise_mean: Any = None
 
     def plot(self, ind=None, time_interval_sec=None):
         if ind is None:
@@ -333,7 +306,7 @@ class PSDDetectionResult(CATSResult):
         A_dim = hv.Dimension('Amplitude')
         L_dim = hv.Dimension('Likelihood')
 
-        ind = format_index_by_dims(ind, self.signal.shape)
+        ind = format_index_by_dims(ind, self.signal.shape, min_dims=1)
         time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
         t1, t2 = time_interval_sec
 
@@ -360,32 +333,35 @@ class PSDDetectionResult(CATSResult):
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
                         label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
 
+        if (ax := self.aggregate_axis_for_likelihood) is not None:
+            ind = list(ind); ind[ax] = 0; ind = tuple(ind)
+            inds_stft = ind + (i_stft,)
+
         likelihood = np.nan_to_num(self.likelihood[inds_stft],
                                    posinf=10 * self.threshold,
                                    neginf=-10 * self.threshold)  # POSSIBLE `NAN` AND `INF` VALUES!
         likelihood_fig = hv.Curve((stft_time, likelihood),
                                   kdims=[t_dim], vdims=L_dim)
 
-        if getattr(self, 'picked_features', None) is not None:
-            P = self.picked_features[ind]
-            P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
-            peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
-            peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
-        else:
-            peaks_fig = None
+        P = self.picked_features[ind]
+        P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
+        peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
+        peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
 
-        intervals = GiveIntervals(self.detection[inds_stft])
+        intervals = self.detected_intervals[ind]
+        interval_inds = (t1 <= intervals) & (intervals <= t2)
+        interval_inds = interval_inds[:, 0] | interval_inds[:, 1]
+        intervals = intervals[interval_inds]
+
         interv_height = (np.max(likelihood) / 2) * 1.1
-        rectangles = give_rectangles(intervals, stft_time, [interv_height], interv_height)
+        rectangles = give_rectangles([intervals], [interv_height], interv_height)
         intervals_fig = hv.Rectangles(rectangles,
                                       kdims=[t_dim, L_dim, 't2', 'l2']).opts(color='blue',
                                                                              linewidth=0,
                                                                              alpha=0.2)
         snr_level_fig = hv.HLine(self.threshold, kdims=[t_dim, L_dim]).opts(color='k', linestyle='--', alpha=0.7)
 
-        last_figs = [intervals_fig, snr_level_fig, likelihood_fig]
-        if peaks_fig is not None:
-            last_figs.append(peaks_fig)
+        last_figs = [intervals_fig, snr_level_fig, likelihood_fig, peaks_fig]
 
         fig3 = hv.Overlay(last_figs, label='3. Likelihood and Detection:'
                                            ' $\mathcal{L}(t)$ and $\mathcal{D}(t)$')
@@ -417,6 +393,7 @@ class PSDDetectionResult(CATSResult):
 
         stft_t0 = self.stft_dt_sec * self.stft_npts
 
+        self._concat(other, "detected_intervals", -2, stft_t0)
         self._concat(other, "picked_features", -2, stft_t0, (..., 0))
 
         self.npts += other.npts

@@ -12,11 +12,11 @@ from tqdm.notebook import tqdm
 
 from cats.core.utils import ReshapeArraysDecorator, give_rectangles, update_object_params
 from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
-from cats.core.projection import RemoveGaps, GiveIntervals
+from cats.core.projection import FilterDetection
 from cats.core.association import PickDetectedPeaks
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
-from cats.baseclass import CATSResult, CATSBase
-from cats.detection import CATSDetector
+from cats.baseclass import CATSBase
+from cats.detection import CATSDetector, CATSDetectionResult
 
 
 ###### BACKENDS ######
@@ -93,7 +93,6 @@ class STALTADetector(BaseModel, extra=Extra.allow):
 
     aggregate_axis_for_likelihood: Union[int, Tuple[int]] = None
     aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
-    pick_features: bool = False
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -127,30 +126,25 @@ class STALTADetector(BaseModel, extra=Extra.allow):
 
         history = StatusKeeper(verbose=verbose)
 
-        with history(current_process='STA/LTA'):
+        with history(current_process='STA/LTA likelihood'):
             result['likelihood'] = STA_LTA(self.ch_func(x), self.long_window_len, self.short_window_len,
                                            self.step_len, self.windows_overlap_len, self.padmode)
-
-        with history(current_process='Thresholding'):
             result['likelihood'] = aggregate_array_by_axis_and_func(result['likelihood'],
                                                                     self.aggregate_axis_for_likelihood,
                                                                     self.aggregate_func_for_likelihood,
                                                                     min_last_dims=1)
-
-            result['detection'] = RemoveGaps(result['likelihood'] > self.threshold,
-                                             self.min_separation_len,
-                                             self.min_duration_len)
-
-        del_vals_by_keys(result, full_info, ['detection'])
-
         stalta_time = np.arange(result['likelihood'].shape[-1]) * self.step_sec
 
-        # Picking
-        if full_info['picked_features']:
-            with history(current_process='Picking'):
-                result['picked_features'] = PickDetectedPeaks(result['likelihood'], result['detection'],
-                                                              dt=self.step_sec)
-        del_vals_by_keys(result, full_info, ['likelihood'])
+        with history(current_process='Detecting intervals'):
+            result['detection'], result['detected_intervals'] = \
+                FilterDetection(result['likelihood'] > self.threshold,
+                                min_separation=self.min_separation_len, min_duration=self.min_duration_len)
+
+            result['picked_features'] = PickDetectedPeaks(result['likelihood'], result['detected_intervals'],
+                                                          dt=self.step_sec, t0=stalta_time[0])
+            result['detected_intervals'] = result['detected_intervals'] * self.step_sec + stalta_time[0]
+
+        del_vals_by_keys(result, full_info, ['likelihood', 'detection', 'detected_intervals', 'picked_features'])
 
         history.print_total_time()
 
@@ -161,7 +155,8 @@ class STALTADetector(BaseModel, extra=Extra.allow):
                   "npts": x.shape[-1],
                   "stalta_npts": len(stalta_time),
                   "threshold": self.threshold,
-                  "history": history}
+                  "history": history,
+                  "aggregate_axis_for_likelihood": self.aggregate_axis_for_likelihood}
 
         return STALTADetectionResult(**kwargs)
 
@@ -203,17 +198,20 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         info_keys = ["signal",
                      "likelihood",
                      "detection",
+                     "detected_intervals",
                      "picked_features"]
 
         if isinstance(full_info, str) and \
            (full_info in ['plot', 'plotting', 'plt', 'qc', 'main']):  # only those needed for plotting step-by-step
-            full_info = {'signal':     True,
-                         'likelihood': True}
+            full_info = {'signal':              True,
+                         'likelihood':          True,
+                         'detected_intervals':  True,
+                         'picked_features':     True}
 
         full_info = cast_to_bool_dict(full_info, info_keys)
 
-        full_info["detection"] = True  # default saved result
-        full_info["picked_features"] = self.pick_features  # non-default result
+        full_info["detected_intervals"] = True  # default saved result
+        full_info["picked_features"] = True     # default saved result
 
         return full_info
 
@@ -225,13 +223,20 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         x_bytes = x.nbytes
         precision_order = x_bytes / x.size
 
+        aggregated_axis_len = x.shape[ax] if (ax := self.aggregate_axis_for_likelihood) is not None else 1
+        n, mod = divmod(stalta_time_len, self.min_duration_len + self.min_separation_len)
+        num_intervals = n + mod // self.min_duration_len
+        intervals_size = 2 * np.prod(x.shape[:-1]) / aggregated_axis_len * num_intervals
+
         memory_usage_bytes = {
-            "signal": 1. * x_bytes,  # float / int
-            "likelihood": 1. * precision_order * stalta_size,  # float
-            "detection": 1. * stalta_size,  # bool always
+            "signal":               1. * x_bytes,                        # float / int
+            "likelihood":           1. * precision_order * stalta_size,  # float
+            "detection":            1. * stalta_size,                    # bool always
+            "detected_intervals":   8. * intervals_size,                 # ~ float64, upper bound
+            "picked_features":      8. * intervals_size,                 # ~ float64, upper bound
         }
 
-        used_together = [('likelihood', 'detection')]
+        used_together = [('likelihood', 'detection', 'detected_intervals', 'picked_features')]
         base_info = ["signal"]
         full_info = self._parse_info_dict(full_info)
 
@@ -242,40 +247,17 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         return CATSBase.memory_chunks(memory_info, to_file)
 
     def detect_to_file(self, x, /, path_destination, verbose=False, full_info=False, compress=False):
-        CATSDetector._detect_to_file(self, x, path_destination, verbose, full_info, compress)
+        CATSDetector.basefunc_detect_to_file(self, x, path_destination, verbose, full_info, compress)
 
     def detect_on_files(self, data_folder, data_format, result_folder=None,
                         verbose=False, full_info=False, compress=False):
-        CATSDetector._detect_on_files(self, data_folder, data_format, result_folder, verbose, full_info, compress)
+        CATSDetector.basefunc_detect_on_files(self, data_folder, data_format, result_folder, verbose, full_info,
+                                              compress)
 
 
-class STALTADetectionResult(CATSResult):
-    def __init__(self,
-                 signal=None,
-                 likelihood=None,
-                 detection=None,
-                 picked_features=None,
-                 threshold=None,
-                 dt_sec=None,
-                 stalta_dt_sec=None,
-                 npts=None,
-                 stalta_npts=None,
-                 history=None,
-                 **kwargs):
-
-        # Numpy arrays
-        self.signal = signal
-        self.likelihood = likelihood
-        self.detection = detection
-        self.picked_features = picked_features
-
-        # Scalars
-        self.dt_sec = dt_sec
-        self.stalta_dt_sec = stalta_dt_sec
-        self.npts = npts
-        self.stalta_npts = stalta_npts
-        self.threshold = threshold
-        self.history = history
+class STALTADetectionResult(CATSDetectionResult):
+    stalta_dt_sec: float = None
+    stalta_npts: int = None
 
     def plot(self, ind=None, time_interval_sec=(None, None)):
         if ind is None:
@@ -283,7 +265,7 @@ class STALTADetectionResult(CATSResult):
         t_dim = hv.Dimension('Time', unit='s')
         L_dim = hv.Dimension('Likelihood')
 
-        ind = format_index_by_dims(ind, self.signal.shape)
+        ind = format_index_by_dims(ind, self.signal.shape, min_dims=1)
         time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
         t1, t2 = time_interval_sec
 
@@ -298,33 +280,36 @@ class STALTADetectionResult(CATSResult):
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims='Amplitude',
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
 
+        if (ax := self.aggregate_axis_for_likelihood) is not None:
+            ind = list(ind); ind[ax] = 0; ind = tuple(ind)
+            inds_stalta = ind + (i_stalta,)
+
         likelihood = np.nan_to_num(self.likelihood[inds_stalta],
                                    posinf=10 * self.threshold,
                                    neginf=-10 * self.threshold)  # POSSIBLE `NAN` AND `INF` VALUES!
         likelihood_fig = hv.Curve((stalta_time, likelihood), kdims=[t_dim], vdims=L_dim)
 
         # Peaks
-        if getattr(self, 'picked_features', None) is not None:
-            P = self.picked_features[ind]
-            P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
-            peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
-            peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
-        else:
-            peaks_fig = None
+        P = self.picked_features[ind]
+        P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
+        peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
+        peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
 
         # Intervals
-        intervals = GiveIntervals(self.detection[inds_stalta])
+        intervals = self.detected_intervals[ind]
+        interval_inds = (t1 <= intervals) & (intervals <= t2)
+        interval_inds = interval_inds[:, 0] | interval_inds[:, 1]
+        intervals = intervals[interval_inds]
+
         interv_height = (np.max(likelihood) / 2) * 1.1
-        rectangles = give_rectangles(intervals, stalta_time, [interv_height], interv_height)
+        rectangles = give_rectangles([intervals], [interv_height], interv_height)
         intervals_fig = hv.Rectangles(rectangles,
                                       kdims=[t_dim, L_dim, 't2', 'l2']).opts(color='blue',
                                                                              linewidth=0,
                                                                              alpha=0.2)
         snr_level_fig = hv.HLine(self.threshold, kdims=[t_dim, L_dim]).opts(color='k', linestyle='--', alpha=0.7)
 
-        last_figs = [intervals_fig, snr_level_fig, likelihood_fig]
-        if peaks_fig is not None:
-            last_figs.append(peaks_fig)
+        last_figs = [intervals_fig, snr_level_fig, likelihood_fig, peaks_fig]
 
         fig1 = hv.Overlay(last_figs, label='1. Likelihood and Detection:'
                                            ' $\mathcal{L}(t)$ and $\mathcal{D}(t)$')
@@ -339,10 +324,7 @@ class STALTADetectionResult(CATSResult):
         return fig
 
     def stalta_time(self, time_interval_sec=None):
-        if time_interval_sec is None:
-            return np.arange(self.stalta_npts) * self.stalta_dt_sec
-        else:
-            return np.arange(time_interval_sec[0], time_interval_sec[1] + self.stalta_dt_sec, self.stalta_dt_sec)
+        return self.base_time_func(self.stalta_npts, self.stalta_dt_sec, 0, time_interval_sec)
 
     def append(self, other):
 
@@ -355,6 +337,7 @@ class STALTADetectionResult(CATSResult):
 
         stalta_t0 = self.stalta_dt_sec * self.stalta_npts
 
+        self._concat(other, "detected_intervals", -2, stalta_t0)
         self._concat(other, "picked_features", -2, stalta_t0, (..., 0))
 
         self.npts += other.npts

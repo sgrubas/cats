@@ -8,7 +8,7 @@
 import numpy as np
 from scipy.io import loadmat, savemat
 import holoviews as hv
-from typing import Tuple
+from typing import Tuple, Any
 from pydantic import BaseModel, Field, Extra
 
 from .core.timefrequency import STFTOperator
@@ -157,6 +157,11 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
+        self.min_duration_len = self.cluster_size_t_len - 1  # `-1` to include bounds (0, 1, 0)
+        self.min_separation_len = self.cluster_distance_t_len + 1  # `+1` to exclude bounds (1, 0, 1)
+        self.min_duration_sec = self.min_duration_len * self.stft_hop_sec
+        self.min_separation_sec = self.min_separation_len * self.stft_hop_sec
+
     def reset_params(self, **params):
         """
             Updates the instance with changed parameters.
@@ -184,7 +189,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
 
         # B-E-DATE
-        with history(current_process='B-E-DATE'):
+        with history(current_process='B-E-DATE trimming'):
             frames = get_interval_division(N=result['spectrogram'].shape[-1], L=self.stationary_frame_len)
             zero_nyq_freqs = (self.freq_bandpass_len[0] == 0,
                               len(self.stft_frequency) == self.freq_bandpass_len[1])
@@ -263,7 +268,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         memory_usage_bytes = {
             "stft_frequency":             8. * stft_shape[-2],               # float64 always
-            "stationary_intervals":       8. * bedate_shape[-1],             # float64 always
+            "noise_stationary_intervals":       8. * bedate_shape[-1],             # float64 always
             "signal":                     1. * x_bytes,                          # float / int
             "coefficients":               2. * precision_order * stft_size,      # complex
             "spectrogram":                1. * precision_order * stft_size,      # float
@@ -315,67 +320,40 @@ The fastest CPU version is 'ssqueezepy', which is default.
         return n_chunks
 
 
-class CATSResult:
-    def __init__(self,
-                 signal=None,
-                 coefficients=None,
-                 spectrogram=None,
-                 noise_threshold=None,
-                 noise_std=None,
-                 spectrogram_SNR_trimmed=None,
-                 spectrogram_SNR_clustered=None,
-                 spectrogram_cluster_ID=None,
-                 dt_sec=None,
-                 stft_dt_sec=None,
-                 stft_t0_sec=None,
-                 npts=None,
-                 stft_npts=None,
-                 stft_frequency=None,
-                 stationary_intervals=None,
-                 minSNR=None,
-                 history=None,
-                 **kwargs):
-        # Numpy arrays
-        self.signal = signal
-        self.coefficients = coefficients
-        self.spectrogram = spectrogram
-        self.noise_threshold = noise_threshold
-        self.noise_std = noise_std
-        self.spectrogram_SNR_trimmed = spectrogram_SNR_trimmed
-        self.spectrogram_SNR_clustered = spectrogram_SNR_clustered
-        self.spectrogram_cluster_ID = spectrogram_cluster_ID
-        self.stft_frequency = stft_frequency
-        self.stationary_intervals = stationary_intervals
+class CATSResult(BaseModel):
+    signal: Any = None
+    coefficients: Any = None
+    spectrogram: Any = None
+    noise_threshold: Any = None
+    noise_std: Any = None
+    spectrogram_SNR_trimmed: Any = None
+    spectrogram_SNR_clustered: Any = None
+    spectrogram_cluster_ID: Any = None
+    dt_sec: float = None
+    stft_dt_sec: float = None
+    stft_t0_sec: float = None
+    npts: int = None
+    stft_npts: int = None
+    stft_frequency: Any = None
+    noise_stationary_intervals: Any = None
+    minSNR: float = None
+    threshold: float = None
+    history: Any = None
 
-        # Scalars
-        self.dt_sec = dt_sec
-        self.stft_dt_sec = stft_dt_sec
-        self.stft_t0_sec = stft_t0_sec
-        self.npts = npts
-        self.stft_npts = stft_npts
-        self.minSNR = minSNR
-        self.history = history
-
-        # Optional
-        for kw, v in kwargs.items():
-            self.__setattr__(kw, v)
+    @staticmethod
+    def base_time_func(npts, dt_sec, t0, time_interval_sec):
+        if time_interval_sec is None:
+            return t0 + np.arange(npts) * dt_sec
+        else:
+            time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (npts - 1) * dt_sec))
+            time_slice = give_index_slice_by_limits(time_interval_sec, dt_sec)
+            return t0 + np.arange(time_slice.start, time_slice.stop) * dt_sec
 
     def time(self, time_interval_sec=None):
-        if time_interval_sec is None:
-            return np.arange(self.npts) * self.dt_sec
-        else:
-            time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
-            time_slice = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
-            return np.arange(time_slice.start, time_slice.stop) * self.dt_sec
+        return CATSResult.base_time_func(self.npts, self.dt_sec, 0, time_interval_sec)
 
     def stft_time(self, time_interval_sec=None):
-        if time_interval_sec is None:
-            return self.stft_t0_sec + np.arange(self.stft_npts) * self.stft_dt_sec
-        else:
-            time_interval_sec = format_interval_by_limits(time_interval_sec,
-                                                          (0, (self.stft_npts - 1) * self.stft_dt_sec))
-            time_slice = give_index_slice_by_limits(time_interval_sec, self.stft_dt_sec)
-            return self.stft_t0_sec + np.arange(time_slice.start, time_slice.stop) * self.stft_dt_sec
+        return CATSResult.base_time_func(self.stft_npts, self.stft_dt_sec, 0, time_interval_sec)
 
     def plot(self, ind=None, time_interval_sec=None):
         if ind is None:
@@ -384,7 +362,7 @@ class CATSResult:
         f_dim = hv.Dimension('Frequency', unit='Hz')
         a_dim = hv.Dimension('Amplitude')
 
-        ind = format_index_by_dims(ind, self.signal.shape)
+        ind = format_index_by_dims(ind, self.signal.shape, min_dims=1)
         time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
 
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
@@ -434,16 +412,14 @@ class CATSResult:
                         "noise_std",
                         "spectrogram_SNR_trimmed",
                         "spectrogram_SNR_clustered",
-                        "spectrogram_cluster_ID",
-                        "likelihood"]
+                        "spectrogram_cluster_ID"]
 
         for name in concat_attrs:
             self._concat(other, name, -1)
 
         stft_t0 = self.stft_dt_sec * self.stft_npts
 
-        self._concat(other, "picked_features", -2, stft_t0, (..., 0))
-        self._concat(other, "stationary_intervals", 0, stft_t0)
+        self._concat(other, "noise_stationary_intervals", 0, stft_t0)
 
         self.npts += other.npts
         self.stft_npts += other.stft_npts
@@ -460,13 +436,22 @@ class CATSResult:
                 ((other_attr := getattr(other, attr, None)) is not None):
             if increment is not None:
                 if increment_ind is not None:
-                    other_attr[increment_ind] += increment
+                    if other_attr.dtype.name == 'object':
+                        for ind, _ in np.ndenumerate(other_attr):
+                            other_attr[ind][increment_ind] += increment
+                    else:
+                        other_attr[increment_ind] += increment
                 else:
                     other_attr += increment
 
             delattr(self, attr)
             delattr(other, attr)
-            concatenated = np.concatenate((self_attr, other_attr), axis=axis)
+            if (other_attr.dtype.name == 'object') and (self_attr.dtype.name == 'object'):
+                concatenated = np.empty_like(other_attr, dtype=object)
+                for ind, i_other in np.ndenumerate(other_attr):
+                    concatenated[ind] = np.concatenate((self_attr[ind], i_other), axis=axis)
+            else:
+                concatenated = np.concatenate((self_attr, other_attr), axis=axis)
             del self_attr, other_attr
             setattr(self, attr, concatenated)
         else:
@@ -481,7 +466,7 @@ class CATSResult:
         return obj0
 
     def save(self, filepath, compress=False):
-        mdict = {name: attr for name, attr in self.__dict__.items() if (attr is not None)}
+        mdict = {name: attr for name, attr in self.dict().items() if (attr is not None)}
         savemat(filepath, mdict, do_compression=compress)
         del mdict
 
@@ -490,5 +475,3 @@ class CATSResult:
         mdict = loadmat(filepath, simplify_cells=True)
         return cls(**mdict)
 
-    def dict(self):
-        return self.__dict__
