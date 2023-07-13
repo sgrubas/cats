@@ -96,7 +96,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
     def _detect(self, x, verbose=True, full_info=False):
         assert self.psd_noise_mean is not None, f"Noise model must be set priorly, use `.set_noise_model(...)`"
 
-        full_info = self._parse_info_dict(full_info)
+        full_info = self.parse_info_dict(full_info)
 
         result = dict.fromkeys(full_info.keys())
         result['signal'] = x if full_info['signal'] else None
@@ -189,7 +189,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                             - "detected_intervals" - detected intervals (start, end) in seconds (always returned)
                             - "picked_features" - features in intervals [onset, peak likelihood] (always returned)
         """
-        n_chunks = self._split_data_by_memory(x, full_info=full_info, to_file=False)
+        n_chunks = self.split_data_by_memory(x, full_info=full_info, to_file=False)
         single_chunk = n_chunks > 1
         data_chunks = np.array_split(x, n_chunks, axis=-1)
         results = []
@@ -203,7 +203,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
     def __pow__(self, x):
         return self.detect(x, verbose=True, full_info=True)
 
-    def _parse_info_dict(self, full_info):
+    @staticmethod
+    def parse_info_dict(full_info):
         info_keys = ["signal",
                      "coefficients",
                      "spectrogram",
@@ -266,11 +267,11 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                          ('spectrogram_SNR_trimmed', 'likelihood'),
                          ('likelihood', 'detection', 'detected_intervals', 'picked_features')]
         base_info = ["signal", "stft_frequency", "noise_mean", "noise_std"]
-        full_info = self._parse_info_dict(full_info)
+        full_info = self.parse_info_dict(full_info)
 
         return CATSBase.memory_info(memory_usage_bytes, used_together, base_info, full_info)
 
-    def _split_data_by_memory(self, x, /, full_info, to_file):
+    def split_data_by_memory(self, x, /, full_info, to_file):
         memory_info = self.memory_usage_estimate(x, full_info=full_info)
         return CATSBase.memory_chunks(memory_info, to_file)
 

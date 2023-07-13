@@ -30,7 +30,7 @@ class CATSDetector(CATSBase):
     aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
 
     def _detect(self, x, /, verbose=False, full_info=False):
-        full_info, pre_full_info = self._parse_info_dict(full_info)
+        full_info, pre_full_info = self.parse_info_dict(full_info)
 
         result, history = super()._apply(x, finish_on='clustering', verbose=verbose, full_info=pre_full_info)
 
@@ -124,7 +124,7 @@ class CATSDetector(CATSBase):
     def __pow__(self, x):
         return self.detect(x, verbose=True, full_info=True)
 
-    def _parse_info_dict(self, full_info):
+    def parse_info_dict(self, full_info):
         info_keys = self._info_keys()
         info_keys.extend(["likelihood", "detection", "detected_intervals", "picked_features"])
         if isinstance(full_info, str) and \
@@ -148,7 +148,7 @@ class CATSDetector(CATSBase):
 
     def memory_usage_estimate(self, x, /, full_info=False):
         memory_usage_bytes, used_together = self._memory_usage(x)
-        full_info, pre_full_info = self._parse_info_dict(full_info)
+        full_info, pre_full_info = self.parse_info_dict(full_info)
 
         precision_order = memory_usage_bytes['signal'] / x.size
         stft_time_len = len(self.STFT.forward_time_axis(x.shape[-1]))
@@ -344,12 +344,33 @@ class CATSDetectionResult(CATSResult):
         return fig
 
     def append(self, other):
-        super().append(other)
+        concat_attrs = ["signal",
+                        "coefficients",
+                        "spectrogram",
+                        "noise_threshold",
+                        "noise_std",
+                        "spectrogram_SNR_trimmed",
+                        "spectrogram_SNR_clustered",
+                        "spectrogram_cluster_ID",
+                        "likelihood",
+                        "detection"]
 
-        self._concat(other, "likelihood", -1)
-        self._concat(other, "detection", -1)
+        for name in concat_attrs:
+            self._concat(other, name, -1)
 
-        stft_t0 = self.stft_dt_sec * self.stft_npts
+        stft_t0 = self.stft_dt_sec * self.stft_npts  # must be calculated before `self.stft_npts += other.stft_npts`
+
+        self._concat(other, "noise_stationary_intervals", 0, stft_t0)
         self._concat(other, "detected_intervals", -2, stft_t0)
         self._concat(other, "picked_features", -2, stft_t0, (..., 0))
+
+        self.npts += other.npts
+        self.stft_npts += other.stft_npts
+
+        self.history.merge(other.history)
+
+        assert self.minSNR == other.minSNR
+        assert self.dt_sec == other.dt_sec
+        assert self.stft_dt_sec == other.stft_dt_sec
+        assert np.all(self.stft_frequency == other.stft_frequency)
 

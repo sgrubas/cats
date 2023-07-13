@@ -119,7 +119,7 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         update_object_params(self, **params)
 
     def _detect(self, x, verbose=True, full_info=False):
-        full_info = self._parse_info_dict(full_info)
+        full_info = self.parse_info_dict(full_info)
 
         result = dict.fromkeys(full_info.keys())
         result['signal'] = x if full_info['signal'] else None
@@ -180,7 +180,7 @@ class STALTADetector(BaseModel, extra=Extra.allow):
                             - "detection" - binary classification [noise / signal], always returned.
         """
 
-        n_chunks = self._split_data_by_memory(x, full_info=full_info, to_file=False)
+        n_chunks = self.split_data_by_memory(x, full_info=full_info, to_file=False)
         single_chunk = n_chunks > 1
         data_chunks = np.array_split(x, n_chunks, axis=-1)
         results = []
@@ -194,7 +194,8 @@ class STALTADetector(BaseModel, extra=Extra.allow):
     def __pow__(self, x):
         return self.detect(x, verbose=True, full_info=True)
 
-    def _parse_info_dict(self, full_info):
+    @staticmethod
+    def parse_info_dict(full_info):
         info_keys = ["signal",
                      "likelihood",
                      "detection",
@@ -238,11 +239,11 @@ class STALTADetector(BaseModel, extra=Extra.allow):
 
         used_together = [('likelihood', 'detection', 'detected_intervals', 'picked_features')]
         base_info = ["signal"]
-        full_info = self._parse_info_dict(full_info)
+        full_info = self.parse_info_dict(full_info)
 
         return CATSBase.memory_info(memory_usage_bytes, used_together, base_info, full_info)
 
-    def _split_data_by_memory(self, x, /, full_info, to_file=False):
+    def split_data_by_memory(self, x, /, full_info, to_file=False):
         memory_info = self.memory_usage_estimate(x, full_info=full_info)
         return CATSBase.memory_chunks(memory_info, to_file)
 
