@@ -32,7 +32,7 @@ class CATSDenoiser(CATSBase):
         kwargs = {"signal": x, "coefficients": X, "spectrogram": PSD, "noise_thresholding": Eta, "noise_std": Sgm,
                   "spectrogramSNR_trimmed": SNR, "spectrogramSNR_clustered": SNRK, "spectrogramID_cluster": K,
                   "denoised_signal": y, "detection": detection, "time": time, "stft_time": stft_time,
-                  "stft_frequency": self.stft_frequency, "stationary_intervals": stft_time[frames]}
+                  "stft_frequency": self.stft_frequency, "noise_stationary_intervals": stft_time[frames]}
         return CATSDenoisingResult(**kwargs)
 
     def __mul__(self, x):
