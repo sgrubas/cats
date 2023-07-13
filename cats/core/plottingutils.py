@@ -1,18 +1,16 @@
 import numpy as np
 import holoviews as hv
+from .utils import format_interval_by_limits, give_index_slice_by_limits, give_rectangles
 hv.extension('matplotlib')
 
-from .projection import GiveIntervals
-from .utils import format_interval_by_limits, give_index_slice_by_limits, give_rectangles
 
-
-def plot_traces(data, time, detection=None, detection_time=None, picks=None, trace_loc=None,
-                tlims=None, gain=1, clip=True, each_trace=1, **kwargs):
+def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, trace_loc=None,
+                time_interval_sec=None, gain=1, clip=True, each_trace=1, **kwargs):
 
     trace_loc = trace_loc if (trace_loc is not None) else np.arange(data.shape[0]).astype(float)
 
-    tlims = format_interval_by_limits(tlims, (time.min(), time.max()))
-    i_t = give_index_slice_by_limits(tlims, time[1] - time[0])
+    t1, t2 = time_interval_sec = format_interval_by_limits(time_interval_sec, (time.min(), time.max()))
+    i_t = give_index_slice_by_limits(time_interval_sec, dt=time[1] - time[0], t0=time[0])
     i_trace = slice(None, None, each_trace)
     ind_slice = (i_trace, i_t)
 
@@ -21,7 +19,7 @@ def plot_traces(data, time, detection=None, detection_time=None, picks=None, tra
 
     kwargs.setdefault('color', 'black')
     kwargs.setdefault('lw', 0.5)
-    kwargs.setdefault('figsize', 400)
+    kwargs.setdefault('fig_size', 400)
 
     assert (data_slice.ndim == 2)
 
@@ -44,33 +42,46 @@ def plot_traces(data, time, detection=None, detection_time=None, picks=None, tra
 
     #  Events intervals
     rects = []
-    if detection is not None:
-        tlims_det = format_interval_by_limits(tlims, (detection_time[0], detection_time[-1]))
-        i_det = give_index_slice_by_limits(tlims_det, detection_time[1] - detection_time[0])
-        ind_slice_det = (i_trace, i_det)
-        det_slice = detection[ind_slice_det]
-        det_time_slice = detection_time[i_det]
+    if intervals is not None:
+        sliced_intervals = np.empty(len(intervals), dtype=object)
+        for ind, intv in enumerate(intervals):
+            interval_inds = (t1 <= intv) & (intv <= t2)
+            interval_inds = interval_inds[:, 0] | interval_inds[:, 1]
+            sliced_intervals[ind] = intv[interval_inds]
 
-        intervals = GiveIntervals(det_slice)
-        rectangles = give_rectangles(intervals, det_time_slice, loc_slice, scale / gain / 2.2)
+        rectangles = give_rectangles(sliced_intervals, loc_slice, scale / gain / 2.2)
         rects.append(hv.Rectangles(rectangles).opts(facecolor='blue', color='blue',
                                                     alpha=kwargs.get('alpha', 0.3)))
     rects = hv.Overlay(rects)
 
-    #  Picks
-    curves = []
+    #  Not associated picks
+    onsets = []
     if picks is not None:
-        min_times = np.nanmin(picks, axis=0)
-        slice_ons = (tlims[0] <= min_times) & (min_times <= tlims[1])
+        onset_picks = []
+        for pi, locy in zip(picks, trace_loc):
+            p_i = pi[(t1 <= pi) & (pi <= t2)]
+            onset_picks.append(np.stack([p_i, np.full_like(p_i, locy)], axis=-1))
+        onset_picks = np.concatenate(onset_picks, axis=0)
+
+        onsets = [hv.Points(onset_picks, kdims=[t_dim, trace_dim]).opts(marker='|', facecolors='red',
+                                                                        edgecolors=None, s=600)]
+
+    onsets = hv.Overlay(onsets)
+
+    #  Associated Picks
+    curves = []
+    if associated_picks is not None:
+        min_times = np.nanmin(associated_picks, axis=0)
+        slice_ons = (t1 <= min_times) & (min_times <= t2)
         ons_inds = (i_trace, slice_ons)
 
         curves = [hv.Curve((pi, loc_slice), label=f"Event {i}",
                            kdims=[t_dim], vdims=[trace_dim]).opts(marker='|', ms=25, linewidth=2)
-                  for i, pi in enumerate(picks[ons_inds].T)]
+                  for i, pi in enumerate(associated_picks[ons_inds].T)]
     curves = hv.Overlay(curves)
 
     #  Summary of all
-    ylims = (trace_loc.min() - 2 * dloc, trace_loc.max() + 2 * dloc)
-    figure = hv.Overlay((traces, rects, curves))
-    figure = figure.opts(ylim=ylims, fig_size=kwargs['figsize'])
+    ylims = (np.min(trace_loc) - dloc, np.max(trace_loc) + dloc)
+    figure = hv.Overlay((traces, rects, onsets, curves))
+    figure = figure.opts(ylim=ylims, fig_size=kwargs['fig_size'])
     return figure
