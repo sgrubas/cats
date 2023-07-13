@@ -13,7 +13,6 @@ from scipy.signal import find_peaks
 from scipy.spatial import KDTree
 import networkx as nx
 from .utils import ReshapeArraysDecorator
-from .projection import _giveIntervals
 
 
 @nb.njit(["f8(f8[:], f8[:], f8[:], i8)"], cache=True)
@@ -213,10 +212,6 @@ def MatchSequences(*sequences, max_dist, aggregate='mean', metric_order=1, metho
     return sort_sequences(*matched).squeeze()
 
 
-# TODO:
-#  - picking with `min_distance` argument
-
-
 @ReshapeArraysDecorator(dim=2, input_num=-1, output_num=1)
 def PickFeatures(likelihood, /, *features, time, min_likelihood, min_width_sec, num_features, **kwargs):
     num_features = num_features or 2 + len(features)
@@ -235,33 +230,25 @@ def PickFeatures(likelihood, /, *features, time, min_likelihood, min_width_sec, 
     return feature_sequences
 
 
-@nb.njit(["f8[:, :](f8[:], b1[:], f8)",
-          "f4[:, :](f4[:], b1[:], f8)"], parallel=True, cache=True)
-def _pick_detected_peaks(likelihood, detection, dt):
-    intervals = _giveIntervals(detection)
+@nb.njit(["f8[:, :](f8[:], i8[:, :], f8, f8)", "f4[:, :](f4[:], i8[:, :], f8, f8)",
+          "f8[:, :](f8[:], i4[:, :], f8, f8)", "f4[:, :](f4[:], i4[:, :], f8, f8)"],
+         parallel=True, cache=True)
+def pick_detected_peaks(likelihood, intervals, dt, t0):
     features = np.zeros(intervals.shape, dtype=likelihood.dtype)
     for i in nb.prange(len(intervals)):
         i1, i2 = intervals[i]
         l12 = likelihood[i1: i2 + 1]
         i_max = np.argmax(l12)
-        features[i, 0] = (i_max + i1) * dt
+        features[i, 0] = (i_max + i1) * dt + t0
         features[i, 1] = l12[i_max]
 
     return features
 
 
-@nb.njit(["List(f8[:, :])(f8[:, :], b1[:, :], f8)",
-          "List(f4[:, :])(f4[:, :], b1[:, :], f8)"], cache=True)
-def _pick_detected_peaksN(likelihood, detection, dt):
-    features = []
-    for li, di in zip(likelihood, detection):
-        features.append(_pick_detected_peaks(li, di, dt))
-    return features
-
-
-@ReshapeArraysDecorator(dim=2, input_num=2, methodfunc=False, output_num=1, first_shape=True)
-def PickDetectedPeaks(likelihood, detection, /, dt):
-    features = np.array(_pick_detected_peaksN(likelihood, detection, dt), dtype=object)
+def PickDetectedPeaks(likelihood, intervals, dt, t0):
+    features = np.empty(likelihood.shape[:-1], dtype=object)
+    for ind, _ in np.ndenumerate(features):
+        features[ind] = pick_detected_peaks(likelihood[ind], intervals[ind], dt, t0)
     return features
 
 
