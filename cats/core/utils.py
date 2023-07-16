@@ -242,3 +242,10 @@ def complex_abs_square(x):
     return x.real ** 2 + x.imag ** 2
 
 
+def intervals_intersection(intervals_array, reference_interval):
+    t1, t2 = reference_interval
+    interval_inside = (t1 <= intervals_array) & (intervals_array <= t2)
+    interval_inside = interval_inside[:, 0] | interval_inside[:, 1]
+    interval_outside = (intervals_array[:, 0] <= t1) & (t2 <= intervals_array[:, 1])
+    interval_inds = interval_inside | interval_outside
+    return intervals_array[interval_inds]
