@@ -10,11 +10,11 @@ import holoviews as hv
 import numba as nb
 from tqdm.notebook import tqdm
 
-from cats.core.utils import ReshapeArraysDecorator, give_rectangles, update_object_params
+from cats.core.utils import ReshapeArraysDecorator, give_rectangles, update_object_params, intervals_intersection
 from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
+from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
 from cats.core.projection import FilterDetection
 from cats.core.association import PickDetectedPeaks
-from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
 
@@ -45,12 +45,16 @@ def cpu_STA_LTA_backend_vector(x, left, lleft, right, rright, step):
     return y
 
 
+NUM_CPU = nb.get_num_threads()
+
+
 @nb.njit(["f8[:, :](f8[:, :], i8, i8, i8, i8)",
           "f8[:, :](f4[:, :], i8, i8, i8, i8)"], parallel=True, cache=True)
 def cpu_STA_LTA_backend(X, left, right, step, overlap):
     lleft = left - overlap
     rright = lleft + right
-    cpu = nb.config.NUMBA_NUM_THREADS
+    # cpu = nb.config.NUMBA_NUM_THREADS
+    cpu = NUM_CPU
     N, n = X.shape
 
     M = int((n - rright) / step) + 1
@@ -107,7 +111,7 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         self.min_duration_len = round(self.min_duration_sec / self.dt_sec)
         self.min_separation_len = round(self.min_separation_sec / self.dt_sec)
         self.windows_overlap_len = round(self.windows_overlap_sec / self.dt_sec)
-        self.step_len = round(self.step_sec / self.dt_sec)
+        self.step_len = max(round(self.step_sec / self.dt_sec), 1)
 
         self.ch_functions = {'abs': np.abs, 'square': np.square}
         self.ch_func = self.ch_functions[self.characteristic]
@@ -297,10 +301,7 @@ class STALTADetectionResult(CATSDetectionResult):
         peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
 
         # Intervals
-        intervals = self.detected_intervals[ind]
-        interval_inds = (t1 <= intervals) & (intervals <= t2)
-        interval_inds = interval_inds[:, 0] | interval_inds[:, 1]
-        intervals = intervals[interval_inds]
+        intervals = intervals_intersection(self.detected_intervals[ind], (t1, t2))
 
         interv_height = (np.max(likelihood) / 2) * 1.1
         rectangles = give_rectangles([intervals], [interv_height], interv_height)

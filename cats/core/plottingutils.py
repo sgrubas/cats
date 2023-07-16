@@ -1,6 +1,6 @@
 import numpy as np
 import holoviews as hv
-from .utils import format_interval_by_limits, give_index_slice_by_limits, give_rectangles
+from .utils import format_interval_by_limits, give_index_slice_by_limits, give_rectangles, intervals_intersection
 hv.extension('matplotlib')
 
 
@@ -45,9 +45,7 @@ def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, t
     if intervals is not None:
         sliced_intervals = np.empty(len(intervals), dtype=object)
         for ind, intv in enumerate(intervals):
-            interval_inds = (t1 <= intv) & (intv <= t2)
-            interval_inds = interval_inds[:, 0] | interval_inds[:, 1]
-            sliced_intervals[ind] = intv[interval_inds]
+            sliced_intervals[ind] = intervals_intersection(intv, (t1, t2))
 
         rectangles = give_rectangles(sliced_intervals, loc_slice, scale / gain / 2.2)
         rects.append(hv.Rectangles(rectangles).opts(facecolor='blue', color='blue',
@@ -83,5 +81,5 @@ def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, t
     #  Summary of all
     ylims = (np.min(trace_loc) - dloc, np.max(trace_loc) + dloc)
     figure = hv.Overlay((traces, rects, onsets, curves))
-    figure = figure.opts(ylim=ylims, fig_size=kwargs['fig_size'])
+    figure = figure.opts(ylim=ylims, xlim=time_interval_sec, fig_size=kwargs['fig_size'])
     return figure

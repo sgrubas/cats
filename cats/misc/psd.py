@@ -12,9 +12,9 @@ import holoviews as hv
 from cats.core.projection import FilterDetection
 from cats.core.timefrequency import STFTOperator
 from cats.core.association import PickDetectedPeaks
-from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits
-from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
-from cats.core.utils import give_rectangles, update_object_params, give_nonzero_limits, complex_abs_square
+from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits, StatusKeeper
+from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, give_rectangles
+from cats.core.utils import update_object_params, give_nonzero_limits, complex_abs_square, intervals_intersection
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
 from cats.io import read_data
@@ -39,7 +39,6 @@ class PSDDetector(BaseModel, extra=Extra.allow):
     aggregate_axis_for_likelihood: Union[int, Tuple[int]] = None
     aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
 
-    psd_noise_models: Any = None
     psd_noise_mean: Any = None
     psd_noise_std: Any = None
 
@@ -67,8 +66,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         self.freq_bandpass_slice = give_index_slice_by_limits(self.freq_bandpass_Hz, self.stft_df)
         self.freq_bandpass_len = (self.freq_bandpass_slice.start, self.freq_bandpass_slice.stop)
 
-        self.min_duration_len = int(self.min_duration_sec / self.stft_hop_sec)
-        self.min_separation_len = int(self.min_separation_sec / self.stft_hop_sec)
+        self.min_duration_len = round(self.min_duration_sec / self.stft_hop_sec)
+        self.min_separation_len = round(self.min_separation_sec / self.stft_hop_sec)
 
         self.ch_functions = {'abs': lambda x: x, 'square': np.square}
         self.ch_func = self.ch_functions[self.characteristic]
@@ -349,10 +348,7 @@ class PSDDetectionResult(CATSDetectionResult):
         peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
         peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
 
-        intervals = self.detected_intervals[ind]
-        interval_inds = (t1 <= intervals) & (intervals <= t2)
-        interval_inds = interval_inds[:, 0] | interval_inds[:, 1]
-        intervals = intervals[interval_inds]
+        intervals = intervals_intersection(self.detected_intervals[ind], (t1, t2))
 
         interv_height = (np.max(likelihood) / 2) * 1.1
         rectangles = give_rectangles([intervals], [interv_height], interv_height)
@@ -370,7 +366,7 @@ class PSDDetectionResult(CATSDetectionResult):
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250; cmap = 'viridis'
         xlim = time_interval_sec
-        ylim = (1e-1, None)
+        ylim = (max(1e-1, self.stft_frequency[1]), None)
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts  = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, show_legend=False)

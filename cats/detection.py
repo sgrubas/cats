@@ -16,7 +16,7 @@ from .baseclass import CATSBase, CATSResult
 from .core.association import PickDetectedPeaks
 from .core.projection import FilterDetection
 from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles
-from .core.utils import format_index_by_dims, give_index_slice_by_limits
+from .core.utils import format_index_by_dims, give_index_slice_by_limits, intervals_intersection
 from .core.utils import get_interval_division, aggregate_array_by_axis_and_func, format_interval_by_limits
 from .core.plottingutils import plot_traces
 from .io import read_data
@@ -280,10 +280,7 @@ class CATSDetectionResult(CATSResult):
         peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
         peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
 
-        intervals = self.detected_intervals[ind]
-        interval_inds = (t1 <= intervals) & (intervals <= t2)
-        interval_inds = interval_inds[:, 0] | interval_inds[:, 1]
-        intervals = intervals[interval_inds]
+        intervals = intervals_intersection(self.detected_intervals[ind], (t1, t2))
 
         interv_height = (np.max(likelihood) / 2) * 1.1
         rectangles = give_rectangles([intervals], [interv_height], interv_height)
