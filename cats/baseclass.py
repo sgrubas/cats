@@ -157,8 +157,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
-        self.min_duration_len = self.cluster_size_t_len - 1  # `-1` to include bounds (0, 1, 0)
-        self.min_separation_len = self.cluster_distance_t_len + 1  # `+1` to exclude bounds (1, 0, 1)
+        self.min_duration_len = max(self.cluster_size_t_len - 1, 1)  # `-1` to include bounds (0, 1, 0)
+        self.min_separation_len = max(self.cluster_distance_t_len + 1, 2)  # `+1` to exclude bounds (1, 0, 1)
         self.min_duration_sec = self.min_duration_len * self.stft_hop_sec
         self.min_separation_sec = self.min_separation_len * self.stft_hop_sec
 
@@ -393,7 +393,7 @@ class CATSResult(BaseModel):
         figsize = 250
         cmap = 'viridis'
         xlim = time_interval_sec
-        ylim = (1e-1, None)
+        ylim = (max(1e-1, self.stft_frequency[1]), None)
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)
