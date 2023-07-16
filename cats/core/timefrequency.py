@@ -220,17 +220,18 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         return self._inverse_backend(C)
 
     def forward_time_axis(self, N):
+        # if self.backend == 'scipy':
         bounds = self.padedge * 2 if (self.padtype is not None) else 0
         tail = (N + bounds - self.nperseg) % self.hop
         tail = self.hop - tail if tail > 0 else tail
         n_hops = (N + bounds + tail - self.nperseg) // self.hop + 1
-        t = self.dt_sec * (np.arange(n_hops) * self.hop + (bounds // 2) * (bounds < 1))
-
-        # from `squeezepy` where `x` is padded and extended
-        # time = np.arange(nperseg / 2, x.shape[-1] - nperseg / 2 + 1,
-        #                  nperseg - noverlap) / float(fs)
-        # if boundary is not None:
-        #     time -= (nperseg/2) / fs
+        hop_sec = self.dt_sec * self.hop
+        t = hop_sec * (np.arange(n_hops) + (bounds // 2) * (bounds < 1))
+        # else:
+        # # from `squeezepy` where `x` is padded and extended
+        #     t = np.arange(self.nperseg / 2, x.shape[-1] - self.nperseg / 2 + 1, self.hop) * self.dt_sec
+        #     if boundary is not None:
+        #         t -= (nperseg/2) / fs
         return t
     
     def inverse_time_samples(self, Nt):
