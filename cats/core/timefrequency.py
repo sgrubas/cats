@@ -145,12 +145,11 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         padmode = compatible_padmodes.get(self.padtype, self.padtype)
         N = X.shape[-1]
         if self.backend == 'scipy':
-            n1 = self.padedge
-            n2 = n1 + self.hop - (N - self.nperseg % 2) % self.hop
+            Y = np.pad(X, [(0, 0), (self.padedge, self.padedge)], mode=padmode)
+            ext_n = ((N - self.nperseg % 2) % self.hop) % self.nperseg
+            return np.pad(Y, [(0, 0), (0, ext_n)], mode='constant')
         else:
-            n1 = 0
-            n2 = self.hop - (N - 1) % self.hop
-        return np.pad(X, [(0, 0), (n1, n2)], mode=padmode)
+            return X
 
     def _forward_backend(self, X):
         """
@@ -220,24 +219,17 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         return self._inverse_backend(C)
 
     def forward_time_axis(self, N):
-        # if self.backend == 'scipy':
-        bounds = self.padedge * 2 if (self.padtype is not None) else 0
-        tail = (N + bounds - self.nperseg) % self.hop
-        tail = self.hop - tail if tail > 0 else tail
-        n_hops = (N + bounds + tail - self.nperseg) // self.hop + 1
-        hop_sec = self.dt_sec * self.hop
-        t = hop_sec * (np.arange(n_hops) + (bounds // 2) * (bounds < 1))
-        # else:
-        # # from `squeezepy` where `x` is padded and extended
-        #     t = np.arange(self.nperseg / 2, x.shape[-1] - self.nperseg / 2 + 1, self.hop) * self.dt_sec
-        #     if boundary is not None:
-        #         t -= (nperseg/2) / fs
-        return t
+        if self.backend == 'scipy':
+            N_padded = N - self.nperseg % 2
+            N_padded += ((N - self.nperseg % 2) % self.hop) % self.nperseg
+        else:
+            N_padded = N - 1
+        Nt = N_padded // self.hop + 1
+        time = np.arange(Nt) * self.dt_sec * self.hop
+        return time
     
     def inverse_time_samples(self, Nt):
-        bounds = self.padedge * 2 if (self.padtype is not None) else 0
-        N = (Nt - 1) * self.hop - bounds + self.nperseg + self.hop
-        return N
+        return (Nt - 1) * self.hop + self.nperseg % 2 + self.hop
     
     def __mul__(self, X):
         return self.forward(X)
@@ -251,8 +243,12 @@ class CWTOperator(BaseModel, extra=Extra.allow):
         CWT operator
     """
     dt_sec: float
-    wavelet: Union[str, Tuple[str, dict]] = ('morlet', {'mu': 5})
-    scales: Union[Literal['log', 'log-piecewise', 'linear', 'log:maximal'], Tuple[float], List[float]] = 'log-piecewise'
+
+    # forward CWT params
+    wavelet: Union[str, tuple[str, dict]] = ('morlet', {'mu': 5})
+    scales: Union[Literal['log', 'log-piecewise', 'linear', 'log:maximal'],
+                  tuple[float],
+                  list[float]] = 'log-piecewise'
     nv: int = 32  # >= 16
     l1_norm: bool = True
     derivative: bool = False
@@ -261,10 +257,15 @@ class CWTOperator(BaseModel, extra=Extra.allow):
     vectorized: bool = True
     astensor: bool = True
     cache_wavelet: bool = None
-    order: Union[int, Tuple[int]] = 0
+    order: Union[int, tuple[int]] = 0
     average: bool = None
-    nan_checks: bool = True,
-    patience: Union[int, Tuple[int, int]] = 0
+    nan_checks: bool = True
+    patience: Union[int, tuple[int, int]] = 0
+
+    # additional params for inverse CWT
+    one_int: bool = True
+    x_len: int = None
+    x_mean: int = 0
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -272,21 +273,50 @@ class CWTOperator(BaseModel, extra=Extra.allow):
 
     def _set_params(self):
         self.fs = 1 / self.dt_sec
-        # t:,
-        pass
+        self.forward_kw = {"wavelet": self.wavelet,
+                           "scales": self.scales,
+                           "fs": self.fs,
+                           "t": None,
+                           "nv": self.nv,
+                           "l1_norm": self.l1_norm,
+                           "derivative": self.derivative,
+                           "padtype": self.padtype,
+                           "rpadded": self.rpadded,
+                           "vectorized": self.vectorized,
+                           "astensor": self.astensor,
+                           "cache_wavelet": self.cache_wavelet,
+                           "order": self.order,
+                           "average": self.average,
+                           "nan_checks": self.nan_checks,
+                           "patience": self.patience}
+
+        self.inverse_kw = {"wavelet": self.wavelet,
+                           "scales": self.scales,
+                           "nv": self.nv,
+                           "one_int": self.one_int,
+                           "x_len": self.x_len,
+                           "x_mean": self.x_mean,
+                           "padtype": self.rpadded,
+                           "rpadded": self.padtype,
+                           "l1_norm": self.l1_norm}
 
     @ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=True, output_num=1, first_shape=True)
     def forward(self, X):
-        # ssq.cwt()
-        pass
+        W, *_ = ssq.cwt(X, **self.forward_kw)
+        return W
 
     @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=True, output_num=1, first_shape=True)
-    def inverse(self, C):
-        # ssq.icwt()
-        pass
+    def inverse(self, W):
+        return ssq.icwt(W, **self.inverse_kw)
 
     def __mul__(self, X):
         return self.forward(X)
 
     def __truediv__(self, C):
         return self.inverse(C)
+
+    def forward_time_axis(self, N):
+        pass
+
+    def inverse_time_axis(self, N):
+        pass
