@@ -16,7 +16,7 @@ from .baseclass import CATSBase, CATSResult
 from .core.association import PickDetectedPeaks
 from .core.projection import FilterDetection
 from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles
-from .core.utils import format_index_by_dims, give_index_slice_by_limits, intervals_intersection
+from .core.utils import format_index_by_dimensions, give_index_slice_by_limits, intervals_intersection
 from .core.utils import get_interval_division, aggregate_array_by_axis_and_func, format_interval_by_limits
 from .core.plottingutils import plot_traces
 from .io import read_data
@@ -297,9 +297,6 @@ class CATSDetectionResult(CATSResult):
 
         return (fig + fig4).opts(*opts).cols(1)
 
-    # TODO:
-    #   - make trace plotting robust to aggregated axis
-
     def plot_traces(self,
                     ind: Tuple[int] = None,
                     time_interval_sec: Tuple[float] = None,
@@ -310,13 +307,11 @@ class CATSDetectionResult(CATSResult):
                     clip: bool = True,
                     each_trace: int = 1,
                     **kwargs):
-        if ind is None:
-            ind = (0,) * (self.signal.ndim - 1)
 
-        ind = format_index_by_dims(ind, self.signal.shape, min_dims=2)
+        ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=1, default_ind=0)
         time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
-        traces = self.signal[ind + (slice(None), i_time)]
+        traces = self.signal[ind + (i_time,)]
 
         if (ax := self.aggregate_axis_for_likelihood) is not None:
             if ax < len(ind): ind = list(ind); ind[ax] = 0; ind = tuple(ind)

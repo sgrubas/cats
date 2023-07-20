@@ -146,9 +146,26 @@ def _scalarORarray_to_tuple(d, minsize):
     return d
 
 
-def format_index_by_dims(ind, reference_shape, min_dims=1):
-    ind = tuple(ind) if isinstance(ind, (tuple, list)) else (ind,)
-    assert len(ind) == len(reference_shape) - min_dims, f"Index must correspond to data dimension shape {reference_shape}"
+def count_slice_objects(tuple_sequence):
+    return sum([1 for ii in tuple_sequence if isinstance(ii, slice)])
+
+
+def format_index_by_dimensions(ind, shape, slice_dims, default_ind=0):
+    ndim = len(shape) - slice_dims
+    if ind is None:
+        ind = format_index_by_dimensions((default_ind,) * ndim, shape, slice_dims)
+    elif isinstance(ind, (int, slice)):
+        ind = format_index_by_dimensions((ind,) + (default_ind,) * (ndim - isinstance(ind, int)),
+                                         shape, slice_dims)
+    elif isinstance(ind, (list, tuple)):
+        ind = tuple(ind)
+        slice_count = count_slice_objects(ind)
+        ind = ind + (default_ind,) * (ndim - len(ind) + slice_count)
+        ind = ind + (slice(None),) * (slice_dims - slice_count)
+        assert len(ind) == len(shape)
+    else:
+        raise KeyError("Unknown ind type")
+
     return ind
 
 

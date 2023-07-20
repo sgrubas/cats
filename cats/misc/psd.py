@@ -12,7 +12,7 @@ import holoviews as hv
 from cats.core.projection import FilterDetection
 from cats.core.timefrequency import STFTOperator
 from cats.core.association import PickDetectedPeaks
-from cats.core.utils import format_index_by_dims, format_interval_by_limits, give_index_slice_by_limits, StatusKeeper
+from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits, StatusKeeper
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, give_rectangles
 from cats.core.utils import update_object_params, give_nonzero_limits, complex_abs_square, intervals_intersection
 from cats.baseclass import CATSBase
@@ -306,7 +306,7 @@ class PSDDetectionResult(CATSDetectionResult):
         A_dim = hv.Dimension('Amplitude')
         L_dim = hv.Dimension('Likelihood')
 
-        ind = format_index_by_dims(ind, self.signal.shape, min_dims=1)
+        ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=0, default_ind=0)
         time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
         t1, t2 = time_interval_sec
 

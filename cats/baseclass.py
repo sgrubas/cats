@@ -15,7 +15,7 @@ from .core.timefrequency import STFTOperator
 from .core.clustering import Clustering
 from .core.date import BEDATE, EtaToSigma
 from .core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
-from .core.utils import get_interval_division, format_index_by_dims, cast_to_bool_dict, StatusKeeper
+from .core.utils import get_interval_division, format_index_by_dimensions, cast_to_bool_dict, StatusKeeper
 from .core.utils import format_interval_by_limits, give_index_slice_by_limits, del_vals_by_keys, update_object_params
 from .core.utils import give_nonzero_limits
 from .core.thresholding import ThresholdingSNR
@@ -356,13 +356,12 @@ class CATSResult(BaseModel):
         return CATSResult.base_time_func(self.stft_npts, self.stft_dt_sec, 0, time_interval_sec)
 
     def plot(self, ind=None, time_interval_sec=None):
-        if ind is None:
-            ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')
         a_dim = hv.Dimension('Amplitude')
 
-        ind = format_index_by_dims(ind, self.signal.shape, min_dims=1)
+        ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=0, default_ind=0)
+
         time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
 
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
