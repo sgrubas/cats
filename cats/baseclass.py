@@ -45,6 +45,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
     cluster_size_f_Hz: float = 20.0
     cluster_distance_t_sec: float = None
     cluster_distance_f_Hz: float = None
+    cluster_fullness: float = Field(0, gt=0.0, le=1.0)
 
     # Minor clustering params
     freq_bandpass_Hz: Tuple[float, float] = None
@@ -68,7 +69,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
 
                 stft_window_sec : float : length of weighting window in seconds.
 
-                stft_overlap : float [0, 1] : overlapping of STFT windows (e.g. `0.5` means 50% overlap).
+                stft_overlap : float [0, 1) : overlapping of STFT windows (e.g. `0.5` means 50% overlap).
 
                 stft_nfft : int : zero-padding for each individual STFT window, recommended a power of 2 (e.g. 256).
 
@@ -81,6 +82,9 @@ Length will be adjusted to have at least 256 elements in one frame. Default, 0.0
 Can be estimated as length of the strongest phases.
 
                 cluster_size_f_Hz : float : minimum cluster size in frequency, in hertz, i.e. minimum frequency width.
+
+                cluster_fullness : float (0, 1] : minimum cluster fullness from its minimum size defined by `size` and \
+`distance` params
 
                 freq_bandpass_Hz : tuple/list[int/float] : bandpass frequency range, in hertz, i.e. everything out of \
 the range is zero (e.g. (f_min, f_max)).
@@ -157,7 +161,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
-        self.min_duration_len = max(self.cluster_size_t_len - 1, 1)  # `-1` to include bounds (0, 1, 0)
+        self.min_duration_len = max(self.cluster_size_t_len, 1)  # `-1` to include bounds (0, 1, 0)
         self.min_separation_len = max(self.cluster_distance_t_len + 1, 2)  # `+1` to exclude bounds (1, 0, 1)
         self.min_duration_sec = self.min_duration_len * self.stft_hop_sec
         self.min_separation_sec = self.min_separation_len * self.stft_hop_sec
@@ -211,9 +215,9 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                 result['noise_threshold'][bandpass_slice],
                                 frames)
 
-            if self.time_edge > 0:
-                result['spectrogram_SNR_trimmed'][..., :self.time_edge] = 0.0
-                result['spectrogram_SNR_trimmed'][..., -self.time_edge - 1:] = 0.0
+            # Removing spiky high-energy edges
+            result['spectrogram_SNR_trimmed'][..., :self.time_edge] = 0.0
+            result['spectrogram_SNR_trimmed'][..., -self.time_edge - 1:] = 0.0
 
         del_vals_by_keys(result, full_info, ['spectrogram', 'noise_threshold', 'noise_std'])
 
@@ -225,12 +229,13 @@ The fastest CPU version is 'ssqueezepy', which is default.
             mc = self.clustering_multitrace
             q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
             s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
+            alpha = self.cluster_fullness
 
             result['spectrogram_SNR_clustered'] = np.zeros_like(result['spectrogram_SNR_trimmed'])
             result['spectrogram_cluster_ID'] = np.zeros(result['spectrogram_SNR_trimmed'].shape, dtype=np.uint32)
 
             result['spectrogram_SNR_clustered'][bandpass_slice], result['spectrogram_cluster_ID'][bandpass_slice] = \
-                Clustering(result['spectrogram_SNR_trimmed'][bandpass_slice], q=q, s=s, minSNR=self.minSNR)
+                Clustering(result['spectrogram_SNR_trimmed'][bandpass_slice], q=q, s=s, minSNR=self.minSNR, alpha=alpha)
 
         del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed',
                                              'spectrogram_SNR_clustered',
@@ -382,7 +387,7 @@ class CATSResult(BaseModel):
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
-                        label='1. Spectrogram: $|X(t,f)|$').opts(clim=PSD_clims)
+                        label='1. Amplitude spectrogram: $|X(t,f)|$').opts(clim=PSD_clims, clabel='Amplitude')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
                         label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
         fig3 = hv.Image((stft_time, self.stft_frequency, C), kdims=[t_dim, f_dim],

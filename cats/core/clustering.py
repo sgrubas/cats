@@ -10,41 +10,37 @@ from scipy import special, stats
 
 ###################  CLUSTERING  ###################
 
-# TODO:
-#  - make sure that uint16 for cluster indexes is enough
 
-
-@nb.njit(["Tuple((f8[:, :], u4[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)",
-          "Tuple((f4[:, :], u4[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)"], cache=True)
-def _Clustering2D(SNR, q, s, minSNR):
-    B = SNR > 0
-    shape = B.shape
+@nb.njit(["Tuple((f8[:, :], u4[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)",
+          "Tuple((f4[:, :], u4[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)"], cache=True)
+def _Clustering2D(SNR, q, s, minSNR, alpha):
+    shape = SNR.shape
     Nf, Nt = shape
     C = np.full(shape, -1)
     q_f, q_t = q
     s_f, s_t = s
     clusters = []
 
-    for (i, j), bij in np.ndenumerate(B):
-        if bij:
+    for (i, j), SNRij in np.ndenumerate(SNR):
+        if SNRij:
             # selecting area of interest
             i1, i2 = max(i - q_f, 0), min(i + q_f + 1, Nf)
             j1, j2 = max(j - q_t, 0), min(j + q_t + 1, Nt)
 
-            b = B[i1: i2, j1: j2]
-            if np.sum(b) < 2:  # isolated single points are deleted right away
+            snr = SNR[i1: i2, j1: j2]
+            if np.count_nonzero(snr) < 2:  # isolated single points are deleted right away
                 continue
 
             c = C[i1: i2, j1: j2]
-            snr = SNR[i1: i2, j1: j2]
+
             cluster_k = []
             neighbor_clusters = []
 
             # checking existing clusters and remembering not assigned
             for l, cl in np.ndenumerate(c):
-                if b[l]:
-                    if (cl >= 0):
-                        if (cl not in neighbor_clusters):
+                if snr[l]:
+                    if cl >= 0:
+                        if cl not in neighbor_clusters:
                             neighbor_clusters.append(cl)
                     else:
                         cluster_k.append((i1 + l[0],
@@ -62,7 +58,7 @@ def _Clustering2D(SNR, q, s, minSNR):
                 neighbor_clusters.remove(cluster_assigned)
                 for cli in neighbor_clusters:
                     cluster_k += clusters[cli]
-                    clusters[cli] = [(Nf, Nt, SNR[-1, -1])]  # meaningless isolated point, will not be used
+                    clusters[cli] = [(Nf, Nt, SNR[-1, -1])]  # meaningless point needed for compilation of list types
                 clusters[cluster_assigned] += cluster_k  # add new points
 
             # assigning clusters
@@ -74,12 +70,18 @@ def _Clustering2D(SNR, q, s, minSNR):
     SNRK = np.zeros_like(SNR)
     k = 1
     for cl in clusters:
-        if len(cl) > 1:  # all isolated points are skipped
+        if len(cl) > 1:  # to skip those meaningless points which we put for compilation
             cl_arr = np.array(cl)
             cl_f_min, cl_f_max = cl_arr[:, 0].min(), cl_arr[:, 0].max() + 1
             cl_t_min, cl_t_max = cl_arr[:, 1].min(), cl_arr[:, 1].max() + 1
             cl_snr = cl_arr[:, 2].mean()
-            if (cl_f_max - cl_f_min >= s_f) and (cl_t_max - cl_t_min >= s_t) and (cl_snr >= minSNR):
+
+            cluster_pass = ((cl_f_max - cl_f_min >= s_f) and  # min frequency width
+                            (cl_t_max - cl_t_min >= s_t) and  # min time duration
+                            (cl_snr >= minSNR) and            # min average energy
+                            (len(cl) >= alpha * s_f * s_t))   # min cluster fullness
+
+            if cluster_pass:
                 for (l1, l2, snr) in cl:
                     K[l1, l2] = k
                     SNRK[l1, l2] = snr
@@ -88,54 +90,52 @@ def _Clustering2D(SNR, q, s, minSNR):
     return SNRK, K
 
 
-@nb.njit(["Tuple((f8[:, :, :], u4[:, :, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)",
-          "Tuple((f4[:, :, :], u4[:, :, :]))(f4[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8)"],
+@nb.njit(["Tuple((f8[:, :, :], u4[:, :, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)",
+          "Tuple((f4[:, :, :], u4[:, :, :]))(f4[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)"],
          parallel=True, cache=True)
-def _ClusteringN2D(SNR, q, s, minSNR):
+def _ClusteringN2D(SNR, q, s, minSNR, alpha):
     SNRK = np.empty_like(SNR)
     K = np.empty(SNR.shape, dtype=np.uint32)
     for i in nb.prange(SNR.shape[0]):
-        SNRK[i], K[i] = _Clustering2D(SNR[i], q, s, minSNR)
+        SNRK[i], K[i] = _Clustering2D(SNR[i], q, s, minSNR, alpha)
     return SNRK, K
 
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
-def _ClusteringN2D_API(SNR, /, q, s, minSNR):
-    return _ClusteringN2D(SNR, q, s, minSNR)
+def _ClusteringN2D_API(SNR, /, q, s, minSNR, alpha):
+    return _ClusteringN2D(SNR, q, s, minSNR, alpha)
 
 
-@nb.njit(["Tuple((f8[:, :, :], u4[:, :, :]))(f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)",
-          "Tuple((f4[:, :, :], u4[:, :, :]))(f4[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)"], cache=True)
-def _Clustering3D(SNR, q, s, minSNR):
-    B = SNR > 0
-    shape = B.shape
+@nb.njit(["Tuple((f8[:, :, :], u4[:, :, :]))(f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8, f8)",
+          "Tuple((f4[:, :, :], u4[:, :, :]))(f4[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8, f8)"], cache=True)
+def _Clustering3D(SNR, q, s, minSNR, alpha):
+    shape = SNR.shape
     Nc, Nf, Nt = shape
     C = np.full(shape, -1)
     q_c, q_f, q_t = q
     s_c, s_f, s_t = s
     clusters = []
 
-    for (i, j, k), bijk in np.ndenumerate(B):
-        if bijk:
+    for (i, j, k), SNRijk in np.ndenumerate(SNR):
+        if SNRijk:
             # selecting area of interest
             i1, i2 = max(i - q_c, 0), min(i + q_c + 1, Nc)
             j1, j2 = max(j - q_f, 0), min(j + q_f + 1, Nf)
             k1, k2 = max(k - q_t, 0), min(k + q_t + 1, Nt)
 
-            b = B[i1: i2, j1: j2, k1: k2]
-            if np.sum(b) < 2:  # isolated single points are deleted right away
+            snr = SNR[i1: i2, j1: j2, k1: k2]
+            if np.count_nonzero(snr) < 2:  # isolated single points are deleted right away
                 continue
 
             c = C[i1: i2, j1: j2, k1: k2]
-            snr = SNR[i1: i2, j1: j2, k1: k2]
             cluster_k = []
             neighbor_clusters = []
 
             # checking existing clusters and remembering not assigned
             for l, cl in np.ndenumerate(c):
-                if b[l]:
-                    if (cl >= 0):
-                        if (cl not in neighbor_clusters):
+                if snr[l]:
+                    if cl >= 0:
+                        if cl not in neighbor_clusters:
                             neighbor_clusters.append(cl)
                     else:
                         cluster_k.append((i1 + l[0],
@@ -154,7 +154,7 @@ def _Clustering3D(SNR, q, s, minSNR):
                 neighbor_clusters.remove(cluster_assigned)
                 for cli in neighbor_clusters:
                     cluster_k += clusters[cli]
-                    clusters[cli] = [(Nc, Nf, Nt, SNR[-1, -1, -1])]  # meaningless isolated point for compiler, will not be used
+                    clusters[cli] = [(Nc, Nf, Nt, SNR[-1, -1, -1])]  # meaningless point needed for compilation of list types
                 clusters[cluster_assigned] += cluster_k  # add new points
 
             # assigning clusters
@@ -166,14 +166,20 @@ def _Clustering3D(SNR, q, s, minSNR):
     SNRK = np.zeros_like(SNR)
     k = 1
     for cl in clusters:
-        if len(cl) > 1:
+        if len(cl) > 1:  # to skip those meaningless points which we put for compilation
             cl_arr = np.array(cl)
             cl_c_min, cl_c_max = cl_arr[:, 0].min(), cl_arr[:, 0].max() + 1
             cl_f_min, cl_f_max = cl_arr[:, 1].min(), cl_arr[:, 1].max() + 1
             cl_t_min, cl_t_max = cl_arr[:, 2].min(), cl_arr[:, 2].max() + 1
             cl_snr = cl_arr[:, 3].mean()
-            if (cl_c_max - cl_c_min >= s_c) and (cl_f_max - cl_f_min >= s_f) and \
-               (cl_t_max - cl_t_min >= s_t) and (cl_snr >= minSNR):
+
+            cluster_pass = ((cl_c_max - cl_c_min >= s_c) and  # min trace count
+                            (cl_f_max - cl_f_min >= s_f) and  # min frequency width
+                            (cl_t_max - cl_t_min >= s_t) and  # min time duration
+                            (cl_snr >= minSNR) and  # min average energy
+                            (len(cl) >= alpha * s_f * s_t * s_c))  # min cluster fullness
+
+            if cluster_pass:
                 for (l1, l2, l3, snr) in cl:
                     K[l1, l2, l3] = k
                     SNRK[l1, l2, l3] = snr
@@ -182,23 +188,23 @@ def _Clustering3D(SNR, q, s, minSNR):
     return SNRK, K
 
 
-@nb.njit(["Tuple((f8[:, :, :, :], u4[:, :, :, :]))(f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)",
-          "Tuple((f4[:, :, :, :], u4[:, :, :, :]))(f4[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8)"],
+@nb.njit(["Tuple((f8[:, :, :, :], u4[:, :, :, :]))(f8[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8, f8)",
+          "Tuple((f4[:, :, :, :], u4[:, :, :, :]))(f4[:, :, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8, f8)"],
          parallel=True, cache=True)
-def _ClusteringN3D(SNR, q, s, minSNR):
+def _ClusteringN3D(SNR, q, s, minSNR, alpha):
     SNRK = np.empty_like(SNR)
     K = np.empty(SNR.shape, dtype=np.uint32)
     for i in nb.prange(SNR.shape[0]):
-        SNRK[i], K[i] = _Clustering3D(SNR[i], q, s, minSNR)
+        SNRK[i], K[i] = _Clustering3D(SNR[i], q, s, minSNR, alpha)
     return SNRK, K
 
 
 @ReshapeArraysDecorator(dim=4, input_num=1, methodfunc=False, output_num=2, first_shape=True)
-def _ClusteringN3D_API(SNR, /, q, s, minSNR):
-    return _ClusteringN3D(SNR, q, s, minSNR)
+def _ClusteringN3D_API(SNR, /, q, s, minSNR, alpha):
+    return _ClusteringN3D(SNR, q, s, minSNR, alpha)
 
 
-def Clustering(SNR, /, q, s, minSNR):
+def Clustering(SNR, /, q, s, minSNR, alpha):
     """
         Performs clustering (density-based / neighbor-based) of many trimmed spectrograms in parallel.
         If `len(q) = 2` then 2-dimensional clustering in "Frequency x Time" is used, `SNR.shape=(M, Nf, Nt)`
@@ -206,16 +212,17 @@ def Clustering(SNR, /, q, s, minSNR):
 
         Arguments:
             SNR : np.ndarray (M, Nf, Nt) or (M, Nc, Nf, Nt) : Trimmed spectrogram wherein nonzero elements represent
-                                    SNR values. `M' is number of spectrograms, `Nc` number of traces,
+                                    SNR values. `M` is number of spectrograms, `Nc` number of traces,
                                     `Nf` is frequency axis, `Nt` is time axis.
             q : tuple(int, 2) / tuple(int, 3) : neighborhood distance for clustering `(q_f, q_t)` or `(q_c, q_f, q_t)`.
                                                 `q_c` for traces, `q_f` for frequency, `q_t` for time.
             s : tuple(int, 2) / tuple(int, 3) : minimum cluster sizes `(s_f, s_t)` or `(s_c, s_f, s_t)`.
                                                 `s_c` for traces, `s_f` for frequency, `s_t` for time.
             minSNR : float : minimum SNR of clusters
+            alpha : float (0, 1] : minimum cluster fullness
     """
     func = {2: _ClusteringN2D_API, 3: _ClusteringN3D_API}
-    return func[len(q)](SNR, q, s, minSNR)
+    return func[len(q)](SNR, q, s, minSNR, alpha)
 
 
 ## Experimental ##
