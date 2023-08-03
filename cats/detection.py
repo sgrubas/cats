@@ -68,19 +68,18 @@ class CATSDetector(CATSBase):
         frames = get_interval_division(N=len(stft_time), L=self.stationary_frame_len)
 
         from_full_info = {kw: result.get(kw, None) for kw in full_info}
-        kwargs = {**from_full_info,
-                  "dt_sec": self.dt_sec,
-                  "stft_dt_sec": self.stft_hop_sec,
-                  "stft_t0_sec": stft_time[0],
-                  "npts": x.shape[-1],
-                  "stft_npts": len(stft_time),
-                  "stft_frequency": self.stft_frequency,
-                  "noise_stationary_intervals": frames * self.stft_hop_sec + stft_time[0],
-                  "minSNR": self.minSNR,
-                  "history": history,
-                  "aggregate_axis_for_likelihood": self.aggregate_axis_for_likelihood}
 
-        return CATSDetectionResult(**kwargs)
+        return CATSDetectionResult(dt_sec=self.dt_sec,
+                                   stft_dt_sec=self.stft_hop_sec,
+                                   stft_t0_sec=stft_time[0],
+                                   npts=x.shape[-1],
+                                   stft_npts=len(stft_time),
+                                   stft_frequency=self.stft_frequency,
+                                   noise_stationary_intervals=frames * self.stft_hop_sec + stft_time[0],
+                                   minSNR=self.minSNR,
+                                   history=history,
+                                   aggregate_axis_for_likelihood=self.aggregate_axis_for_likelihood,
+                                   **from_full_info)
 
     def detect(self, x: np.ndarray,
                /,
@@ -304,7 +303,7 @@ class CATSDetectionResult(CATSResult):
                     picks: bool = True,
                     trace_loc: np.ndarray = None,
                     gain: int = 1,
-                    clip: bool = True,
+                    clip: bool = False,
                     each_trace: int = 1,
                     **kwargs):
 
