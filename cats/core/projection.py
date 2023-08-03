@@ -11,8 +11,6 @@ from .utils import ReshapeArraysDecorator
 #####################  TIME PROJECTION AND FIILTERING  #####################
 ############################################################################
 
-# TODO:
-#  - RemoveGaps may not work correctly
 
 @nb.njit("i8[:, :](b1[:])", cache=True)
 def _giveIntervals(detection):
@@ -98,7 +96,7 @@ def filter_intervals(intervals, min_separation, min_duration):
                                    intervals[:, 0][combine_inds[:-1]],  # starts with separation `> min` from preceding
                                    intervals[:, 1][combine_inds[1:]]  # ends with separation `> min` from subsequent
                                   ), axis=-1)
-    duration_inds = (combined_intervals[:, 1] - combined_intervals[:, 0]) >= min_duration
+    duration_inds = (combined_intervals[:, 1] - combined_intervals[:, 0]) >= min_duration - 1  # `-` is for single point
 
     return combined_intervals[duration_inds]
 
