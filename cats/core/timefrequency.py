@@ -12,7 +12,7 @@ import ssqueezepy as ssq
 import os
 from .utils import ReshapeArraysDecorator, update_object_params
 from pydantic import BaseModel, Field, Extra
-from typing import Union, Literal, Tuple, List
+from typing import Union, Literal
 
 
 ############################################################
@@ -24,7 +24,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
     """
         STFT operator
     """
-    window_specs: Union[int, float, Tuple[str, float]]
+    window_specs: Union[int, float, tuple[str, float]]
     overlap: float = Field(0.75, ge=0.0, lt=1.0)
     dt_sec: float = 1.0
     backend: Literal["scipy", "ssqueezepy", "ssqueezepy_gpu"] = "ssqueezepy"
@@ -186,13 +186,10 @@ class STFTOperator(BaseModel, extra=Extra.allow):
             gpu_status = 'gpu' in self.backend
             os.environ['SSQ_GPU'] = '1' if gpu_status else '0'
 
-            X = []
-            for ci in C:
+            X = np.empty((len(C), N))
+            for i, ci in enumerate(C):
                 xi = ssq.istft(ci, N=N, **self.inv_kw)
-                if not isinstance(C, np.ndarray):
-                    xi = xi.cpu().numpy()
-                X.append(xi)
-            X = np.stack(X, axis=0)
+                X[i] = xi if isinstance(xi, np.ndarray) else xi.cpu().numpy()
 
         return X
 
@@ -242,7 +239,7 @@ class CWTOperator(BaseModel, extra=Extra.allow):
     """
         CWT operator
     """
-    dt_sec: float
+    dt_sec: float = 1
 
     # forward CWT params
     wavelet: Union[str, tuple[str, dict]] = ('morlet', {'mu': 5})
@@ -266,6 +263,8 @@ class CWTOperator(BaseModel, extra=Extra.allow):
     one_int: bool = True
     x_len: int = None
     x_mean: int = 0
+
+    gpu: bool = False
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -300,6 +299,9 @@ class CWTOperator(BaseModel, extra=Extra.allow):
                            "rpadded": self.padtype,
                            "l1_norm": self.l1_norm}
 
+    def reset_params(self, **params):
+        update_object_params(self, **params)
+
     @ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=True, output_num=1, first_shape=True)
     def forward(self, X):
         W, *_ = ssq.cwt(X, **self.forward_kw)
@@ -307,7 +309,14 @@ class CWTOperator(BaseModel, extra=Extra.allow):
 
     @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=True, output_num=1, first_shape=True)
     def inverse(self, W):
-        return ssq.icwt(W, **self.inverse_kw)
+        os.environ['SSQ_GPU'] = '1' if self.gpu else '0'
+
+        X = np.empty((len(W), W.shape[-1]))
+        for i, wi in enumerate(W):
+            xi = ssq.icwt(wi, **self.inverse_kw)
+            X[i] = xi if isinstance(xi, np.ndarray) else xi.cpu().numpy()
+
+        return X
 
     def __mul__(self, X):
         return self.forward(X)
