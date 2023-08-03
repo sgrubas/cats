@@ -106,11 +106,11 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         self.windows_overlap_sec = max(self.windows_overlap_sec or 0, 0)
         self.step_sec = max(self.step_sec or self.dt_sec, self.dt_sec)
 
-        self.long_window_len = round(self.long_window_sec / self.dt_sec)
-        self.short_window_len = round(self.short_window_sec / self.dt_sec)
-        self.min_duration_len = round(self.min_duration_sec / self.dt_sec)
-        self.min_separation_len = round(self.min_separation_sec / self.dt_sec)
-        self.windows_overlap_len = round(self.windows_overlap_sec / self.dt_sec)
+        self.long_window_len = max(round(self.long_window_sec / self.dt_sec), 1)
+        self.short_window_len = max(round(self.short_window_sec / self.dt_sec), 1)
+        self.min_duration_len = max(round(self.min_duration_sec / self.dt_sec), 1)
+        self.min_separation_len = max(round(self.min_separation_sec / self.dt_sec), 1)
+        self.windows_overlap_len = max(round(self.windows_overlap_sec / self.dt_sec), 1)
         self.step_len = max(round(self.step_sec / self.dt_sec), 1)
 
         self.ch_functions = {'abs': np.abs, 'square': np.square}

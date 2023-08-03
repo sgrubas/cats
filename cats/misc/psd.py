@@ -66,11 +66,13 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         self.freq_bandpass_slice = give_index_slice_by_limits(self.freq_bandpass_Hz, self.stft_df)
         self.freq_bandpass_len = (self.freq_bandpass_slice.start, self.freq_bandpass_slice.stop)
 
-        self.min_duration_len = round(self.min_duration_sec / self.stft_hop_sec)
-        self.min_separation_len = round(self.min_separation_sec / self.stft_hop_sec)
+        self.min_duration_len = max(round(self.min_duration_sec / self.stft_hop_sec), 1)
+        self.min_separation_len = max(round(self.min_separation_sec / self.stft_hop_sec), 1)
 
         self.ch_functions = {'abs': lambda x: x, 'square': np.square}
         self.ch_func = self.ch_functions[self.characteristic]
+
+        self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
     def reset_params(self, **params):
         """
@@ -110,6 +112,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
             result['spectrogram'] = np.abs(result['coefficients'])**2
 
         del_vals_by_keys(result, full_info, ['coefficients'])
+
+        # bandpass + time edges of STFT result
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
 
         with history(current_process='Trimming'):
@@ -121,6 +125,10 @@ class PSDDetector(BaseModel, extra=Extra.allow):
             result['spectrogram_SNR_trimmed'] = \
                 np.where(result['spectrogram_SNR_trimmed'] >= 1.0,
                          self.ch_func(result['spectrogram_SNR_trimmed']), 0.0)
+
+            # Removing spiky high-energy edges
+            result['spectrogram_SNR_trimmed'][..., :self.time_edge] = 0.0
+            result['spectrogram_SNR_trimmed'][..., -self.time_edge - 1:] = 0.0
 
         with history(current_process='Likelihood'):
             # Aggregation
@@ -329,7 +337,7 @@ class PSDDetectionResult(CATSDetectionResult):
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
-                        label='1. Spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims)
+                        label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
                         label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
 
