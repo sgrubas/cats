@@ -82,7 +82,7 @@ def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95, original_mode=False, zero_Nyq_f
         d[..., -1] = 1
 
     # Calculating constants depending on dimension and `minSNR`
-    rho = minSNR if (minSNR is not None) else np.sqrt(2 * np.log(N * 2)) # `N * d` for `d = 2`
+    rho = minSNR if (minSNR is not None) else np.sqrt(2 * np.log(N * 2))  # `N * d` for `d = 2`
     xi_lamb = _Xi_Lambda(d, rho, d_unique=[1, 2]).reshape(-1)
     frames = np.array([[0, N]]) if frames is None else frames
     Nmins = np.array([_Nmin(abs(i2 - i1), Q) for i1, i2 in frames])
