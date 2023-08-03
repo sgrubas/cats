@@ -5,7 +5,7 @@ hv.extension('matplotlib')
 
 
 def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, trace_loc=None,
-                time_interval_sec=None, gain=1, clip=True, each_trace=1, **kwargs):
+                time_interval_sec=None, gain=1, clip=False, each_trace=1, **kwargs):
 
     trace_loc = trace_loc if (trace_loc is not None) else np.arange(data.shape[0]).astype(float)
 
