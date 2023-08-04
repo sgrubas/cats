@@ -45,7 +45,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
     cluster_size_f_Hz: float = 20.0
     cluster_distance_t_sec: float = None
     cluster_distance_f_Hz: float = None
-    cluster_fullness: float = Field(0, gt=0.0, le=1.0)
+    cluster_fullness: float = Field(0, ge=0.0, le=1.0)
 
     # Minor clustering params
     freq_bandpass_Hz: Tuple[float, float] = None

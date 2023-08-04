@@ -11,81 +11,79 @@ from scipy import special, stats
 ###################  CLUSTERING  ###################
 
 
+@nb.njit(["Tuple((UniTuple(i8, 2), UniTuple(i8, 2), u8, f8))(UniTuple(i8, 2), UniTuple(i8, 2), f8[:, :],"
+          "DictType(UniTuple(i8, 2), u4), u4, Tuple((UniTuple(i8, 2), UniTuple(i8, 2), u8, f8)))",
+          "Tuple((UniTuple(i8, 2), UniTuple(i8, 2), u8, f8))(UniTuple(i8, 2), UniTuple(i8, 2), f4[:, :],"
+          "DictType(UniTuple(i8, 2), u4), u4, Tuple((UniTuple(i8, 2), UniTuple(i8, 2), u8, f8)))"],
+          cache=True
+         )
+def recursive_neighbor_search_2D(ind, q, SNR, C_dict, cid, cluster_stat):
+    mins, maxs, n, snr = cluster_stat
+    C_dict[ind] = cid
+    n += 1
+    mins = (min(mins[0], ind[0]), min(mins[1], ind[1]))
+    maxs = (max(maxs[0], ind[0]), max(maxs[1], ind[1]))
+    snr += SNR[ind]
+
+    # checking all neighbors not previously assigned
+    i, j = ind
+    q_f, q_t = q
+    Nf, Nt = SNR.shape
+    i1, i2 = max(i - q_f, 0), min(i + q_f + 1, Nf)
+    j1, j2 = max(j - q_t, 0), min(j + q_t + 1, Nt)
+
+    for li in range(i1, i2):
+        for lj in range(j1, j2):
+            l = (li, lj)
+            if SNR[l] and (C_dict[l] < 1):
+                mins, maxs, n, snr = recursive_neighbor_search_2D(l, q, SNR, C_dict, cid, (mins, maxs, n, snr))
+
+    return mins, maxs, n, snr
+
+
 @nb.njit(["Tuple((f8[:, :], u4[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)",
           "Tuple((f4[:, :], u4[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)"], cache=True)
 def _Clustering2D(SNR, q, s, minSNR, alpha):
     shape = SNR.shape
-    Nf, Nt = shape
-    C = np.full(shape, -1)
-    q_f, q_t = q
     s_f, s_t = s
+
+    Inds = np.argwhere(SNR)
+    C_dict = nb.typed.Dict()
+    for i, j in Inds:
+        C_dict[(i, j)] = np.uint32(0)
+
     clusters = []
-
-    for (i, j), SNRij in np.ndenumerate(SNR):
-        if SNRij:
-            # selecting area of interest
-            i1, i2 = max(i - q_f, 0), min(i + q_f + 1, Nf)
-            j1, j2 = max(j - q_t, 0), min(j + q_t + 1, Nt)
-
-            snr = SNR[i1: i2, j1: j2]
-            if np.count_nonzero(snr) < 2:  # isolated single points are deleted right away
-                continue
-
-            c = C[i1: i2, j1: j2]
-
-            cluster_k = []
-            neighbor_clusters = []
-
-            # checking existing clusters and remembering not assigned
-            for l, cl in np.ndenumerate(c):
-                if snr[l]:
-                    if cl >= 0:
-                        if cl not in neighbor_clusters:
-                            neighbor_clusters.append(cl)
-                    else:
-                        cluster_k.append((i1 + l[0],
-                                          j1 + l[1],
-                                          snr[l]))
-
-            k = len(neighbor_clusters)
-            if k == 0:  # updating collection of clusters
-                cluster_assigned = len(clusters)
-                clusters.append(cluster_k)
-            elif (k == 1) and (len(cluster_k) == 0):  # nothing added
-                continue
-            else:  # combining different clusters into one
-                cluster_assigned = min(neighbor_clusters)
-                neighbor_clusters.remove(cluster_assigned)
-                for cli in neighbor_clusters:
-                    cluster_k += clusters[cli]
-                    clusters[cli] = [(Nf, Nt, SNR[-1, -1])]  # meaningless point needed for compilation of list types
-                clusters[cluster_assigned] += cluster_k  # add new points
-
-            # assigning clusters
-            for (l1, l2, snr) in cluster_k:
-                C[l1, l2] = cluster_assigned
+    cid = 1
+    for i, j in Inds:
+        ind = (i, j)
+        if SNR[ind] and (C_dict[ind] == 0):
+            cluster_stats = (ind, ind, 0, 0.0)
+            cluster_stats = recursive_neighbor_search_2D(ind, q, SNR, C_dict, cid, cluster_stats)
+            clusters.append(cluster_stats)
+            cid += 1
 
     # filtering clusters and projection
+    k = 1
+    passed_clusters_cid = {}
+    for cid in range(len(clusters)):
+        mins, maxs, n, snr = clusters[cid]
+        cluster_pass = ((maxs[0] - mins[0] + 1 >= s_f) and  # min frequency width
+                        (maxs[1] - mins[1] + 1 >= s_t) and  # min time duration
+                        (snr / n >= minSNR) and  # min average energy
+                        (n >= alpha * s_f * s_t))  # min cluster fullness
+        if cluster_pass:
+            passed_clusters_cid[cid + 1] = k
+            k += 1
+
+    # assigning allowed clusters
     K = np.full(shape, 0, dtype=np.uint32)
     SNRK = np.zeros_like(SNR)
-    k = 1
-    for cl in clusters:
-        if len(cl) > 1:  # to skip those meaningless points which we put for compilation
-            cl_arr = np.array(cl)
-            cl_f_min, cl_f_max = cl_arr[:, 0].min(), cl_arr[:, 0].max() + 1
-            cl_t_min, cl_t_max = cl_arr[:, 1].min(), cl_arr[:, 1].max() + 1
-            cl_snr = cl_arr[:, 2].mean()
 
-            cluster_pass = ((cl_f_max - cl_f_min >= s_f) and  # min frequency width
-                            (cl_t_max - cl_t_min >= s_t) and  # min time duration
-                            (cl_snr >= minSNR) and            # min average energy
-                            (len(cl) >= alpha * s_f * s_t))   # min cluster fullness
-
-            if cluster_pass:
-                for (l1, l2, snr) in cl:
-                    K[l1, l2] = k
-                    SNRK[l1, l2] = snr
-                k += 1
+    for ind, cid in C_dict.items():
+        kid = passed_clusters_cid.get(cid, 0)
+        if kid > 0:
+            K[ind] = kid
+            SNRK[ind] = SNR[ind]
 
     return SNRK, K
 
@@ -264,5 +262,86 @@ def OptimalNeighborhoodDistance(minSNR, d=2, pmin=0.95, qmax=10, maxN=1):
     p = special.gammaincc(d / 2, xi**2 / 2)
     q_opt = _optimalNeighborhoodDistance(p, pmin=pmin, qmax=qmax, maxN=maxN)
     return q_opt
+
+
+## OLD ##
+
+@nb.njit(["Tuple((f8[:, :], u4[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)",
+          "Tuple((f4[:, :], u4[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)"], cache=True)
+def _Clustering2D_old(SNR, q, s, minSNR, alpha):
+    shape = SNR.shape
+    Nf, Nt = shape
+    C = np.full(shape, -1)
+    q_f, q_t = q
+    s_f, s_t = s
+    clusters = []
+
+    for (i, j), SNRij in np.ndenumerate(SNR):
+        if SNRij:
+            # selecting area of interest
+            i1, i2 = max(i - q_f, 0), min(i + q_f + 1, Nf)
+            j1, j2 = max(j - q_t, 0), min(j + q_t + 1, Nt)
+
+            snr = SNR[i1: i2, j1: j2]
+            if np.count_nonzero(snr) < 2:  # isolated single points are deleted right away
+                continue
+
+            c = C[i1: i2, j1: j2]
+
+            cluster_k = []
+            neighbor_clusters = []
+
+            # checking existing clusters and remembering not assigned
+            for l, cl in np.ndenumerate(c):
+                if snr[l]:
+                    if cl >= 0:
+                        if cl not in neighbor_clusters:
+                            neighbor_clusters.append(cl)
+                    else:
+                        cluster_k.append((i1 + l[0],
+                                          j1 + l[1],
+                                          snr[l]))
+
+            k = len(neighbor_clusters)
+            if k == 0:  # updating collection of clusters
+                cluster_assigned = len(clusters)
+                clusters.append(cluster_k)
+            elif (k == 1) and (len(cluster_k) == 0):  # nothing added
+                continue
+            else:  # combining different clusters into one
+                cluster_assigned = min(neighbor_clusters)
+                neighbor_clusters.remove(cluster_assigned)
+                for cli in neighbor_clusters:
+                    cluster_k += clusters[cli]
+                    clusters[cli] = [(Nf, Nt, SNR[-1, -1])]  # meaningless point needed for compilation of list types
+                clusters[cluster_assigned] += cluster_k  # add new points
+
+            # assigning clusters
+            for (l1, l2, snr) in cluster_k:
+                C[l1, l2] = cluster_assigned
+
+    # filtering clusters and projection
+    K = np.full(shape, 0, dtype=np.uint32)
+    SNRK = np.zeros_like(SNR)
+    k = 1
+    for cl in clusters:
+        if len(cl) > 1:  # to skip those meaningless points which we put for compilation
+            cl_arr = np.array(cl)
+            cl_f_min, cl_f_max = cl_arr[:, 0].min(), cl_arr[:, 0].max() + 1
+            cl_t_min, cl_t_max = cl_arr[:, 1].min(), cl_arr[:, 1].max() + 1
+            cl_snr = cl_arr[:, 2].mean()
+
+            cluster_pass = ((cl_f_max - cl_f_min >= s_f) and  # min frequency width
+                            (cl_t_max - cl_t_min >= s_t) and  # min time duration
+                            (cl_snr >= minSNR) and            # min average energy
+                            (len(cl) >= alpha * s_f * s_t))   # min cluster fullness
+
+            if cluster_pass:
+                for (l1, l2, snr) in cl:
+                    K[l1, l2] = k
+                    SNRK[l1, l2] = snr
+                k += 1
+
+    return SNRK, K
 
 
