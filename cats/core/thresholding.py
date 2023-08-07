@@ -21,7 +21,7 @@ def _Thresholding(PSD, Eta, frames):
     for j in nb.prange(M):
         j1, j2 = frames[j]
         for i in range(N):
-            B[i, j1 : j2 + 1] = PSD[i, j1 : j2 + 1] > Eta[i, j]
+            B[i, j1 : j2 + 1] = PSD[i, j1: j2 + 1] > Eta[i, j]
     return B
 
 
@@ -59,7 +59,7 @@ def _ThresholdingSNR(PSD, Sgm, Eta, frames):
         j1, j2 = frames[j]
         for i in nb.prange(N):
             psd = PSD[i, j1: j2 + 1]
-            SNR[i, j1: j2 + 1] = (psd > Eta[i, j]) * psd / Sgm[i, j]
+            SNR[i, j1: j2 + 1] = (psd > Eta[i, j]) * psd / (Sgm[i, j] + 1e-8)
     return SNR
 
 
