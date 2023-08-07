@@ -35,13 +35,14 @@ class CATSDetector(CATSBase):
         result, history = super()._apply(x, finish_on='clustering', verbose=verbose, full_info=pre_full_info)
 
         stft_time = self.STFT.forward_time_axis(x.shape[-1])
+        bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
 
         with history(current_process='Likelihood'):
             # Aggregation
-            counts = np.count_nonzero(result['spectrogram_SNR_clustered'], axis=-2)
+            counts = np.count_nonzero(result['spectrogram_SNR_clustered'][bandpass_slice], axis=-2)
             counts = np.where(counts == 0, 1, counts).astype(result['spectrogram_SNR_clustered'].dtype)
 
-            result['likelihood'] = result['spectrogram_SNR_clustered'].sum(axis=-2) / counts
+            result['likelihood'] = result['spectrogram_SNR_clustered'][bandpass_slice].sum(axis=-2) / counts
 
             del counts
             del_vals_by_keys(result, full_info, ['spectrogram_SNR_clustered'])

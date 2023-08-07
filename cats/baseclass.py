@@ -272,16 +272,16 @@ The fastest CPU version is 'ssqueezepy', which is default.
         precision_order = x_bytes / x.size
 
         memory_usage_bytes = {
-            "stft_frequency":             8. * stft_shape[-2],               # float64 always
-            "noise_stationary_intervals":       8. * bedate_shape[-1],             # float64 always
-            "signal":                     1. * x_bytes,                          # float / int
-            "coefficients":               2. * precision_order * stft_size,      # complex
-            "spectrogram":                1. * precision_order * stft_size,      # float
-            "noise_threshold":            1. * precision_order * bedate_size,    # float
-            "noise_std":                  1. * precision_order * bedate_size,    # float
-            "spectrogram_SNR_trimmed":    1. * precision_order * stft_size,      # float
-            "spectrogram_SNR_clustered":  1. * precision_order * stft_size,      # float
-            "spectrogram_cluster_ID":     4. * stft_size,                    # uint32 always
+            "stft_frequency":              8. * stft_shape[-2],                 # float64 always
+            "noise_stationary_intervals":  8. * bedate_shape[-1],               # float64 always
+            "signal":                      1. * x_bytes,                        # float / int
+            "coefficients":                2. * precision_order * stft_size,    # complex
+            "spectrogram":                 1. * precision_order * stft_size,    # float
+            "noise_threshold":             1. * precision_order * bedate_size,  # float
+            "noise_std":                   1. * precision_order * bedate_size,  # float
+            "spectrogram_SNR_trimmed":     1. * precision_order * stft_size,    # float
+            "spectrogram_SNR_clustered":   1. * precision_order * stft_size,    # float
+            "spectrogram_cluster_ID":      4. * stft_size,                      # uint32 always
         }
         used_together = [('coefficients', 'spectrogram'),
                          ('spectrogram', 'noise_threshold', 'noise_std', 'spectrogram_SNR_trimmed'),
@@ -478,4 +478,3 @@ class CATSResult(BaseModel):
     def load(cls, filepath):
         mdict = loadmat(filepath, simplify_cells=True)
         return cls(**mdict)
-
