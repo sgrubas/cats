@@ -6,13 +6,19 @@ import numpy as np
 import numba as nb
 from .utils import ReshapeArraysDecorator
 from .date import _xi
-from scipy import special, stats
+from scipy import special, stats, ndimage
+import pandas as pd
+from functools import partial
 
 
 ###################  CLUSTERING  ###################
 
-@nb.njit(["Tuple((UniTuple(i8, 2), UniTuple(i8, 2), i8, f8))(UniTuple(i8, 2), UniTuple(i8, 2), f8[:, :], u4[:, :], u4)",
-          "Tuple((UniTuple(i8, 2), UniTuple(i8, 2), i8, f8))(UniTuple(i8, 2), UniTuple(i8, 2), f4[:, :], u4[:, :], u4)"],
+
+CLUSTER_STAT_SIGNATURE = "Tuple((UniTuple(i8, 2), UniTuple(i8, 2), i8, f8))"
+
+
+@nb.njit([f"{CLUSTER_STAT_SIGNATURE}(UniTuple(i8, 2), UniTuple(i8, 2), f8[:, :], u4[:, :], u4)",
+          f"{CLUSTER_STAT_SIGNATURE}(UniTuple(i8, 2), UniTuple(i8, 2), f4[:, :], u4[:, :], u4)"],
          cache=True
          )
 def iterative_neighbor_search_2D(ind, q, SNR, C, cid):
@@ -52,12 +58,13 @@ def iterative_neighbor_search_2D(ind, q, SNR, C, cid):
 
 
 @nb.njit(["Tuple((f8[:, :], u4[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)",
-          "Tuple((f4[:, :], u4[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)"], cache=True)
+          "Tuple((f4[:, :], u4[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)"],
+         cache=True)
 def _Clustering2D(SNR, q, s, minSNR, alpha):
     shape = SNR.shape
 
+    # finding clusters
     C = np.zeros(shape, dtype=np.uint32)
-
     clusters = {}
     cid = 1
     for i, j in np.argwhere(SNR):
@@ -80,6 +87,8 @@ def _Clustering2D(SNR, q, s, minSNR, alpha):
         if cluster_pass:
             passed_clusters_cid[cid] = k
             k += 1
+
+    # clusters = {new_cid: clusters[old_cid] for old_cid, new_cid in passed_clusters_cid.items()}
 
     # assigning allowed clusters
     SNRK = np.zeros_like(SNR)
@@ -227,6 +236,49 @@ def Clustering(SNR, /, q, s, minSNR, alpha):
 
 
 ## Experimental ##
+
+
+@nb.njit(["f8[:](UniTuple(i8, 2), f8, f8, f8[:], i4[:])",
+          "f8[:](UniTuple(i8, 2), f8, f8, f4[:], i4[:])"], cache=True)
+def _cluster_stats(shape, df, dt, arr, inds):
+    freq_inds, time_inds = np.divmod(inds, shape[1])
+    f1, f2 = np.min(freq_inds), np.max(freq_inds) + 1
+    t1, t2 = np.min(time_inds), np.max(time_inds) + 1
+    snr = np.mean(arr)
+    return np.array([t1 * dt, t2 * dt, f1 * df, f2 * df, snr, float(len(arr))])
+
+
+def clusters_stats_2D(SNR, CID, df, dt):
+    cids = np.arange(1, CID.max() + 1)
+    if len(cids) > 0:
+        stats = ndimage.labeled_comprehension(input=SNR,
+                                              labels=CID,
+                                              index=cids,
+                                              func=partial(_cluster_stats, SNR.shape, df, dt),
+                                              out_dtype=np.ndarray,
+                                              default=np.nan,
+                                              pass_positions=True)
+    else:
+        stats = []
+    names = ['Time_start_sec', 'Time_end_sec', 'Frequency_start_Hz',
+             'Frequency_end_Hz', 'Average_SNR', 'Nonzero_pixel_count']
+    df_stats = pd.DataFrame(columns=names, index=pd.Index(cids, name='Cluster_ID'))
+    for i, stat in zip(cids, stats):
+        df_stats.loc[i] = stat
+    return df_stats
+
+
+def get_clusters_catalogs(cats_result):
+    SNR, CID = cats_result.spectrogram_SNR_clustered, cats_result.spectrogram_cluster_ID
+    assert (SNR is not None) and (CID is not None), "CATS result must contain `spectrogram_SNR_clustered` and " \
+                                                    "`spectrogram_cluster_ID` (use `full_info`)"
+    df = cats_result.stft_frequency[1] - cats_result.stft_frequency[0]
+    dt = cats_result.stft_dt_sec
+    shape = SNR.shape[:-2]
+    clusters_stats = np.empty(shape, dtype=pd.DataFrame)
+    for ind in np.ndindex(*shape):
+        clusters_stats[ind] = clusters_stats_2D(SNR[ind], CID[ind], df, dt)
+    return clusters_stats
 
 
 def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):

@@ -10,3 +10,4 @@ psutil~=5.9.5
 tqdm~=4.65.0
 obspy~=1.4.0
 ipywidgets~=8.0
+pandas~=1.5.3

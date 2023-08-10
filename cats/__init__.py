@@ -1,7 +1,7 @@
 from .core.timefrequency import STFTOperator, CWTOperator
 from .core.date import BEDATE, EtaToSigma
 from .core.thresholding import Thresholding
-from .core.clustering import Clustering
+from .core.clustering import Clustering, get_clusters_catalogs
 from .core.projection import FilterIntervals, GiveIntervals
 from .core.association import MatchSequences, PickFeatures, Associate, PickAssociateBySpectrogram
 from .core import utils
@@ -13,4 +13,3 @@ from . import misc
 from . import io
 from .core import env_variables
 from .core.env_variables import get_max_memory_available_for_cats, set_max_memory_for_cats
-
