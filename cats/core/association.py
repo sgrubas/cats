@@ -1,5 +1,5 @@
 """
-    Functions for association detected evetns from different stations / channels.
+    Functions for association detected events from different stations / channels.
 """
 
 from typing import Union

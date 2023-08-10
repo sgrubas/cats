@@ -199,6 +199,10 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         return self.detect(x, verbose=True, full_info=True)
 
     @staticmethod
+    def get_qc_keys():
+        return ["signal", "likelihood", "detected_intervals", "picked_features"]
+
+    @staticmethod
     def parse_info_dict(full_info):
         info_keys = ["signal",
                      "likelihood",
@@ -208,10 +212,7 @@ class STALTADetector(BaseModel, extra=Extra.allow):
 
         if isinstance(full_info, str) and \
            (full_info in ['plot', 'plotting', 'plt', 'qc', 'main']):  # only those needed for plotting step-by-step
-            full_info = {'signal':              True,
-                         'likelihood':          True,
-                         'detected_intervals':  True,
-                         'picked_features':     True}
+            full_info = STALTADetector.get_qc_keys()
 
         full_info = cast_to_bool_dict(full_info, info_keys)
 

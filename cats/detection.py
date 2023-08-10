@@ -124,18 +124,17 @@ class CATSDetector(CATSBase):
     def __pow__(self, x):
         return self.detect(x, verbose=True, full_info=True)
 
+    @staticmethod
+    def get_qc_keys():
+        return ["signal", "spectrogram", "spectrogram_SNR_trimmed", "spectrogram_SNR_clustered",
+                "likelihood", "detected_intervals", "picked_features"]
+
     def parse_info_dict(self, full_info):
         info_keys = self._info_keys()
         info_keys.extend(["likelihood", "detection", "detected_intervals", "picked_features"])
         if isinstance(full_info, str) and \
            (full_info in ['plot', 'plotting', 'plt', 'qc', 'main']):  # only those needed for plotting step-by-step
-            full_info = {'signal':                    True,
-                         'spectrogram':               True,
-                         'spectrogram_SNR_trimmed':   True,
-                         'spectrogram_SNR_clustered': True,
-                         'likelihood':                True,
-                         'detected_intervals':        True,
-                         'picked_features':           True}
+            full_info = self.get_qc_keys()
 
         full_info = cast_to_bool_dict(full_info, info_keys)
 
