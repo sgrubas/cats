@@ -10,7 +10,6 @@ from scipy import special, stats, ndimage
 import pandas as pd
 from functools import partial
 
-
 ###################  CLUSTERING  ###################
 
 
@@ -238,30 +237,43 @@ def Clustering(SNR, /, q, s, minSNR, alpha):
 ## Experimental ##
 
 
-@nb.njit(["f8[:](UniTuple(i8, 2), f8, f8, f8[:], i4[:])",
-          "f8[:](UniTuple(i8, 2), f8, f8, f4[:], i4[:])"], cache=True)
-def _cluster_stats(shape, df, dt, arr, inds):
+@nb.njit(["f8[:](UniTuple(i8, 2), f8, f8, f8, f8[:], i4[:])",
+          "f8[:](UniTuple(i8, 2), f8, f8, f8, f4[:], i4[:])"], cache=True)
+def _cluster_stats(shape, df, dt, fmax, arr, inds):
     freq_inds, time_inds = np.divmod(inds, shape[1])
-    f1, f2 = np.min(freq_inds), np.max(freq_inds) + 1
-    t1, t2 = np.min(time_inds), np.max(time_inds) + 1
-    snr = np.mean(arr)
-    return np.array([t1 * dt, t2 * dt, f1 * df, f2 * df, snr, float(len(arr))])
+
+    t1, t2 = np.min(time_inds) - 0.5, np.max(time_inds) + 0.5
+    f1, f2 = np.min(freq_inds) - 0.5, np.max(freq_inds) + 0.5
+    f1, f2 = max(0.0, f1), min(fmax, f2)
+
+    snr_sum = np.sum(arr)
+    N = len(arr)
+    snr = snr_sum / N
+
+    t_center = np.sum(arr * time_inds) / snr_sum * dt
+    f_center = np.sum(arr * freq_inds) / snr_sum * df
+    Area = N * df * dt
+
+    peak_snr = np.max(arr)
+
+    return np.array([t1 * dt, t2 * dt, t_center, f1 * df, f2 * df, f_center, snr, peak_snr, Area])
 
 
-def clusters_stats_2D(SNR, CID, df, dt):
+def clusters_stats_2D(SNR, CID, df, dt, fmax):
     cids = np.arange(1, CID.max() + 1)
     if len(cids) > 0:
         stats = ndimage.labeled_comprehension(input=SNR,
                                               labels=CID,
                                               index=cids,
-                                              func=partial(_cluster_stats, SNR.shape, df, dt),
+                                              func=partial(_cluster_stats, SNR.shape, df, dt, fmax),
                                               out_dtype=np.ndarray,
                                               default=np.nan,
                                               pass_positions=True)
     else:
         stats = []
-    names = ['Time_start_sec', 'Time_end_sec', 'Frequency_start_Hz',
-             'Frequency_end_Hz', 'Average_SNR', 'Nonzero_pixel_count']
+    names = ['Time_start_sec', 'Time_end_sec', 'Time_center_of_mass_sec',
+             'Frequency_start_Hz', 'Frequency_end_Hz', 'Frequency_center_of_mass_Hz',
+             'Average_SNR', 'Peak_SNR', 'Area']
     df_stats = pd.DataFrame(columns=names, index=pd.Index(cids, name='Cluster_ID'))
     for i, stat in zip(cids, stats):
         df_stats.loc[i] = stat
@@ -272,12 +284,13 @@ def get_clusters_catalogs(cats_result):
     SNR, CID = cats_result.spectrogram_SNR_clustered, cats_result.spectrogram_cluster_ID
     assert (SNR is not None) and (CID is not None), "CATS result must contain `spectrogram_SNR_clustered` and " \
                                                     "`spectrogram_cluster_ID` (use `full_info`)"
-    df = cats_result.stft_frequency[1] - cats_result.stft_frequency[0]
+    freq = cats_result.stft_frequency
+    df = freq[1] - freq[0]
     dt = cats_result.stft_dt_sec
     shape = SNR.shape[:-2]
     clusters_stats = np.empty(shape, dtype=pd.DataFrame)
     for ind in np.ndindex(*shape):
-        clusters_stats[ind] = clusters_stats_2D(SNR[ind], CID[ind], df, dt)
+        clusters_stats[ind] = clusters_stats_2D(SNR[ind], CID[ind], df, dt, freq[-1])
     return clusters_stats
 
 
