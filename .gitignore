@@ -8,12 +8,9 @@ bin-release/
 .settings/
 /cats/__pycache__/
 cats.egg-info/
-/examples/.ipynb_checkpoints
 /figures
-/examples/Detection.ipynb
-/examples/Denoising.ipynb
-/examples/DetectionTests.ipynb
-/examples/ScipyLabel_vs_CATS_clustering.ipynb
+/tutorials/.ipynb_checkpoints
+/testing
 
 # Executables
 *.swf

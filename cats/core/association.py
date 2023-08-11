@@ -282,6 +282,25 @@ def Associate(sequences, location_order, /, vote_rate,
     return associated_sequences
 
 
+# def to2d_features(array, num_features=2):
+#     if array.size == 0:
+#         arr = array.reshape((0, num_features))
+#     else:
+#         arr = np.expand_dims(array, 0) if array.ndim == 1 else array
+#     return np.float64(arr)
+#
+#
+# def get_association(cats_result, location_order, /, vote_rate,
+#                     max_dist_assignment, assignment_aggregate='mean',
+#                     metric_order=1, method='manual', verbose=True):
+#     picks = to2d_features(cats_result.picked_features)
+#     associated = Associate(np.array(picks, dtype=object), location_order,
+#                            vote_rate=vote_rate, max_dist_assignment=max_dist_assignment,
+#                            assignment_aggregate=assignment_aggregate, metric_order=metric_order,
+#                            method=method, verbose=verbose)
+#     return associated
+
+
 @ReshapeArraysDecorator(dim=4, input_num=2, output_num=0)
 def PickAssociateBySpectrogram(spectrogram, location, /, time, frequency, min_height, vote_rate,
                                max_dist_assignment, min_width_sec=0.0, assignment_aggregate='mean',
