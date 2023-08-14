@@ -1,6 +1,5 @@
 from .core.timefrequency import STFTOperator, CWTOperator
 from .core.date import BEDATE, EtaToSigma
-from .core.thresholding import Thresholding
 from .core.clustering import Clustering, get_clusters_catalogs
 from .core.projection import FilterIntervals, GiveIntervals
 from .core.association import MatchSequences, PickFeatures, Associate, PickAssociateBySpectrogram
