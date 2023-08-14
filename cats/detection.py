@@ -15,9 +15,10 @@ from tqdm.notebook import tqdm
 from .baseclass import CATSBase, CATSResult
 from .core.association import PickDetectedPeaks
 from .core.projection import FilterDetection
+from .core.clustering import concatenate_arrays_of_cluster_catalogs
 from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles
 from .core.utils import format_index_by_dimensions, give_index_slice_by_limits, intervals_intersection
-from .core.utils import get_interval_division, aggregate_array_by_axis_and_func, format_interval_by_limits
+from .core.utils import aggregate_array_by_axis_and_func, format_interval_by_limits
 from .core.plottingutils import plot_traces
 from .io import read_data
 
@@ -66,8 +67,6 @@ class CATSDetector(CATSBase):
 
         history.print_total_time()
 
-        frames = get_interval_division(N=len(stft_time), L=self.stationary_frame_len)
-
         from_full_info = {kw: result.get(kw, None) for kw in full_info}
 
         return CATSDetectionResult(dt_sec=self.dt_sec,
@@ -76,10 +75,12 @@ class CATSDetector(CATSBase):
                                    npts=x.shape[-1],
                                    stft_npts=len(stft_time),
                                    stft_frequency=self.stft_frequency,
-                                   noise_stationary_intervals=frames * self.stft_hop_sec + stft_time[0],
+                                   time_frames=result['time_frames'] * self.stft_hop_sec + stft_time[0],
                                    minSNR=self.minSNR,
                                    history=history,
                                    aggregate_axis_for_likelihood=self.aggregate_axis_for_likelihood,
+                                   cluster_catalogs=result['cluster_catalogs'],
+                                   frequency_groups=self.frequency_groups,
                                    **from_full_info)
 
     def detect(self, x: np.ndarray,
@@ -100,8 +101,8 @@ class CATSDetector(CATSBase):
                             - "signal" - input signal
                             - "coefficients" - STFT coefficients
                             - "spectrogram" - absolute value of `coefficients`
-                            - "noise_threshold" - threshold defined by `noise_std`
                             - "noise_std" - noise level, standard deviation
+                            - "noise_threshold_conversion" - conversion to threshold from `noise_std`
                             - "spectrogram_SNR_trimmed" - `spectrogram / noise_std` trimmed by `noise_threshold`
                             - "spectrogram_SNR_clustered" - clustered `spectrogram_SNR_trimmed`
                             - "spectrogram_cluster_ID" - cluster indexes on `spectrogram_SNR_clustered`
@@ -170,7 +171,7 @@ class CATSDetector(CATSBase):
 
         used_together.append(('spectrogram_SNR_clustered',  'likelihood'))
         used_together.append(("likelihood", "detection", "picked_features", "detected_intervals"))
-        base_info = ["signal", "stft_frequency", "noise_stationary_intervals"]
+        base_info = ["signal", "stft_frequency", "time_frames"]
 
         return self.memory_info(memory_usage_bytes, used_together, base_info, full_info)
 
@@ -269,8 +270,7 @@ class CATSDetectionResult(CATSResult):
         ref_kw_opts = opts[-1].kwargs
         t1, t2 = ref_kw_opts['xlim']
         likelihood = np.nan_to_num(self.likelihood[inds_stft],
-                                   posinf=10 * self.minSNR,
-                                   neginf=-10 * self.minSNR)  # POSSIBLE `NAN` AND `INF` VALUES!
+                                   posinf=1e8, neginf=-1e8)  # POSSIBLE `NAN` AND `INF` VALUES!
         likelihood_fig = hv.Curve((stft_time, likelihood),
                                   kdims=[t_dim], vdims=L_dim)
 
@@ -338,7 +338,6 @@ class CATSDetectionResult(CATSResult):
         concat_attrs = ["signal",
                         "coefficients",
                         "spectrogram",
-                        "noise_threshold",
                         "noise_std",
                         "spectrogram_SNR_trimmed",
                         "spectrogram_SNR_clustered",
@@ -346,14 +345,26 @@ class CATSDetectionResult(CATSResult):
                         "likelihood",
                         "detection"]
 
+        # update cluster id
+        attr = "spectrogram_cluster_ID"
+        if ((self_attr := getattr(self, attr, None)) is not None) and \
+                ((other_attr := getattr(other, attr, None)) is not None):
+            shape = other_attr.shape[:-2]
+            for ind in np.ndindex(shape):
+                other_attr[ind][other_attr[ind] > 0] += self_attr[ind].max()
+            setattr(other, attr, other_attr)
+
         for name in concat_attrs:
             self._concat(other, name, -1)
 
-        stft_t0 = self.stft_dt_sec * self.stft_npts  # must be calculated before `self.stft_npts += other.stft_npts`
+        t0 = self.time_frames[-1, -1] + self.stft_dt_sec
 
-        self._concat(other, "noise_stationary_intervals", 0, stft_t0)
-        self._concat(other, "detected_intervals", -2, stft_t0)
-        self._concat(other, "picked_features", -2, stft_t0, (..., 0))
+        self._concat(other, "time_frames", 0, t0)
+        self._concat(other, "detected_intervals", -2, t0)
+        self._concat(other, "picked_features", -2, t0, (..., 0))
+
+        self.cluster_catalogs = concatenate_arrays_of_cluster_catalogs(self.cluster_catalogs,
+                                                                       other.cluster_catalogs, t0)
 
         self.npts += other.npts
         self.stft_npts += other.stft_npts
@@ -364,4 +375,5 @@ class CATSDetectionResult(CATSResult):
         assert self.dt_sec == other.dt_sec
         assert self.stft_dt_sec == other.stft_dt_sec
         assert np.all(self.stft_frequency == other.stft_frequency)
+        assert np.all(self.noise_threshold_conversion == other.noise_threshold_conversion)
 

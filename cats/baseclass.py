@@ -6,19 +6,19 @@
 """
 
 import numpy as np
+import pandas as pd
 from scipy.io import loadmat, savemat
 import holoviews as hv
 from typing import Tuple, Any
 from pydantic import BaseModel, Field, Extra
 
 from .core.timefrequency import STFTOperator
-from .core.clustering import Clustering
-from .core.date import BEDATE, EtaToSigma
+from .core.clustering import Clustering, ClusterCatalogs, concatenate_arrays_of_cluster_catalogs
+from .core.date import BEDATE_trimming, group_frequency, bandpass_frequency_groups
 from .core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
 from .core.utils import get_interval_division, format_index_by_dimensions, cast_to_bool_dict, StatusKeeper
 from .core.utils import format_interval_by_limits, give_index_slice_by_limits, del_vals_by_keys, update_object_params
-from .core.utils import give_nonzero_limits
-from .core.thresholding import ThresholdingSNR
+from .core.utils import give_nonzero_limits, mat_structure_to_dataframe_dict
 
 
 ####################### BASE CLASSES #######################
@@ -40,18 +40,25 @@ class CATSBase(BaseModel, extra=Extra.allow):
     # main B-E-DATE params
     minSNR: float = 4.0
     stationary_frame_sec: float = None
+    bedate_freq_grouping_Hz: float = None
+    bedate_log_freq_grouping: float = None
     # main Clustering params
     cluster_size_t_sec: float = 0.2
-    cluster_size_f_Hz: float = 20.0
+    cluster_size_f_Hz: float = 15.0
     cluster_distance_t_sec: float = None
     cluster_distance_f_Hz: float = None
     cluster_fullness: float = Field(0, ge=0.0, le=1.0)
 
     # Minor clustering params
-    freq_bandpass_Hz: Tuple[float, float] = None
+    log_freq_width: float = None
+    log_freq_distance: float = None
+    cluster_catalogs: bool = False
     clustering_multitrace: bool = False
     cluster_size_trace: int = Field(1, ge=1)
     cluster_distance_trace: int = Field(1, ge=1)
+
+    # General minor params
+    freq_bandpass_Hz: Tuple[float, float] = None
     # Minor DATE params
     date_Q: float = 0.95
     date_detection_mode: bool = True
@@ -78,6 +85,11 @@ class CATSBase(BaseModel, extra=Extra.allow):
                 stationary_frame_sec : float : length of time frame in seconds wherein noise is stationary. \
 Length will be adjusted to have at least 256 elements in one frame. Default, 0.0 which leads to minimum possible
 
+                bedate_freq_grouping_Hz : float : frequency grouping width in Hz. Default min possible is set
+
+                bedate_log_freq_grouping : float : frequency grouping width in log10 Hz. Default None, not applied. \
+If given, then `bedate_freq_grouping_Hz` is ignored.
+
                 cluster_size_t_sec : float : minimum cluster size in time, in seconds. \
 Can be estimated as length of the strongest phases.
 
@@ -86,7 +98,15 @@ Can be estimated as length of the strongest phases.
                 cluster_fullness : float (0, 1] : minimum cluster fullness from its minimum size defined by `size` and \
 `distance` params
 
-                freq_bandpass_Hz : tuple/list[int/float] : bandpass frequency range, in hertz, i.e. everything out of \
+                log_freq_width : float : cluster frequency width in [log10 Hz] scale. If not None, then it will be \
+applied instead of `cluster_size_f_Hz`. Default None.
+
+                log_freq_distance : float : clustering distance in [log10 Hz] scale. If not None, then it will be \
+applied instead of `cluster_distance_f_Hz`. Default None.
+
+                cluster_catalogs : bool : whether to calculate catalogs of clusters statistics. Default False
+
+                freq_bandpass_Hz : tuple[float, float] : bandpass frequency range, in hertz, i.e. everything out of \
 the range is zero (e.g. (f_min, f_max)).
 
                 cluster_distance_t_sec : float : neighborhood distance in time for clustering, in seconds. \
@@ -148,10 +168,12 @@ The fastest CPU version is 'ssqueezepy', which is default.
         assert (fbw := self.freq_bandwidth_Hz) > (csf := self.cluster_size_f_Hz), \
             f"Frequency bandpass width `{fbw}` must be bigger than min frequency cluster size `{csf}`"
         self.freq_bandpass_slice = give_index_slice_by_limits(self.freq_bandpass_Hz, self.STFT.df)
-        self.freq_bandpass_len = (self.freq_bandpass_slice.start, self.freq_bandpass_slice.stop)
         self.cluster_size_t_len = max(round(self.cluster_size_t_sec / self.stft_hop_sec), 1)
         self.cluster_size_f_len = max(round(self.cluster_size_f_Hz / self.STFT.df), 1)
         self.cluster_size_trace_len = self.cluster_size_trace
+
+        self.log_freq_width = self.log_freq_width or 0.0
+        self.log_freq_distance = self.log_freq_distance or 0.0
 
         self.cluster_distance_t_sec = v if (v := self.cluster_distance_t_sec) is not None else self.stft_hop_sec
         self.cluster_distance_f_Hz = v if (v := self.cluster_distance_f_Hz) is not None else self.stft_df
@@ -165,6 +187,16 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.min_separation_len = max(self.cluster_distance_t_len + 1, 2)  # `+1` to exclude bounds (1, 0, 1)
         self.min_duration_sec = self.min_duration_len * self.stft_hop_sec
         self.min_separation_sec = self.min_separation_len * self.stft_hop_sec
+
+        self.bedate_freq_grouping_Hz = self.bedate_freq_grouping_Hz or self.stft_df
+        self.bedate_log_freq_grouping = self.bedate_log_freq_grouping or 0.0
+
+        self.bedate_frequency_grouping = (self.bedate_log_freq_grouping or self.bedate_freq_grouping_Hz,
+                                          self.bedate_log_freq_grouping > 0.0)
+        self.frequency_groups_index, self.frequency_groups = group_frequency(self.stft_frequency,
+                                                                             *self.bedate_frequency_grouping)
+        self.bandpassed_frequency_groups_slice = bandpass_frequency_groups(self.frequency_groups_index,
+                                                                           self.freq_bandpass_slice)
 
     def reset_params(self, **params):
         """
@@ -189,37 +221,17 @@ The fastest CPU version is 'ssqueezepy', which is default.
         if 'stft' in finish_on.casefold():
             return result, history
 
-        # bandpass
-        bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
-
         # B-E-DATE
         with history(current_process='B-E-DATE trimming'):
-            frames = get_interval_division(N=result['spectrogram'].shape[-1], L=self.stationary_frame_len)
-            zero_nyq_freqs = (self.freq_bandpass_len[0] == 0,
-                              len(self.stft_frequency) == self.freq_bandpass_len[1])
-            result['noise_threshold'] = np.zeros(result['spectrogram'].shape[:-1] + (len(frames),),
-                                                 dtype=result['spectrogram'].dtype)
-            result['noise_threshold'][bandpass_slice] = BEDATE(result['spectrogram'][bandpass_slice],
-                                                               frames=frames,
-                                                               minSNR=self.minSNR,
-                                                               Q=self.date_Q,
-                                                               original_mode=not self.date_detection_mode,
-                                                               zero_Nyq_freqs=zero_nyq_freqs)
-            result['noise_std'] = EtaToSigma(result['noise_threshold'], self.minSNR)
+            result['time_frames'] = get_interval_division(N=result['spectrogram'].shape[-1], L=self.stationary_frame_len)
 
-            # Thresholding
-            result['spectrogram_SNR_trimmed'] = np.zeros_like(result['spectrogram'])
-            result['spectrogram_SNR_trimmed'][bandpass_slice] = \
-                ThresholdingSNR(result['spectrogram'][bandpass_slice],
-                                result['noise_std'][bandpass_slice],
-                                result['noise_threshold'][bandpass_slice],
-                                frames)
+            result['spectrogram_SNR_trimmed'], result['noise_std'], result['noise_threshold_conversion'] = \
+                BEDATE_trimming(result['spectrogram'], self.frequency_groups_index,
+                                self.bandpassed_frequency_groups_slice, self.freq_bandpass_slice,
+                                result['time_frames'], self.minSNR, self.time_edge, self.date_Q,
+                                not self.date_detection_mode)
 
-            # Removing spiky high-energy edges
-            result['spectrogram_SNR_trimmed'][..., :self.time_edge] = 0.0
-            result['spectrogram_SNR_trimmed'][..., -self.time_edge - 1:] = 0.0
-
-        del_vals_by_keys(result, full_info, ['spectrogram', 'noise_threshold', 'noise_std'])
+        del_vals_by_keys(result, full_info, ['spectrogram', 'noise_std', 'noise_threshold_conversion'])
 
         if 'date' in finish_on.casefold():
             return result, history
@@ -230,12 +242,21 @@ The fastest CPU version is 'ssqueezepy', which is default.
             q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
             s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
             alpha = self.cluster_fullness
+            log_freq_cluster = (self.log_freq_width, self.log_freq_distance)
 
             result['spectrogram_SNR_clustered'] = np.zeros_like(result['spectrogram_SNR_trimmed'])
             result['spectrogram_cluster_ID'] = np.zeros(result['spectrogram_SNR_trimmed'].shape, dtype=np.uint32)
 
-            result['spectrogram_SNR_clustered'][bandpass_slice], result['spectrogram_cluster_ID'][bandpass_slice] = \
-                Clustering(result['spectrogram_SNR_trimmed'][bandpass_slice], q=q, s=s, minSNR=self.minSNR, alpha=alpha)
+            result['spectrogram_SNR_clustered'], result['spectrogram_cluster_ID'] = \
+                Clustering(result['spectrogram_SNR_trimmed'], q=q, s=s,
+                           minSNR=self.minSNR, alpha=alpha, log_freq_cluster=log_freq_cluster)
+
+            if self.cluster_catalogs:
+                result['cluster_catalogs'] = ClusterCatalogs(result['spectrogram_SNR_clustered'],
+                                                             result['spectrogram_cluster_ID'],
+                                                             self.stft_frequency, self.stft_hop_sec)
+            else:
+                result['cluster_catalogs'] = None
 
         del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed',
                                              'spectrogram_SNR_clustered',
@@ -248,8 +269,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
         return ["signal",
                 "coefficients",
                 "spectrogram",
-                "noise_threshold",
                 "noise_std",
+                "noise_threshold_conversion",
                 "spectrogram_SNR_trimmed",
                 "spectrogram_SNR_clustered",
                 "spectrogram_cluster_ID"]
@@ -263,7 +284,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         stft_shape = x.shape[:-1] + (len(self.stft_frequency), stft_time_len)
         stft_size = np.prod(stft_shape)
 
-        bedate_shape = x.shape[:-1] + (len(self.stft_frequency),
+        bedate_shape = x.shape[:-1] + (len(self.frequency_groups),
                                        len(get_interval_division(N=stft_time_len,
                                                                  L=self.stationary_frame_len)))
         bedate_size = np.prod(bedate_shape)
@@ -273,18 +294,18 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         memory_usage_bytes = {
             "stft_frequency":              8. * stft_shape[-2],                 # float64 always
-            "noise_stationary_intervals":  8. * bedate_shape[-1],               # float64 always
+            "time_frames":                 8. * bedate_shape[-1],               # float64 always
             "signal":                      1. * x_bytes,                        # float / int
             "coefficients":                2. * precision_order * stft_size,    # complex
             "spectrogram":                 1. * precision_order * stft_size,    # float
-            "noise_threshold":             1. * precision_order * bedate_size,  # float
+            "noise_threshold_conversion":  8. * bedate_shape[-2],               # float
             "noise_std":                   1. * precision_order * bedate_size,  # float
             "spectrogram_SNR_trimmed":     1. * precision_order * stft_size,    # float
             "spectrogram_SNR_clustered":   1. * precision_order * stft_size,    # float
             "spectrogram_cluster_ID":      4. * stft_size,                      # uint32 always
         }
         used_together = [('coefficients', 'spectrogram'),
-                         ('spectrogram', 'noise_threshold', 'noise_std', 'spectrogram_SNR_trimmed'),
+                         ('spectrogram', 'noise_threshold_conversion', 'noise_std', 'spectrogram_SNR_trimmed'),
                          ('spectrogram_SNR_trimmed', 'spectrogram_SNR_clustered', 'spectrogram_cluster_ID')]
 
         return memory_usage_bytes, used_together
@@ -329,18 +350,20 @@ class CATSResult(BaseModel):
     signal: Any = None
     coefficients: Any = None
     spectrogram: Any = None
-    noise_threshold: Any = None
+    noise_threshold_conversion: Any = None
     noise_std: Any = None
     spectrogram_SNR_trimmed: Any = None
     spectrogram_SNR_clustered: Any = None
     spectrogram_cluster_ID: Any = None
+    cluster_catalogs: Any = None
     dt_sec: float = None
     stft_dt_sec: float = None
     stft_t0_sec: float = None
     npts: int = None
     stft_npts: int = None
     stft_frequency: Any = None
-    noise_stationary_intervals: Any = None
+    time_frames: Any = None
+    frequency_groups: Any = None
     minSNR: float = None
     threshold: float = None
     history: Any = None
@@ -412,18 +435,29 @@ class CATSResult(BaseModel):
         concat_attrs = ["signal",
                         "coefficients",
                         "spectrogram",
-                        "noise_threshold",
                         "noise_std",
                         "spectrogram_SNR_trimmed",
                         "spectrogram_SNR_clustered",
                         "spectrogram_cluster_ID"]
 
+        # update cluster id
+        attr = "spectrogram_cluster_ID"
+        if ((self_attr := getattr(self, attr, None)) is not None) and \
+           ((other_attr := getattr(other, attr, None)) is not None):
+            shape = other_attr.shape[:-2]
+            for ind in np.ndindex(shape):
+                other_attr[ind][other_attr[ind] > 0] += self_attr[ind].max()
+            setattr(other, attr, other_attr)
+
+        # concatenation
         for name in concat_attrs:
             self._concat(other, name, -1)
 
-        stft_t0 = self.stft_dt_sec * self.stft_npts
+        t0 = self.time_frames[-1, -1] + self.stft_dt_sec
 
-        self._concat(other, "noise_stationary_intervals", 0, stft_t0)
+        self._concat(other, "time_frames", 0, t0)
+        self.cluster_catalogs = concatenate_arrays_of_cluster_catalogs(self.cluster_catalogs,
+                                                                       other.cluster_catalogs, t0)
 
         self.npts += other.npts
         self.stft_npts += other.stft_npts
@@ -434,6 +468,7 @@ class CATSResult(BaseModel):
         assert self.dt_sec == other.dt_sec
         assert self.stft_dt_sec == other.stft_dt_sec
         assert np.all(self.stft_frequency == other.stft_frequency)
+        assert np.all(self.noise_threshold_conversion == other.noise_threshold_conversion)
 
     def _concat(self, other, attr, axis, increment=None, increment_ind=None):
         if ((self_attr := getattr(self, attr, None)) is not None) and \
@@ -469,12 +504,33 @@ class CATSResult(BaseModel):
             del obj
         return obj0
 
-    def save(self, filepath, compress=False):
+    def filter_convert_attributes_to_dict(self):
+        # Remove `None`
         mdict = {name: attr for name, attr in self.dict().items() if (attr is not None)}
+
+        # Convert DataFrame to dict for `mat` format
+        if (catalog := mdict.get('cluster_catalogs', None)) is not None:
+            for ind, cat_ind in np.ndenumerate(catalog):
+                catalog[ind] = cat_ind.to_dict(orient='tight')
+            mdict['cluster_catalogs'] = catalog
+        return mdict
+
+    @staticmethod
+    def convert_dict_to_attributes(mdict):
+        # Convert dict to DataFrame
+        if (catalog := mdict.get('cluster_catalogs', None)) is not None:
+            for ind, cat_ind in np.ndenumerate(catalog):
+                catalog[ind] = pd.DataFrame.from_dict(mat_structure_to_dataframe_dict(cat_ind), orient='tight')
+            mdict['cluster_catalogs'] = catalog
+        return mdict
+
+    def save(self, filepath, compress=False):
+        mdict = self.filter_convert_attributes_to_dict()
         savemat(filepath, mdict, do_compression=compress)
         del mdict
 
     @classmethod
     def load(cls, filepath):
         mdict = loadmat(filepath, simplify_cells=True)
+        mdict = cls.convert_dict_to_attributes(mdict)
         return cls(**mdict)

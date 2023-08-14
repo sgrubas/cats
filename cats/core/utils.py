@@ -137,6 +137,17 @@ def get_interval_division(N, L):
         return intervals
 
 
+@nb.njit("i8[:, :](i8, f8, i8)", cache=True)
+def get_logarithmic_interval_division(N, log_step, log_base):
+    intervals = [[0, 0]]
+    i2 = 0
+    while i2 < N - 1:
+        i1 = i2 + 1
+        i2 = min(round(i1 * log_base ** log_step), N - 1)
+        intervals.append([i1, i2])
+    return np.array(intervals)
+
+
 def _scalarORarray_to_tuple(d, minsize):
     if np.isscalar(d):
         d = (int(d),) * minsize
@@ -266,3 +277,14 @@ def intervals_intersection(intervals_array, reference_interval):
     interval_outside = (intervals_array[:, 0] <= t1) & (t2 <= intervals_array[:, 1])
     interval_inds = interval_inside | interval_outside
     return intervals_array[interval_inds]
+
+
+def mat_structure_to_dataframe_dict(mat_struct):
+    adpt_mat = {}
+    for name in mat_struct._fieldnames:
+        val = getattr(mat_struct, name)
+        adpt_mat[name] = val.tolist() if isinstance(val, np.ndarray) else val
+    adpt_mat['columns'] = [col.replace(" ", "") for col in adpt_mat['columns']]
+    adpt_mat['column_names'] = [adpt_mat['column_names']]
+    adpt_mat['index_names'] = [adpt_mat['index_names']]
+    return adpt_mat

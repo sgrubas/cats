@@ -1,19 +1,29 @@
 import numpy as np
 import numba as nb
-from .utils import ReshapeArraysDecorator
+from .utils import ReshapeArraysDecorator, get_interval_division, get_logarithmic_interval_division
 from scipy import special, optimize
 
 
 ########################  B-E-DATE   ########################
 
 
-@nb.njit(["f8(f8[:], i8, f8, b1)",
-          "f4(f4[:], i8, f8, b1)"], cache=True)
-def _DATE(Y, Nmin, xi_lamb, original_mode):
+@nb.njit("i8(i8, f8)", cache=True)
+def _Nmin(N, Q):
+    maxQ = 1 - N / 4 / (N / 2 - 1) ** 2
+    Q = min(Q, maxQ)
+    Nmin = int(0.5 * (N - np.sqrt(N / (1 - Q))))
+    Nmin = min(max(2, Nmin), N)
+    return Nmin
 
+
+@nb.njit(["f8(f8[:], f8, f8, b1)",
+          "f4(f4[:], f8, f8, b1)"], cache=True)
+def _DATE(Y, xi_lamb, Q, original_mode):
     N = len(Y)
+    Nmin = _Nmin(N, Q)
+
     Y_sort = np.sort(Y)
-    
+
     M = M0 = sum(Y_sort[:Nmin - 1])
     eta = eta0 = (M0 + Y_sort[Nmin - 1]) / Nmin * xi_lamb
     found = False
@@ -29,26 +39,31 @@ def _DATE(Y, Nmin, xi_lamb, original_mode):
     return eta
 
 
-@nb.njit(["f8[:, :](f8[:, :], i8[:, :], i8[:], f8[:], b1)",
-          "f4[:, :](f4[:, :], i8[:, :], i8[:], f8[:], b1)"], parallel=True, cache=True)
-def _BEDATE(PSD, frames, Nmins, xi_lamb, original_mode):
-    M, N = PSD.shape
-    n = len(frames)
-    Eta = np.zeros((M, n), dtype=PSD.dtype)
-    for i in nb.prange(M):
-        ci, xi_lamb_i = PSD[i], xi_lamb[i]
-        for j in range(n):
-            j1, j2 = frames[j]
-            Eta[i, j] = _DATE(ci[j1: j2], Nmins[j], xi_lamb_i, original_mode)
-    return Eta
+@nb.njit(["f8[:, :, :](f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)",
+          "f4[:, :, :](f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)"], parallel=True, cache=True)
+def _BEDATE(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode):
+    L = PSD.shape[0]
+    m, n = len(freq_groups), len(time_frames)
+    Sgm = np.zeros((L, m, n), dtype=PSD.dtype)
+    for i in nb.prange(m):  # iter over frequencies
+        i1, i2 = freq_groups[i]
+        xi_lamb_i = xi_lamb[i]
+        for l in nb.prange(L):  # iter over spectrograms
+            psdl = PSD[l]
+            for j in nb.prange(n):  # iter over time frames
+                j1, j2 = time_frames[j]
+                psd = psdl[i1: i2 + 1, j1: j2 + 1].ravel()
+                Sgm[l, i, j] = _DATE(psd, xi_lamb_i, Q, original_mode) / xi_lamb_i
+    return Sgm
 
 
-@ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=False, output_num=1, first_shape=True)
-def _BEDATE_API(PSD, /, frames, Nmins, xi_lamb, original_mode):
-    return _BEDATE(PSD, frames, Nmins, xi_lamb, original_mode)
+@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
+def _BEDATE_API(PSD, /, time_frames, freq_groups, xi_lamb, Q, original_mode):
+    return _BEDATE(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode)
 
 
-def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95, original_mode=False, zero_Nyq_freqs=(True, True)):
+def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
+           original_mode=False, zero_Nyq_freqs=(True, True)):
     """
         Performs Block-Extended-DATE algorithm 
         
@@ -56,51 +71,121 @@ def BEDATE(PSD, frames=None, minSNR=4.0, Q=0.95, original_mode=False, zero_Nyq_f
 
             PSD : np.ndarray (..., Nf, N) : norm of complex STFT coefficients, with `Nf` frequencies and N time samples
                                             `Nf=0` is zero-frequency, `Nf=Nf` is Nyquist frequency  
-            minSNR : float : expected minimum signal-to-noise ratio 
-            frames : np.ndarray (n, 2) / None : independent time frames (stationary windows) in index form.
+            time_frames : np.ndarray (n, 2) / None : independent time frames (stationary windows) in index form.
                       If `None`, the default np.array([[0, N]]), i.e. 1 time frame
+            freq_groups : np.ndarray (m, 2) / None : frequency groups.
+                      If None, each frequency bin is processed separately
+            minSNR : float : expected minimum signal-to-noise ratio
             Q : float [0, 1) : probability value to compute appropriate `Nmin`. Recommended value `0.95`
             original_mode : boolean : whether to use original implementation [1].
                             If `True`, noise is estimated on `Nmin` in the worst case.
                             Default `False`, i.e. we may overestimate noise,
                             but it is good for detection with high minSNR (`xi_lamb`)
-            zero_Nyq_freqs : tuple(bool, bool) : Does PSD contain `zero` and `Nyquist` frequencies? e.g. (True, True)
+            zero_Nyq_freqs : tuple(bool, bool) : Do 'freq_groups' contain `zero` and `Nyquist` frequencies?
 
         Return:
-            Eta : np.ndarray (..., Nf, n) : thresholding function
+            Sgm : np.ndarray (..., m, n) : standard deviation
 
         References:
             [1] Mai, V. K., Pastor, D., Aïssa-El-Bey, A., & Le-Bidan, R. (2015). Robust estimation of non-stationary
             noise power spectrum for speech enhancement. IEEE/ACM Transactions on Audio, Speech,
             and Language Processing, 23(4), 670-682.
     """
-    preshape, N = PSD.shape[:-1], PSD.shape[-1]
-    d = np.full(preshape, 2)
-    if zero_Nyq_freqs[0]:  # zero frequency is 1-dim samples (imag = 0)
-        d[..., 0] = 1
-    if zero_Nyq_freqs[1]:  # Nyq frequency is 1-dim samples (imag = 0)
-        d[..., -1] = 1
+
+    time_frames = time_frames if time_frames is not None else np.array([[0, PSD.shape[-1] - 1]])
+    freq_groups = freq_groups if freq_groups is not None else np.stack([PSD.shape[-2]]*2, axis=-1)
 
     # Calculating constants depending on dimension and `minSNR`
-    rho = minSNR if (minSNR is not None) else np.sqrt(2 * np.log(N * 2))  # `N * d` for `d = 2`
-    xi_lamb = _Xi_Lambda(d, rho, d_unique=[1, 2]).reshape(-1)
-    frames = np.array([[0, N]]) if frames is None else frames
-    Nmins = np.array([_Nmin(abs(i2 - i1), Q) for i1, i2 in frames])
+    rho = _minSNR(minSNR, N=np.diff(time_frames, axis=-1).mean(), d=2)
+    freq_dimensions = np.full(len(freq_groups), 2)
+    if zero_Nyq_freqs[0]:
+        freq_dimensions[0] = 1
+    if zero_Nyq_freqs[1]:
+        freq_dimensions[-1] = 1
+    xi_lamb = _Xi_Lambda(freq_dimensions, rho, d_unique=[1, 2])
 
     # The B-E-DATE
-    Eta = _BEDATE_API(PSD, frames, Nmins, xi_lamb, original_mode)
-    
-    return Eta
+    Sgm = _BEDATE_API(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode)
+
+    return Sgm
+
+
+########################################################################################
+
+
+@nb.njit(["UniTuple(f8[:, :, :], 2)(f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)",
+          "UniTuple(f4[:, :, :], 2)(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)"],
+         parallel=True, cache=True)
+def _BEDATE_trimming(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode):
+    L = PSD.shape[0]
+    m, n = len(freq_groups), len(time_frames)
+    Sgm = np.zeros((L, m, n), dtype=PSD.dtype)
+    SNR = np.zeros_like(PSD)
+    for i in nb.prange(m):  # iter over frequencies
+        i1, i2 = freq_groups[i]
+        xi_lamb_i = xi_lamb[i]
+        for l in nb.prange(L):  # iter over spectrograms
+            psdl = PSD[l]
+            for j in nb.prange(n):  # iter over time frames
+                j1, j2 = time_frames[j]
+
+                psd = psdl[i1: i2 + 1, j1: j2 + 1]
+                eta = _DATE(psd.ravel(), xi_lamb_i, Q, original_mode)
+                Sgm[l, i, j] = sgm = eta / xi_lamb_i
+
+                snr = (psd > eta) * psd / (sgm + 1e-8)
+                SNR[l, i1: i2 + 1, j1: j2 + 1] = snr
+    return SNR, Sgm
+
+
+@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
+def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_slice, bandpass_slice,
+                    time_frames, minSNR, time_edge, Q=0.95, original_mode=False):
+
+    m, n = len(frequency_groups_index), len(time_frames)
+    groups_slice = bandpassed_frequency_groups_slice
+
+    # constants for B-E-DATE
+    freq_dimensions = np.full(m, 2)
+    f_min, f_max = frequency_groups_index[0, 1], frequency_groups_index[-1, 0]
+    if f_min == 0:  # zero frequency is 1-dim (real number)
+        freq_dimensions[0] = 1
+    if f_max == PSD.shape[-2] - 1:  # Nyquist's frequency is 1-dim (real number)
+        freq_dimensions[-1] = 1
+    xi_lamb = _Xi_Lambda(freq_dimensions, minSNR, d_unique=[1, 2])
+
+    # The B-E-DATE trimming
+    bedate_slice = (..., groups_slice, slice(None))
+    noise_std = np.zeros(PSD.shape[:-2] + (m, n), dtype=PSD.dtype)
+    spectrogram_SNR_trimmed, noise_std[bedate_slice] = _BEDATE_trimming(PSD, time_frames,
+                                                                        frequency_groups_index[groups_slice],
+                                                                        xi_lamb[groups_slice],
+                                                                        Q, original_mode)
+
+    # Removing everything out of the bandpass range
+    spectrogram_SNR_trimmed[..., :bandpass_slice.start, :] = 0.0
+    spectrogram_SNR_trimmed[..., bandpass_slice.stop:, :] = 0.0
+
+    # Removing spiky high-energy edges (edge effects)
+    spectrogram_SNR_trimmed[..., :time_edge] = 0.0
+    spectrogram_SNR_trimmed[..., -time_edge - 1:] = 0.0
+
+    return spectrogram_SNR_trimmed, noise_std, xi_lamb
+
 
 ######################### CONSTANTS #########################
 
 
+def _minSNR(rho, N, d):
+    return rho or np.sqrt(2 * np.log(N * d))  # `N * d` for `d = 2`
+
+
 def _Nmin(N, Q=None):
     maxQ = 1 - N / 4 / (N / 2 - 1)**2
-    if Q is None: 
+    if Q is None:
         Q = maxQ
     else:
-        Q = Q if Q <= maxQ else maxQ
+        Q = min(Q, maxQ)
     Nmin = np.clip(int(0.5 * (N - np.sqrt(N / (1 - Q)))), 2, N)
     return Nmin
 
@@ -163,3 +248,38 @@ def EtaToSigma(eta, rho):
     d[..., -1] = 1      # zero and Nyq frequencies are 1-dim samples (imag = 0)
     xi = _Xi(d, rho, d_unique=[1, 2]).astype(eta.dtype)
     return eta / xi[..., None]
+
+
+# UTILS #
+
+def group_frequency(frequency, freq_step, log_step=False):
+    Nf = len(frequency)
+    df = frequency[1] - frequency[0]
+    if log_step:
+        grouped_index = get_logarithmic_interval_division(Nf, freq_step, 10)
+    else:
+        Ndf = max(round(freq_step / df), 1)
+        grouped_index = get_interval_division(Nf, Ndf)
+
+    # Zero frequency is separated due to dimensionality
+    if (not log_step) and (grouped_index[0, 1] != 0):
+        grouped_index[0, 0] = 1
+        grouped_index = np.r_[[[0, 0]], grouped_index]
+
+    # Nyquist's frequency is separated due to dimensionality
+    if grouped_index[-1, 0] != Nf - 1:
+        grouped_index[-1, 1] = Nf - 2
+        grouped_index = np.r_[grouped_index, [[Nf - 1, Nf - 1]]]
+
+    grouped_frequency = frequency[grouped_index]
+    return grouped_index, grouped_frequency
+
+
+def bandpass_frequency_groups(frequency_groups_index, bandpass_index_slice):
+    if isinstance(bandpass_index_slice, slice):
+        f1, f2 = bandpass_index_slice.start, bandpass_index_slice.stop - 1
+    else:
+        f1, f2 = bandpass_index_slice
+    groups_inds = np.argwhere((f1 <= frequency_groups_index[:, 1]) & (frequency_groups_index[:, 0] <= f2))
+    groups_slice = slice(groups_inds.min(), groups_inds.max() + 1)
+    return groups_slice
