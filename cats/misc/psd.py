@@ -346,8 +346,7 @@ class PSDDetectionResult(CATSDetectionResult):
             inds_stft = ind + (i_stft,)
 
         likelihood = np.nan_to_num(self.likelihood[inds_stft],
-                                   posinf=10 * self.threshold,
-                                   neginf=-10 * self.threshold)  # POSSIBLE `NAN` AND `INF` VALUES!
+                                   posinf=1e8, neginf=-1e8)  # POSSIBLE `NAN` AND `INF` VALUES!
         likelihood_fig = hv.Curve((stft_time, likelihood),
                                   kdims=[t_dim], vdims=L_dim)
 
@@ -396,7 +395,7 @@ class PSDDetectionResult(CATSDetectionResult):
         for name in concat_attrs:
             self._concat(other, name, -1)
 
-        stft_t0 = self.stft_dt_sec * self.stft_npts
+        stft_t0 = self.stft_dt_sec * (self.stft_npts - 1)
 
         self._concat(other, "detected_intervals", -2, stft_t0)
         self._concat(other, "picked_features", -2, stft_t0, (..., 0))

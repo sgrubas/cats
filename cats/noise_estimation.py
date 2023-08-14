@@ -57,7 +57,7 @@ class CATSNoiseEstimator(CATSBase):
                   "time": time,
                   "stft_time": stft_time,
                   "stft_frequency": self.stft_frequency,
-                  "noise_stationary_intervals": stft_time[frames],
+                  "time_frames": stft_time[frames],
                   "minSNR": self.minSNR,
                   "history": history}
 
@@ -98,7 +98,7 @@ class CATSNoiseEstimator(CATSBase):
         for i, ut in enumerate(used_together):
             used_together_bytes[i] += sum([memory_usage_bytes[kw] for kw in ut])
 
-        base_info = ["time", "stft_time", "stft_frequency", "noise_stationary_intervals", "signal"]
+        base_info = ["time", "stft_time", "stft_frequency", "time_frames", "signal"]
         base_bytes = sum([memory_usage_bytes[kw] for kw in base_info])
         min_required = base_bytes + max(used_together_bytes)
         max_required = sum(memory_usage_bytes.values())
@@ -122,12 +122,12 @@ class CATSNoiseEstimationResult(CATSResult):
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')
 
-        dframe = self.noise_stationary_intervals.diff(axis=-1)[0]
+        dframe = self.time_frames.diff(axis=-1)[0]
         i_frame = give_index_slice_by_limits(time_interval_sec, dframe)
 
         inds_frames = ind + (slice(None), i_frame)
 
-        frames = np.arange(dframe / 2, self.noise_stationary_intervals.shape[0] * dframe, dframe)
+        frames = np.arange(dframe / 2, self.time_frames.shape[0] * dframe, dframe)
 
         fig4 = hv.Image((frames, self.stft_frequency,
                          self.noise_std[inds_frames]), kdims=[t_dim, f_dim],

@@ -181,7 +181,7 @@ class CATSDenoiser(CATSBase):
                          ('spectrogram_SNR_clustered',  'likelihood'),
                          ("likelihood", "detection", "picked_features", "detected_intervals")]
 
-        base_info = ["signal", 'coefficients', "stft_frequency", "noise_stationary_intervals"]
+        base_info = ["signal", 'coefficients', "stft_frequency", "time_frames"]
 
         return self.memory_info(memory_usage_bytes, used_together, base_info, full_info)
 
@@ -334,7 +334,7 @@ class CATSDenoisingResult(CATSResult):
 
         stft_t0 = self.stft_dt_sec * self.stft_npts  # must be calculated before `self.stft_npts += other.stft_npts`
 
-        self._concat(other, "noise_stationary_intervals", 0, stft_t0)
+        self._concat(other, "time_frames", 0, stft_t0)
         self._concat(other, "detected_intervals", -2, stft_t0)
         self._concat(other, "picked_features", -2, stft_t0, (..., 0))
 
