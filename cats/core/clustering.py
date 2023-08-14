@@ -16,11 +16,10 @@ from functools import partial
 CLUSTER_STAT_SIGNATURE = "Tuple((UniTuple(i8, 2), UniTuple(i8, 2), i8, f8))"
 
 
-@nb.njit([f"{CLUSTER_STAT_SIGNATURE}(UniTuple(i8, 2), UniTuple(i8, 2), f8[:, :], u4[:, :], u4)",
-          f"{CLUSTER_STAT_SIGNATURE}(UniTuple(i8, 2), UniTuple(i8, 2), f4[:, :], u4[:, :], u4)"],
-         cache=True
-         )
-def iterative_neighbor_search_2D(ind, q, SNR, C, cid):
+@nb.njit([f"{CLUSTER_STAT_SIGNATURE}(UniTuple(i8, 2), UniTuple(i8, 2), f8[:, :], u4[:, :], u4, f8)",
+          f"{CLUSTER_STAT_SIGNATURE}(UniTuple(i8, 2), UniTuple(i8, 2), f4[:, :], u4[:, :], u4, f8)"],
+         cache=True)
+def iterative_neighbor_search_2D(ind, q, SNR, C, cid, log_freq_distance):
     q_f, q_t = q
     Nf, Nt = SNR.shape
 
@@ -44,23 +43,30 @@ def iterative_neighbor_search_2D(ind, q, SNR, C, cid):
         maxs = (max(maxs[0], curr[0]), max(maxs[1], curr[1]))
 
         i, j = curr
-        i1, i2 = max(i - q_f, 0), min(i + q_f + 1, Nf)
+        if log_freq_distance > 0.0:
+            i1 = min(i - 1, round(i * 10**(-log_freq_distance)))
+            i2 = max(i + 1, round(i * 10**log_freq_distance)) + 1
+        else:
+            i1, i2 = i - q_f, i + q_f + 1
+
+        i1, i2 = max(i1, 0), min(i2, Nf)
         j1, j2 = max(j - q_t, 0), min(j + q_t + 1, Nt)
 
         for li in range(i1, i2):
             for lj in range(j1, j2):
                 lind = (li, lj)
-                if (SNR[lind] > 0) and (C[lind] < 1) and (curr != lind):
+                if (SNR[lind] > 0.0) and (C[lind] < 1) and (curr != lind):
                     stack.append(lind)
 
     return mins, maxs, n, snr
 
 
-@nb.njit(["Tuple((f8[:, :], u4[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)",
-          "Tuple((f4[:, :], u4[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)"],
+@nb.njit(["Tuple((f8[:, :], u4[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8, UniTuple(f8, 2))",
+          "Tuple((f4[:, :], u4[:, :]))(f4[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8, UniTuple(f8, 2))"],
          cache=True)
-def _Clustering2D(SNR, q, s, minSNR, alpha):
+def _Clustering2D(SNR, q, s, minSNR, alpha, log_freq_cluster):
     shape = SNR.shape
+    log_freq_width, log_freq_distance = log_freq_cluster
 
     # finding clusters
     C = np.zeros(shape, dtype=np.uint32)
@@ -69,7 +75,7 @@ def _Clustering2D(SNR, q, s, minSNR, alpha):
     for i, j in np.argwhere(SNR):
         ind = (i, j)
         if C[ind] < 1:
-            clusters[cid] = iterative_neighbor_search_2D(ind, q, SNR, C, cid)
+            clusters[cid] = iterative_neighbor_search_2D(ind, q, SNR, C, cid, log_freq_distance)
             cid += 1
 
     # filtering clusters
@@ -77,11 +83,15 @@ def _Clustering2D(SNR, q, s, minSNR, alpha):
     k = 1
     min_cluster_fullness = alpha * s_f * s_t
     passed_clusters_cid = {}
-    for cid, stats in clusters.items():
-        mins, maxs, n, snr = stats
-        cluster_pass = ((maxs[0] - mins[0] + 1 >= s_f) and  # min frequency width
+    for cid, cluster_stat in clusters.items():
+        mins, maxs, n, snr = cluster_stat
+        if log_freq_width > 0.0:
+            min_frequency_width = np.log10((maxs[0] + 1) / (mins[0] + 1e-8)) >= log_freq_width
+        else:
+            min_frequency_width = (maxs[0] - mins[0] + 1 >= s_f)
+        cluster_pass = (min_frequency_width and  # min frequency width
                         (maxs[1] - mins[1] + 1 >= s_t) and  # min time duration
-                        (snr / n >= minSNR) and  # min average energy
+                        (snr / n >= minSNR) and  # min average cluster energy
                         (n >= min_cluster_fullness))  # min cluster fullness
         if cluster_pass:
             passed_clusters_cid[cid] = k
@@ -99,20 +109,20 @@ def _Clustering2D(SNR, q, s, minSNR, alpha):
     return SNRK, C
 
 
-@nb.njit(["Tuple((f8[:, :, :], u4[:, :, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)",
-          "Tuple((f4[:, :, :], u4[:, :, :]))(f4[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)"],
+@nb.njit(["Tuple((f8[:, :, :], u4[:, :, :]))(f8[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8, UniTuple(f8, 2))",
+          "Tuple((f4[:, :, :], u4[:, :, :]))(f4[:, :, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8, UniTuple(f8, 2))"],
          parallel=True, cache=True)
-def _ClusteringN2D(SNR, q, s, minSNR, alpha):
+def _ClusteringN2D(SNR, q, s, minSNR, alpha, log_freq_cluster):
     SNRK = np.empty_like(SNR)
     K = np.empty(SNR.shape, dtype=np.uint32)
     for i in nb.prange(SNR.shape[0]):
-        SNRK[i], K[i] = _Clustering2D(SNR[i], q, s, minSNR, alpha)
+        SNRK[i], K[i] = _Clustering2D(SNR[i], q, s, minSNR, alpha, log_freq_cluster)
     return SNRK, K
 
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
-def _ClusteringN2D_API(SNR, /, q, s, minSNR, alpha):
-    return _ClusteringN2D(SNR, q, s, minSNR, alpha)
+def _ClusteringN2D_API(SNR, /, q, s, minSNR, alpha, log_freq_cluster):
+    return _ClusteringN2D(SNR, q, s, minSNR, alpha, log_freq_cluster)
 
 
 @nb.njit(["Tuple((f8[:, :, :], u4[:, :, :]))(f8[:, :, :], UniTuple(i8, 3), UniTuple(i8, 3), f8, f8)",
@@ -209,11 +219,11 @@ def _ClusteringN3D(SNR, q, s, minSNR, alpha):
 
 
 @ReshapeArraysDecorator(dim=4, input_num=1, methodfunc=False, output_num=2, first_shape=True)
-def _ClusteringN3D_API(SNR, /, q, s, minSNR, alpha):
+def _ClusteringN3D_API(SNR, /, q, s, minSNR, alpha, log_freq_cluster):
     return _ClusteringN3D(SNR, q, s, minSNR, alpha)
 
 
-def Clustering(SNR, /, q, s, minSNR, alpha):
+def Clustering(SNR, /, q, s, minSNR, alpha, log_freq_cluster):
     """
         Performs clustering (density-based / neighbor-based) of many trimmed spectrograms in parallel.
         If `len(q) = 2` then 2-dimensional clustering in "Frequency x Time" is used, `SNR.shape=(M, Nf, Nt)`
@@ -231,7 +241,7 @@ def Clustering(SNR, /, q, s, minSNR, alpha):
             alpha : float (0, 1] : minimum cluster fullness
     """
     func = {2: _ClusteringN2D_API, 3: _ClusteringN3D_API}
-    return func[len(q)](SNR, q, s, minSNR, alpha)
+    return func[len(q)](SNR, q, s, minSNR, alpha, log_freq_cluster)
 
 
 ## Experimental ##
@@ -274,24 +284,44 @@ def clusters_stats_2D(SNR, CID, df, dt, fmax):
     names = ['Time_start_sec', 'Time_end_sec', 'Time_center_of_mass_sec',
              'Frequency_start_Hz', 'Frequency_end_Hz', 'Frequency_center_of_mass_Hz',
              'Average_SNR', 'Peak_SNR', 'Area']
-    df_stats = pd.DataFrame(columns=names, index=pd.Index(cids, name='Cluster_ID'))
+    df_stats = pd.DataFrame(columns=pd.Index(names, name='Statistics'),
+                            index=pd.Index(cids, name='Cluster_ID'))
     for i, stat in zip(cids, stats):
         df_stats.loc[i] = stat
     return df_stats
+
+
+def ClusterCatalogs(SNR, CID, frequency, stft_dt_sec):
+    df = frequency[1] - frequency[0]
+    shape = SNR.shape[:-2]
+    clusters_stats = np.empty(shape, dtype=pd.DataFrame)
+    for ind in np.ndindex(*shape):
+        clusters_stats[ind] = clusters_stats_2D(SNR[ind], CID[ind], df, stft_dt_sec, frequency[-1])
+    return clusters_stats
 
 
 def get_clusters_catalogs(cats_result):
     SNR, CID = cats_result.spectrogram_SNR_clustered, cats_result.spectrogram_cluster_ID
     assert (SNR is not None) and (CID is not None), "CATS result must contain `spectrogram_SNR_clustered` and " \
                                                     "`spectrogram_cluster_ID` (use `full_info`)"
-    freq = cats_result.stft_frequency
-    df = freq[1] - freq[0]
-    dt = cats_result.stft_dt_sec
-    shape = SNR.shape[:-2]
-    clusters_stats = np.empty(shape, dtype=pd.DataFrame)
-    for ind in np.ndindex(*shape):
-        clusters_stats[ind] = clusters_stats_2D(SNR[ind], CID[ind], df, dt, freq[-1])
-    return clusters_stats
+    return ClusterCatalogs(SNR, CID, cats_result.stft_frequency, cats_result.stft_dt_sec)
+
+
+def concatenate_cluster_catalogs(catalog1, catalog2, t0):
+    time_shifting = ["Time_start_sec", "Time_end_sec", "Time_center_of_mass_sec"]
+    if len(catalog2) > 0:
+        catalog2[time_shifting] += t0
+        catalog2.index += max(catalog1.index, default=0)
+    return pd.concat([catalog1, catalog2])
+
+
+def concatenate_arrays_of_cluster_catalogs(catalog1, catalog2, t0):
+    if (catalog1 is not None) and (catalog2 is not None):
+        assert catalog1.shape == catalog2.shape
+        for ind in np.ndindex(catalog1.shape):
+            catalog1[ind] = concatenate_cluster_catalogs(catalog1[ind], catalog2[ind], t0)
+        del catalog2
+    return catalog1
 
 
 def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
