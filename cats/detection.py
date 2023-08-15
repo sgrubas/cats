@@ -18,10 +18,12 @@ from .core.projection import FilterDetection
 from .core.clustering import concatenate_arrays_of_cluster_catalogs
 from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles, to2d_array_with_num_columns
 from .core.utils import format_index_by_dimensions, give_index_slice_by_limits, intervals_intersection
-from .core.utils import aggregate_array_by_axis_and_func, format_interval_by_limits
+from .core.utils import aggregate_array_by_axis_and_func, format_interval_by_limits, make_default_index_on_axis
 from .core.plottingutils import plot_traces
 from .io import read_data
 
+
+# ------------------ CATS DETECTOR API ------------------ #
 
 class CATSDetector(CATSBase):
     """
@@ -262,7 +264,7 @@ class CATSDetectionResult(CATSResult):
 
         ind = inds_slices[0]
         if (ax := self.aggregate_axis_for_likelihood) is not None:
-            ind = list(ind); ind[ax] = 0; ind = tuple(ind)
+            ind = make_default_index_on_axis(ind, ax, 0)
         inds_stft = ind + (inds_slices[2],)
 
         stft_time = self.stft_time(time_interval_sec)
@@ -313,7 +315,8 @@ class CATSDetectionResult(CATSResult):
         traces = self.signal[ind + (i_time,)]
 
         if (ax := self.aggregate_axis_for_likelihood) is not None:
-            if ax < len(ind): ind = list(ind); ind[ax] = 0; ind = tuple(ind)
+            if ax < len(ind):
+                ind = make_default_index_on_axis(ind, ax, 0)
 
         detected_intervals = getattr(self, 'detected_intervals', None) if intervals else None
         if detected_intervals is not None:

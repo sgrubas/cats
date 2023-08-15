@@ -4,7 +4,7 @@ from .utils import ReshapeArraysDecorator, get_interval_division, get_logarithmi
 from scipy import special, optimize
 
 
-########################  B-E-DATE   ########################
+# ---------------------- B-E-DATE ---------------------- #
 
 
 @nb.njit("i8(i8, f8)", cache=True)
@@ -42,18 +42,18 @@ def _DATE(Y, xi_lamb, Q, original_mode):
 @nb.njit(["f8[:, :, :](f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)",
           "f4[:, :, :](f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)"], parallel=True, cache=True)
 def _BEDATE(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode):
-    L = PSD.shape[0]
+    K = PSD.shape[0]
     m, n = len(freq_groups), len(time_frames)
-    Sgm = np.zeros((L, m, n), dtype=PSD.dtype)
+    Sgm = np.zeros((K, m, n), dtype=PSD.dtype)
     for i in nb.prange(m):  # iter over frequencies
         i1, i2 = freq_groups[i]
         xi_lamb_i = xi_lamb[i]
-        for l in nb.prange(L):  # iter over spectrograms
-            psdl = PSD[l]
+        for k in nb.prange(K):  # iter over spectrograms
+            psdl = PSD[k]
             for j in nb.prange(n):  # iter over time frames
                 j1, j2 = time_frames[j]
                 psd = psdl[i1: i2 + 1, j1: j2 + 1].ravel()
-                Sgm[l, i, j] = _DATE(psd, xi_lamb_i, Q, original_mode) / xi_lamb_i
+                Sgm[k, i, j] = _DATE(psd, xi_lamb_i, Q, original_mode) / xi_lamb_i
     return Sgm
 
 
@@ -117,24 +117,24 @@ def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
           "UniTuple(f4[:, :, :], 2)(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)"],
          parallel=True, cache=True)
 def _BEDATE_trimming(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode):
-    L = PSD.shape[0]
+    K = PSD.shape[0]
     m, n = len(freq_groups), len(time_frames)
-    Sgm = np.zeros((L, m, n), dtype=PSD.dtype)
+    Sgm = np.zeros((K, m, n), dtype=PSD.dtype)
     SNR = np.zeros_like(PSD)
     for i in nb.prange(m):  # iter over frequencies
         i1, i2 = freq_groups[i]
         xi_lamb_i = xi_lamb[i]
-        for l in nb.prange(L):  # iter over spectrograms
-            psdl = PSD[l]
+        for k in nb.prange(K):  # iter over spectrograms
+            psdl = PSD[k]
             for j in nb.prange(n):  # iter over time frames
                 j1, j2 = time_frames[j]
 
                 psd = psdl[i1: i2 + 1, j1: j2 + 1]
                 eta = _DATE(psd.ravel(), xi_lamb_i, Q, original_mode)
-                Sgm[l, i, j] = sgm = eta / xi_lamb_i
+                Sgm[k, i, j] = sgm = eta / xi_lamb_i
 
                 snr = (psd > eta) * psd / (sgm + 1e-8)
-                SNR[l, i1: i2 + 1, j1: j2 + 1] = snr
+                SNR[k, i1: i2 + 1, j1: j2 + 1] = snr
     return SNR, Sgm
 
 
@@ -173,21 +173,10 @@ def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_
     return spectrogram_SNR_trimmed, noise_std, xi_lamb
 
 
-######################### CONSTANTS #########################
-
+# ------------------------ CONSTANTS ------------------------ #
 
 def _minSNR(rho, N, d):
     return rho or np.sqrt(2 * np.log(N * d))  # `N * d` for `d = 2`
-
-
-def _Nmin(N, Q=None):
-    maxQ = 1 - N / 4 / (N / 2 - 1)**2
-    if Q is None:
-        Q = maxQ
-    else:
-        Q = min(Q, maxQ)
-    Nmin = np.clip(int(0.5 * (N - np.sqrt(N / (1 - Q)))), 2, N)
-    return Nmin
 
 
 def _Lambda(d):

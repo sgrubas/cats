@@ -13,74 +13,19 @@ from tqdm.notebook import tqdm
 from cats.core.utils import ReshapeArraysDecorator, give_rectangles, update_object_params, intervals_intersection
 from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
+from cats.core.utils import make_default_index_on_axis
 from cats.core.projection import FilterDetection
 from cats.core.association import PickDetectedPeaks
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
 
 
-###### BACKENDS ######
-
-@nb.njit(["f8[:](f8[:], i8, i8, i8, i8, i8)",
-          "f8[:](f4[:], i8, i8, i8, i8, i8)"], cache=True)
-def cpu_STA_LTA_backend_vector(x, left, lleft, right, rright, step):
-    n = len(x)
-    M = int((n - rright) / step) + 1
-
-    y = np.zeros(M)
-
-    lta = np.sum(x[: left])
-    sta = np.sum(x[lleft: rright])
-    y[0] = sta / (lta + 1e-16) * left / right
-    for i in range(1, M):
-        k0, k1 = step * (i - 1), step * i
-        if step > 1:
-            lta = lta - np.sum(x[k0: k1]) + np.sum(x[left + k0: left + k1])
-            sta = sta - np.sum(x[lleft + k0: lleft + k1]) + np.sum(x[rright + k0: rright + k1])
-        else:
-            lta = lta - x[k0] + x[left + k0]
-            sta = sta - x[lleft + k0] + x[rright + k0]
-        y[i] = sta / (lta + 1e-16) * left / right
-
-    return y
-
-
-NUM_CPU = nb.get_num_threads()
-
-
-@nb.njit(["f8[:, :](f8[:, :], i8, i8, i8, i8)",
-          "f8[:, :](f4[:, :], i8, i8, i8, i8)"], parallel=True, cache=True)
-def cpu_STA_LTA_backend(X, left, right, step, overlap):
-    lleft = left - overlap
-    rright = lleft + right
-    # cpu = nb.config.NUMBA_NUM_THREADS
-    cpu = NUM_CPU
-    N, n = X.shape
-
-    M = int((n - rright) / step) + 1
-    Mp = int(M / cpu)
-
-    Y = np.zeros((N, M))
-    for i in nb.prange(N):
-        xi = X[i]
-        for j in nb.prange(cpu):
-            j0, j1 = j * Mp, (j + 1) * Mp
-            k0, k1 = j0 * step, (j1 - 1) * step + rright
-            if j != cpu - 1:
-                j1, k1 = M, n
-            Y[i, j0: j1] = cpu_STA_LTA_backend_vector(xi[k0: k1], left, lleft,
-                                                      right, rright, step)
-
-    return Y
-
+# --------------- STA/LTA DETECTOR API --------------- #
 
 @ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=False, output_num=1, first_shape=True)
 def STA_LTA(x, long, short, step, overlap, padmode='reflect'):
     X = np.pad(x, [(0, 0), (long - overlap, short - 1)], mode=padmode)
     return cpu_STA_LTA_backend(X, long, short, step, overlap)
-
-
-##### API #####
 
 
 class STALTADetector(BaseModel, extra=Extra.allow):
@@ -211,13 +156,13 @@ class STALTADetector(BaseModel, extra=Extra.allow):
                      "picked_features"]
 
         if isinstance(full_info, str) and \
-           (full_info in ['plot', 'plotting', 'plt', 'qc', 'main']):  # only those needed for plotting step-by-step
+                (full_info in ['plot', 'plotting', 'plt', 'qc', 'main']):  # only those needed for plotting step-by-step
             full_info = STALTADetector.get_qc_keys()
 
         full_info = cast_to_bool_dict(full_info, info_keys)
 
         full_info["detected_intervals"] = True  # default saved result
-        full_info["picked_features"] = True     # default saved result
+        full_info["picked_features"] = True  # default saved result
 
         return full_info
 
@@ -235,11 +180,11 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         intervals_size = 2 * np.prod(x.shape[:-1]) / aggregated_axis_len * num_intervals
 
         memory_usage_bytes = {
-            "signal":               1. * x_bytes,                        # float / int
-            "likelihood":           1. * precision_order * stalta_size,  # float
-            "detection":            1. * stalta_size,                    # bool always
-            "detected_intervals":   8. * intervals_size,                 # ~ float64, upper bound
-            "picked_features":      8. * intervals_size,                 # ~ float64, upper bound
+            "signal": 1. * x_bytes,  # float / int
+            "likelihood": 1. * precision_order * stalta_size,  # float
+            "detection": 1. * stalta_size,  # bool always
+            "detected_intervals": 8. * intervals_size,  # ~ float64, upper bound
+            "picked_features": 8. * intervals_size,  # ~ float64, upper bound
         }
 
         used_together = [('likelihood', 'detection', 'detected_intervals', 'picked_features')]
@@ -287,7 +232,7 @@ class STALTADetectionResult(CATSDetectionResult):
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
 
         if (ax := self.aggregate_axis_for_likelihood) is not None:
-            ind = list(ind); ind[ax] = 0; ind = tuple(ind)
+            ind = make_default_index_on_axis(ind, ax, 0)
             inds_stalta = ind + (i_stalta,)
 
         likelihood = np.nan_to_num(self.likelihood[inds_stalta],
@@ -312,7 +257,6 @@ class STALTADetectionResult(CATSDetectionResult):
         snr_level_fig = hv.HLine(self.threshold, kdims=[t_dim, L_dim]).opts(color='k', linestyle='--', alpha=0.7)
 
         last_figs = [intervals_fig, snr_level_fig, likelihood_fig, peaks_fig]
-
         fig1 = hv.Overlay(last_figs, label='1. Likelihood and Detection:'
                                            ' $\mathcal{L}(t)$ and $\mathcal{D}(t)$')
 
@@ -350,3 +294,58 @@ class STALTADetectionResult(CATSDetectionResult):
         assert self.threshold == other.threshold
         assert self.dt_sec == other.dt_sec
         assert self.stalta_dt_sec == other.stalta_dt_sec
+
+
+# -------------  STA/LTA BACKENDS  ------------- #
+
+@nb.njit(["f8[:](f8[:], i8, i8, i8, i8, i8)",
+          "f8[:](f4[:], i8, i8, i8, i8, i8)"], cache=True)
+def cpu_STA_LTA_backend_vector(x, left, lleft, right, rright, step):
+    n = len(x)
+    M = int((n - rright) / step) + 1
+
+    y = np.zeros(M)
+
+    lta = np.sum(x[: left])
+    sta = np.sum(x[lleft: rright])
+    y[0] = sta / (lta + 1e-16) * left / right
+    for i in range(1, M):
+        k0, k1 = step * (i - 1), step * i
+        if step > 1:
+            lta = lta - np.sum(x[k0: k1]) + np.sum(x[left + k0: left + k1])
+            sta = sta - np.sum(x[lleft + k0: lleft + k1]) + np.sum(x[rright + k0: rright + k1])
+        else:
+            lta = lta - x[k0] + x[left + k0]
+            sta = sta - x[lleft + k0] + x[rright + k0]
+        y[i] = sta / (lta + 1e-16) * left / right
+
+    return y
+
+
+NUM_CPU = nb.get_num_threads()
+
+
+@nb.njit(["f8[:, :](f8[:, :], i8, i8, i8, i8)",
+          "f8[:, :](f4[:, :], i8, i8, i8, i8)"], parallel=True, cache=True)
+def cpu_STA_LTA_backend(X, left, right, step, overlap):
+    lleft = left - overlap
+    rright = lleft + right
+    # cpu = nb.config.NUMBA_NUM_THREADS
+    cpu = NUM_CPU
+    N, n = X.shape
+
+    M = int((n - rright) / step) + 1
+    Mp = int(M / cpu)
+
+    Y = np.zeros((N, M))
+    for i in nb.prange(N):
+        xi = X[i]
+        for j in nb.prange(cpu):
+            j0, j1 = j * Mp, (j + 1) * Mp
+            k0, k1 = j0 * step, (j1 - 1) * step + rright
+            if j != cpu - 1:
+                j1, k1 = M, n
+            Y[i, j0: j1] = cpu_STA_LTA_backend_vector(xi[k0: k1], left, lleft,
+                                                      right, rright, step)
+
+    return Y

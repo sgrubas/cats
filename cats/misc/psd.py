@@ -12,13 +12,16 @@ import holoviews as hv
 from cats.core.projection import FilterDetection
 from cats.core.timefrequency import STFTOperator
 from cats.core.association import PickDetectedPeaks
-from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits, StatusKeeper
+from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, give_rectangles
 from cats.core.utils import update_object_params, give_nonzero_limits, complex_abs_square, intervals_intersection
+from cats.core.utils import StatusKeeper, make_default_index_on_axis
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
 from cats.io import read_data
 
+
+# --------------- PSD DETECTOR API --------------- #
 
 class PSDDetector(BaseModel, extra=Extra.allow):
     # STFT params
@@ -342,7 +345,7 @@ class PSDDetectionResult(CATSDetectionResult):
                         label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
 
         if (ax := self.aggregate_axis_for_likelihood) is not None:
-            ind = list(ind); ind[ax] = 0; ind = tuple(ind)
+            ind = make_default_index_on_axis(ind, ax, 0)
             inds_stft = ind + (i_stft,)
 
         likelihood = np.nan_to_num(self.likelihood[inds_stft],
@@ -371,12 +374,13 @@ class PSDDetectionResult(CATSDetectionResult):
                                            ' $\mathcal{L}(t)$ and $\mathcal{D}(t)$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
-        figsize = 250; cmap = 'viridis'
+        figsize = 250
+        cmap = 'viridis'
         xlim = time_interval_sec
         ylim = (max(1e-1, self.stft_frequency[1]), None)
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
-        curve_opts  = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, show_legend=False)
+        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, show_legend=False)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      aspect_weight=0, sublabel_format='')
         figs = [fig0, fig1, fig2, fig3]

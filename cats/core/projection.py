@@ -7,9 +7,7 @@ import numba as nb
 from .utils import ReshapeArraysDecorator
 
 
-############################################################################
-#####################  TIME PROJECTION AND FIILTERING  #####################
-############################################################################
+# ------------------  TIME PROJECTION AND FILTERING  ------------------ #
 
 
 @nb.njit("i8[:, :](b1[:])", cache=True)
@@ -101,8 +99,8 @@ def filter_intervals(intervals, min_separation, min_duration):
         combined_intervals = intervals
 
     if len(combined_intervals) > 0:
-        duration_inds = (combined_intervals[:, 1] - combined_intervals[:,
-                                                    0]) >= min_duration - 1  # `-` is for single point
+        # Below, `-1` is to include a single point
+        duration_inds = (combined_intervals[:, 1] - combined_intervals[:, 0]) >= min_duration - 1
         return combined_intervals[duration_inds]
     else:
         return combined_intervals

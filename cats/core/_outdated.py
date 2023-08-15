@@ -71,19 +71,17 @@ def LSAMatchPair(sequence1, sequence2, max_dist=None, metric=1):
     remained_1 = list(set(range(len(reindexed_1))) - set(matched_1))
     remained_2 = list(set(range(len(reindexed_2))) - set(matched_2))
 
-    nan_inds = lambda x: np.full(x, -1)
-
     matched_seq1_inds = (pairs_1,
                          reindexed_1[matched_1],
                          reindexed_1[remained_1],
-                         nan_inds(len(remained_2)),
+                         np.full(len(remained_2), -1),
                          inds1[distant_inds_1],
-                         nan_inds(n_distant_2))
+                         np.full(n_distant_2, -1))
     matched_seq2_inds = (pairs_2,
                          reindexed_2[matched_2],
-                         nan_inds(len(remained_1)),
+                         np.full(len(remained_1), -1),
                          reindexed_2[remained_2],
-                         nan_inds(n_distant_1),
+                         np.full(n_distant_1, -1),
                          inds2[distant_inds_2])
     matched = (np.concatenate(matched_seq1_inds),
                np.concatenate(matched_seq2_inds))
@@ -103,8 +101,8 @@ def sparsify_path(path, vec1, vec2, dist):
     i0, j0 = -1, -1
     for cnt, (i, j) in enumerate(path):
         dist_ij = dist(vec1[i], vec2[j])
-
-        if ((i != i0) and (j != j0) and len(buffer) > 0) or (last := (cnt == N - 1)):
+        last = (cnt == N - 1)
+        if ((i != i0) and (j != j0) and len(buffer) > 0) or last:
             if last:
                 buffer.append(((i, j), dist_ij))
             min_ind, min_dist = min(buffer, key=lambda x: x[-1])

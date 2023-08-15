@@ -46,8 +46,8 @@ def _ReshapeOutputs(outputs, dim, output_num, methodfunc, first_shape, preshapes
     return V
 
 
-def ReshapeArraysDecorator(dim : int, input_num : int = 1, methodfunc : bool = False,
-                           output_num : int = 1, first_shape : bool = True):
+def ReshapeArraysDecorator(dim: int, input_num: int = 1, methodfunc: bool = False,
+                           output_num: int = 1, first_shape: bool = True):
     """
         Decorator for reshaping input **positional arguments only** and output arrays to a predefined number
         of dimensions `dim`. The last axis is always main axis over which all the computations are performed.
@@ -300,3 +300,9 @@ def mat_structure_to_tight_dataframe_dict(mat_struct):
         adpt_mat[name] = attr.tolist()
     adpt_mat['columns'] = [col.replace(" ", "") for col in adpt_mat['columns']]
     return adpt_mat
+
+
+def make_default_index_on_axis(tuple_ind, axis, default_ind_value):
+    tuple_ind = list(tuple_ind)
+    tuple_ind[axis] = default_ind_value
+    return tuple(tuple_ind)

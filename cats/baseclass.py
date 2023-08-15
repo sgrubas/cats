@@ -21,7 +21,7 @@ from .core.utils import format_interval_by_limits, give_index_slice_by_limits, d
 from .core.utils import give_nonzero_limits, mat_structure_to_tight_dataframe_dict
 
 
-####################### BASE CLASSES #######################
+# ------------------------ BASE CLASSES ------------------------ #
 
 class CATSBase(BaseModel, extra=Extra.allow):
     """
@@ -223,7 +223,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         # B-E-DATE
         with history(current_process='B-E-DATE trimming'):
-            result['time_frames'] = get_interval_division(N=result['spectrogram'].shape[-1], L=self.stationary_frame_len)
+            result['time_frames'] = get_interval_division(N=result['spectrogram'].shape[-1],
+                                                          L=self.stationary_frame_len)
 
             result['spectrogram_SNR_trimmed'], result['noise_std'], result['noise_threshold_conversion'] = \
                 BEDATE_trimming(result['spectrogram'], self.frequency_groups_index,

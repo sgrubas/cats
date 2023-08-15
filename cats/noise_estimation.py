@@ -1,15 +1,15 @@
 """
--
+- under development
 """
 
 import numpy as np
 import holoviews as hv
-from typing import Callable, Union, Tuple
 import psutil
+from typing import Union, List
 
 from .baseclass import CATSBase, CATSResult
 from .core.utils import get_interval_division
-from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_index_slice_by_limits
+from .core.utils import give_index_slice_by_limits
 
 # TODO:
 #  - make sure that this class is needed
@@ -21,7 +21,10 @@ class CATSNoiseEstimator(CATSBase):
         Noise estimator based on Cluster Analysis of Trimmed Spectrograms
     """
 
-    def estimate(self, x, /, verbose=False, full_info=False):
+    def estimate(self, x: np.ndarray,
+                 /,
+                 verbose: bool = False,
+                 full_info: Union[bool, str, List[str]] = False):
         """
             Estimates noise spectrogram.
 
@@ -76,7 +79,7 @@ class CATSNoiseEstimator(CATSBase):
         pre_full_info['spectrogram_cluster_ID'] = True     # needed for `CATSBase._apply`
         return full_info, pre_full_info
 
-    def estimate_memory_usage(self, x, /, full_info=False):
+    def estimate_memory_usage(self, x, /, full_info: Union[bool, str, List[str]] = False):
         memory_usage_bytes, used_together = self._memory_usage(x)
         full_info, pre_full_info = self._parse_info_dict(full_info)
 
@@ -117,7 +120,7 @@ class CATSNoiseEstimator(CATSBase):
 
 class CATSNoiseEstimationResult(CATSResult):
 
-    def plot(self, ind, time_interval_sec=None):
+    def plot(self, ind=None, time_interval_sec=None):
         fig, opts, inds_slices = super().plot(ind, time_interval_sec)
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')

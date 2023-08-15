@@ -2,7 +2,7 @@ from .core.timefrequency import STFTOperator, CWTOperator
 from .core.date import BEDATE, EtaToSigma
 from .core.clustering import Clustering, get_clusters_catalogs
 from .core.projection import FilterIntervals, GiveIntervals
-from .core.association import MatchSequences, PickFeatures, Associate, PickAssociateBySpectrogram
+from .core.association import MatchSequences, PickFeatures, Associate
 from .core import utils
 from .core.plottingutils import plot_traces
 from .metrics import EvaluateDetection, BinaryCrossentropy

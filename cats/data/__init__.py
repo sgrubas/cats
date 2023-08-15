@@ -1,5 +1,7 @@
 import numpy as np
-import pkg_resources, pickle, zipfile
+import pkg_resources
+import pickle
+import zipfile
 
 
 def import_sample_data():

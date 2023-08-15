@@ -48,7 +48,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
                              If `nfft > len(window)`, then zero-padding is performed.
                              if `nfft < 0`, then `nfft` is rounded to the closest `2**ceil(log2(len(window)))`
                              Default `nfft = len(window)`
-                padtype : str : type of padding signal at both ends ('reflect', 'symmetric', 'replicate', 'wrap', 'zero').
+                padtype : str : padding type at both ends ('reflect', 'symmetric', 'replicate', 'wrap', 'zero').
                                 Default 'reflect'
 
                 scipy_padded : bool : applied for Forward STFT. Default False.

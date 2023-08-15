@@ -51,7 +51,7 @@ def distance_matrix(vec1, vec2, threshold, order):
 
 
 @nb.njit("i8[:](f8[:])", cache=True)
-def sorted_indices_1Dvector(vector):
+def sorted_indices_1D_vector(vector):
     finite_inds = np.isfinite(vector)
     inds = np.ravel(np.argwhere(finite_inds))
     argsort = np.argsort(vector[inds])
@@ -64,11 +64,11 @@ def search_pairs(D):
     paired_1, paired_2 = [], []
     for i in range(n1):
         di = D[i]
-        j_inds = sorted_indices_1Dvector(di)
+        j_inds = sorted_indices_1D_vector(di)
         for j_by_i in j_inds:
             if j_by_i not in paired_2:
                 dj = D[:, j_by_i]
-                i_by_j = sorted_indices_1Dvector(dj)[0]
+                i_by_j = sorted_indices_1D_vector(dj)[0]
                 if i_by_j == i:
                     paired_1.append(i_by_j)
                     paired_2.append(j_by_i)
@@ -128,10 +128,8 @@ def MinWeightBipartiteMatching(sequence1, sequence2, max_dist, order, method='ma
     unpaired_1 = list(set(range(len(sequence1))) - set(paired_1))
     unpaired_2 = list(set(range(len(sequence2))) - set(paired_2))
 
-    nan_inds = lambda x: np.full(x, -1)
-
-    matched = (np.concatenate((paired_1, unpaired_1, nan_inds(len(unpaired_2)))),
-               np.concatenate((paired_2, nan_inds(len(unpaired_1)), unpaired_2)))
+    matched = (np.concatenate((paired_1, unpaired_1, np.full(len(unpaired_2), -1))),
+               np.concatenate((paired_2, np.full(len(unpaired_1), -1), unpaired_2)))
     return matched
 
 
@@ -177,14 +175,20 @@ def fill_with_nan(reference, inds):
     dim = reference.shape[-1] if ndims > 1 else 1
     filling = np.array([np.nan] * dim) if ndims > 1 else np.nan
     shape = (-1, dim)[:ndims]
-    func = lambda i: reference[i] if i >= 0 else filling
+
+    def func(i):
+        return reference[i] if i >= 0 else filling
+
     return np.array([func(i) for i in inds.astype(int)]).reshape(*shape)
+
+
+def dim_expand_2d(arr):
+    return np.expand_dims(arr, -1) if arr.ndim == 1 else arr
 
 
 def atleast_2d(*sequences):
     arrays = map(np.array, sequences)
-    dim_expand = lambda arr: np.expand_dims(arr, -1) if arr.ndim == 1 else arr
-    return tuple(map(dim_expand, arrays))
+    return tuple(map(dim_expand_2d, arrays))
 
 
 def sort_sequences(*sequences, aggregator=np.nanmin, sort_key=0):
@@ -291,25 +295,3 @@ def Associate(sequences, location_order, /, vote_rate,
 #                            assignment_aggregate=assignment_aggregate, metric_order=metric_order,
 #                            method=method, verbose=verbose)
 #     return associated
-
-
-@ReshapeArraysDecorator(dim=4, input_num=2, output_num=0)
-def PickAssociateBySpectrogram(spectrogram, location, /, time, frequency, min_height, vote_rate,
-                               max_dist_assignment, min_width_sec=0.0, assignment_aggregate='mean',
-                               metric_order=1, feature_num=None, pick_kwargs=None, method='manual'):
-    counts = np.count_nonzero(spectrogram, axis=-2)
-    counts = np.where(counts == 0, 1, counts)
-    likelihood = spectrogram.sum(axis=-2) / counts
-    peak_freqs = frequency[np.argmax(spectrogram, axis=-2)]
-
-    features = PickFeatures(likelihood, peak_freqs, time=time, min_likelihood=min_height, min_width_sec=min_width_sec,
-                            feature_num=feature_num, **pick_kwargs)
-
-    associated_features = Associate(features,
-                                    location_order=location,
-                                    vote_rate=vote_rate,
-                                    max_dist_assignment=max_dist_assignment,
-                                    assignment_aggregate=assignment_aggregate,
-                                    metric_order=metric_order, method=method)
-
-    return associated_features

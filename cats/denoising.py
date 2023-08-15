@@ -1,4 +1,7 @@
 """
+    - under development
+
+
     API for Denoiser based on Cluster Analysis of Trimmed Spectrograms (CATS)
     Main operators:
         CATSDenoiser : Denoiser of seismic events based on CATS
@@ -16,7 +19,7 @@ from tqdm.notebook import tqdm
 from .baseclass import CATSBase, CATSResult
 from .core.association import PickDetectedPeaks
 from .core.projection import FilterDetection
-from .core.utils import cast_to_bool_dict, del_vals_by_keys
+from .core.utils import cast_to_bool_dict, del_vals_by_keys, make_default_index_on_axis
 from .core.utils import format_index_by_dimensions, give_index_slice_by_limits
 from .core.utils import get_interval_division, aggregate_array_by_axis_and_func, format_interval_by_limits
 from .core.plottingutils import plot_traces
@@ -89,9 +92,9 @@ class CATSDenoiser(CATSBase):
                                    **from_full_info)
 
     def denoise(self, x: np.ndarray,
-               /,
-               verbose: bool = False,
-               full_info: Union[bool, str, List[str]] = False):
+                /,
+                verbose: bool = False,
+                full_info: Union[bool, str, List[str]] = False):
         """
             Performs the detection on the given dataset. If the data processing does not fit the available memory,
             the data are split into chunks.
@@ -295,7 +298,8 @@ class CATSDenoisingResult(CATSResult):
         traces = self.signal[ind + (i_time,)]
 
         if (ax := self.aggregate_axis_for_likelihood) is not None:
-            if ax < len(ind): ind = list(ind); ind[ax] = 0; ind = tuple(ind)
+            if ax < len(ind):
+                ind = make_default_index_on_axis(ind, ax, 0)
 
         detected_intervals = getattr(self, 'detected_intervals', None) if intervals else None
         if detected_intervals is not None:
@@ -347,5 +351,3 @@ class CATSDenoisingResult(CATSResult):
         assert self.dt_sec == other.dt_sec
         assert self.stft_dt_sec == other.stft_dt_sec
         assert np.all(self.stft_frequency == other.stft_frequency)
-
-

@@ -10,7 +10,32 @@ from scipy import special, stats, ndimage
 import pandas as pd
 from functools import partial
 
-###################  CLUSTERING  ###################
+
+# ------------------- CLUSTERING ------------------- #
+
+
+def Clustering(SNR, /, q, s, minSNR, alpha, log_freq_cluster):
+    """
+        Performs clustering (density-based / neighbor-based) of many trimmed spectrograms in parallel.
+        If `len(q) = 2` then 2-dimensional clustering in "Frequency x Time" is used, `SNR.shape=(M, Nf, Nt)`
+        If `len(q) = 3` then 3-dimensional clustering in "Trace x Frequency x Time" is used, `SNR.shape=(M, Nc, Nf, Nt)`
+
+        Arguments:
+            SNR : np.ndarray (M, Nf, Nt) or (M, Nc, Nf, Nt) : Trimmed spectrogram wherein nonzero elements represent
+                                    SNR values. `M` is number of spectrograms, `Nc` number of traces,
+                                    `Nf` is frequency axis, `Nt` is time axis.
+            q : tuple(int, 2) / tuple(int, 3) : neighborhood distance for clustering `(q_f, q_t)` or `(q_c, q_f, q_t)`.
+                                                `q_c` for traces, `q_f` for frequency, `q_t` for time.
+            s : tuple(int, 2) / tuple(int, 3) : minimum cluster sizes `(s_f, s_t)` or `(s_c, s_f, s_t)`.
+                                                `s_c` for traces, `s_f` for frequency, `s_t` for time.
+            minSNR : float : minimum SNR of clusters
+            alpha : float (0, 1] : minimum cluster fullness
+            log_freq_cluster : tuple(float, float) : logarithmic clustering params (log10) for frequency axis in order:
+                                (log_freq_width, log_freq_distance). By default, they are 0.0, if not will be used
+                                instead of their original equivalents `s_f` and `q_f` respectively.
+    """
+    func = {2: _ClusteringN2D_API, 3: _ClusteringN3D_API}
+    return func[len(q)](SNR, q, s, minSNR, alpha, log_freq_cluster)
 
 
 CLUSTER_STAT_SIGNATURE = "Tuple((UniTuple(i8, 2), UniTuple(i8, 2), i8, f8))"
@@ -151,16 +176,16 @@ def _Clustering3D(SNR, q, s, minSNR, alpha):
             neighbor_clusters = []
 
             # checking existing clusters and remembering not assigned
-            for l, cl in np.ndenumerate(c):
-                if snr[l]:
+            for m, cl in np.ndenumerate(c):
+                if snr[m]:
                     if cl >= 0:
                         if cl not in neighbor_clusters:
                             neighbor_clusters.append(cl)
                     else:
-                        cluster_k.append((i1 + l[0],
-                                          j1 + l[1],
-                                          k1 + l[2],
-                                          snr[l]))
+                        cluster_k.append((i1 + m[0],
+                                          j1 + m[1],
+                                          k1 + m[2],
+                                          snr[m]))
 
             k = len(neighbor_clusters)
             if k == 0:  # updating collection of clusters
@@ -173,7 +198,7 @@ def _Clustering3D(SNR, q, s, minSNR, alpha):
                 neighbor_clusters.remove(cluster_assigned)
                 for cli in neighbor_clusters:
                     cluster_k += clusters[cli]
-                    clusters[cli] = [(Nc, Nf, Nt, SNR[-1, -1, -1])]  # meaningless point needed for compilation of list types
+                    clusters[cli] = [(Nc, Nf, Nt, SNR[-1, -1, -1])]  # meaningless point for compilation of list types
                 clusters[cluster_assigned] += cluster_k  # add new points
 
             # assigning clusters
@@ -223,28 +248,7 @@ def _ClusteringN3D_API(SNR, /, q, s, minSNR, alpha, log_freq_cluster):
     return _ClusteringN3D(SNR, q, s, minSNR, alpha)
 
 
-def Clustering(SNR, /, q, s, minSNR, alpha, log_freq_cluster):
-    """
-        Performs clustering (density-based / neighbor-based) of many trimmed spectrograms in parallel.
-        If `len(q) = 2` then 2-dimensional clustering in "Frequency x Time" is used, `SNR.shape=(M, Nf, Nt)`
-        If `len(q) = 3` then 3-dimensional clustering in "Trace x Frequency x Time" is used, `SNR.shape=(M, Nc, Nf, Nt)`
-
-        Arguments:
-            SNR : np.ndarray (M, Nf, Nt) or (M, Nc, Nf, Nt) : Trimmed spectrogram wherein nonzero elements represent
-                                    SNR values. `M` is number of spectrograms, `Nc` number of traces,
-                                    `Nf` is frequency axis, `Nt` is time axis.
-            q : tuple(int, 2) / tuple(int, 3) : neighborhood distance for clustering `(q_f, q_t)` or `(q_c, q_f, q_t)`.
-                                                `q_c` for traces, `q_f` for frequency, `q_t` for time.
-            s : tuple(int, 2) / tuple(int, 3) : minimum cluster sizes `(s_f, s_t)` or `(s_c, s_f, s_t)`.
-                                                `s_c` for traces, `s_f` for frequency, `s_t` for time.
-            minSNR : float : minimum SNR of clusters
-            alpha : float (0, 1] : minimum cluster fullness
-    """
-    func = {2: _ClusteringN2D_API, 3: _ClusteringN3D_API}
-    return func[len(q)](SNR, q, s, minSNR, alpha, log_freq_cluster)
-
-
-## Experimental ##
+# ---------------- UTILS ---------------- #
 
 
 @nb.njit(["f8[:](UniTuple(i8, 2), f8, f8, f8, f8[:], i4[:])",
@@ -272,21 +276,21 @@ def _cluster_stats(shape, df, dt, fmax, arr, inds):
 def clusters_stats_2D(SNR, CID, df, dt, fmax):
     cids = np.arange(1, CID.max() + 1)
     if len(cids) > 0:
-        stats = ndimage.labeled_comprehension(input=SNR,
-                                              labels=CID,
-                                              index=cids,
-                                              func=partial(_cluster_stats, SNR.shape, df, dt, fmax),
-                                              out_dtype=np.ndarray,
-                                              default=np.nan,
-                                              pass_positions=True)
+        cluster_stats = ndimage.labeled_comprehension(input=SNR,
+                                                      labels=CID,
+                                                      index=cids,
+                                                      func=partial(_cluster_stats, SNR.shape, df, dt, fmax),
+                                                      out_dtype=np.ndarray,
+                                                      default=np.nan,
+                                                      pass_positions=True)
     else:
-        stats = []
+        cluster_stats = []
     names = ['Time_start_sec', 'Time_end_sec', 'Time_center_of_mass_sec',
              'Frequency_start_Hz', 'Frequency_end_Hz', 'Frequency_center_of_mass_Hz',
              'Average_SNR', 'Peak_SNR', 'Area']
     df_stats = pd.DataFrame(columns=pd.Index(names, name='Statistics'),
                             index=pd.Index(cids, name='Cluster_ID'))
-    for i, stat in zip(cids, stats):
+    for i, stat in zip(cids, cluster_stats):
         df_stats.loc[i] = stat
     return df_stats
 
@@ -322,6 +326,9 @@ def concatenate_arrays_of_cluster_catalogs(catalog1, catalog2, t0):
             catalog1[ind] = concatenate_cluster_catalogs(catalog1[ind], catalog2[ind], t0)
         del catalog2
     return catalog1
+
+
+# ------------------ Experimental ------------------ #
 
 
 def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
@@ -413,8 +420,8 @@ def _Clustering2D_recursive(SNR, q, s, minSNR, alpha):
     k = 1
     min_cluster_fullness = alpha * s_f * s_t
     passed_clusters_cid = {}
-    for cid, stats in clusters.items():
-        mins, maxs, n, snr = stats
+    for cid, c_stats in clusters.items():
+        mins, maxs, n, snr = c_stats
         cluster_pass = ((maxs[0] - mins[0] + 1 >= s_f) and  # min frequency width
                         (maxs[1] - mins[1] + 1 >= s_t) and  # min time duration
                         (snr / n >= minSNR) and  # min average energy
@@ -433,7 +440,7 @@ def _Clustering2D_recursive(SNR, q, s, minSNR, alpha):
     return SNRK, C
 
 
-## OLD ##
+# -------------------- OLD -------------------- #
 
 
 @nb.njit(["Tuple((f8[:, :], u4[:, :]))(f8[:, :], UniTuple(i8, 2), UniTuple(i8, 2), f8, f8)",
@@ -462,15 +469,15 @@ def _Clustering2D_old(SNR, q, s, minSNR, alpha):
             neighbor_clusters = []
 
             # checking existing clusters and remembering not assigned
-            for l, cl in np.ndenumerate(c):
-                if snr[l]:
+            for m, cl in np.ndenumerate(c):
+                if snr[m]:
                     if cl >= 0:
                         if cl not in neighbor_clusters:
                             neighbor_clusters.append(cl)
                     else:
-                        cluster_k.append((i1 + l[0],
-                                          j1 + l[1],
-                                          snr[l]))
+                        cluster_k.append((i1 + m[0],
+                                          j1 + m[1],
+                                          snr[m]))
 
             k = len(neighbor_clusters)
             if k == 0:  # updating collection of clusters
@@ -513,4 +520,3 @@ def _Clustering2D_old(SNR, q, s, minSNR, alpha):
                 k += 1
 
     return SNRK, K
-
