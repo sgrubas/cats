@@ -16,7 +16,7 @@ from .baseclass import CATSBase, CATSResult
 from .core.association import PickDetectedPeaks
 from .core.projection import FilterDetection
 from .core.clustering import concatenate_arrays_of_cluster_catalogs
-from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles
+from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles, to2d_array_with_num_columns
 from .core.utils import format_index_by_dimensions, give_index_slice_by_limits, intervals_intersection
 from .core.utils import aggregate_array_by_axis_and_func, format_interval_by_limits
 from .core.plottingutils import plot_traces
@@ -377,3 +377,16 @@ class CATSDetectionResult(CATSResult):
         assert np.all(self.stft_frequency == other.stft_frequency)
         assert np.all(self.noise_threshold_conversion == other.noise_threshold_conversion)
 
+    @staticmethod
+    def convert_dict_to_attributes(mdict):
+        mdict = CATSResult.convert_dict_to_attributes(mdict)
+
+        if (detected_intervals := mdict.get('detected_intervals', None)) is not None:
+            for ind, intv in np.ndenumerate(detected_intervals):
+                detected_intervals[ind] = to2d_array_with_num_columns(intv, num_columns=2)
+
+        if (picked_features := mdict.get('picked_features', None)) is not None:
+            for ind, feats in np.ndenumerate(picked_features):
+                picked_features[ind] = to2d_array_with_num_columns(feats, num_columns=2)
+
+        return mdict

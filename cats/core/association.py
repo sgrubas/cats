@@ -282,14 +282,6 @@ def Associate(sequences, location_order, /, vote_rate,
     return associated_sequences
 
 
-# def to2d_features(array, num_features=2):
-#     if array.size == 0:
-#         arr = array.reshape((0, num_features))
-#     else:
-#         arr = np.expand_dims(array, 0) if array.ndim == 1 else array
-#     return np.float64(arr)
-#
-#
 # def get_association(cats_result, location_order, /, vote_rate,
 #                     max_dist_assignment, assignment_aggregate='mean',
 #                     metric_order=1, method='manual', verbose=True):

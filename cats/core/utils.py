@@ -272,19 +272,31 @@ def complex_abs_square(x):
 
 def intervals_intersection(intervals_array, reference_interval):
     t1, t2 = reference_interval
-    interval_inside = (t1 <= intervals_array) & (intervals_array <= t2)
-    interval_inside = interval_inside[:, 0] | interval_inside[:, 1]
-    interval_outside = (intervals_array[:, 0] <= t1) & (t2 <= intervals_array[:, 1])
-    interval_inds = interval_inside | interval_outside
-    return intervals_array[interval_inds]
+    if len(intervals_array) > 0:
+        interval_inside = (t1 <= intervals_array) & (intervals_array <= t2)
+        interval_inside = interval_inside[:, 0] | interval_inside[:, 1]
+        interval_outside = (intervals_array[:, 0] <= t1) & (t2 <= intervals_array[:, 1])
+        interval_inds = interval_inside | interval_outside
+        return intervals_array[interval_inds]
+    else:
+        return np.zeros((0, 2))
 
 
-def mat_structure_to_dataframe_dict(mat_struct):
+def to2d_array_with_num_columns(array, num_columns=2):
+    if array.size == 0:
+        arr = array.reshape((0, num_columns))
+    else:
+        arr = np.expand_dims(array, 0) if array.ndim == 1 else array
+    return arr
+
+
+def mat_structure_to_tight_dataframe_dict(mat_struct):
     adpt_mat = {}
+    len_cols = len(mat_struct.columns)
     for name in mat_struct._fieldnames:
-        val = getattr(mat_struct, name)
-        adpt_mat[name] = val.tolist() if isinstance(val, np.ndarray) else val
+        attr = np.array(getattr(mat_struct, name), ndmin=1)
+        if name == 'data':
+            attr = to2d_array_with_num_columns(attr, num_columns=len_cols)
+        adpt_mat[name] = attr.tolist()
     adpt_mat['columns'] = [col.replace(" ", "") for col in adpt_mat['columns']]
-    adpt_mat['column_names'] = [adpt_mat['column_names']]
-    adpt_mat['index_names'] = [adpt_mat['index_names']]
     return adpt_mat

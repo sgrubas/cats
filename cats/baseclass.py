@@ -18,7 +18,7 @@ from .core.date import BEDATE_trimming, group_frequency, bandpass_frequency_grou
 from .core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
 from .core.utils import get_interval_division, format_index_by_dimensions, cast_to_bool_dict, StatusKeeper
 from .core.utils import format_interval_by_limits, give_index_slice_by_limits, del_vals_by_keys, update_object_params
-from .core.utils import give_nonzero_limits, mat_structure_to_dataframe_dict
+from .core.utils import give_nonzero_limits, mat_structure_to_tight_dataframe_dict
 
 
 ####################### BASE CLASSES #######################
@@ -520,8 +520,9 @@ class CATSResult(BaseModel):
         # Convert dict to DataFrame
         if (catalog := mdict.get('cluster_catalogs', None)) is not None:
             for ind, cat_ind in np.ndenumerate(catalog):
-                catalog[ind] = pd.DataFrame.from_dict(mat_structure_to_dataframe_dict(cat_ind), orient='tight')
-            mdict['cluster_catalogs'] = catalog
+                cat_dict = mat_structure_to_tight_dataframe_dict(cat_ind)
+                catalog[ind] = pd.DataFrame.from_dict(cat_dict, orient='tight')
+
         return mdict
 
     def save(self, filepath, compress=False):
