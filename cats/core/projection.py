@@ -4,7 +4,7 @@
 
 import numpy as np
 import numba as nb
-from .utils import ReshapeArraysDecorator
+# from .utils import ReshapeArraysDecorator
 
 
 # ------------------  TIME PROJECTION AND FILTERING  ------------------ #
@@ -131,28 +131,41 @@ def FilterDetection(detection, min_separation, min_duration):
     return filtered_detection, filtered_intervals
 
 
-@nb.njit(["b1[:](i8[:])", "b1[:](i4[:])", "b1[:](u2[:])", "b1[:](u4[:])"])
-def _fill_gaps(labeled_sequence):
+def FilterIntervalsFromClusterLabels(detected_cluster_labels):
+    filtered_intervals = np.empty(detected_cluster_labels.shape[:-1], dtype=object)
+    filtered_detection = np.full_like(detected_cluster_labels, False, dtype=bool)
+    for ind, _ in np.ndenumerate(filtered_intervals):
+        filtered_detection[ind], filtered_intervals[ind] = _projectLabeledSequence(detected_cluster_labels[ind])
+
+    return filtered_detection, filtered_intervals
+
+
+@nb.njit(["Tuple((b1[:], i8[:, :]))(i8[:])", "Tuple((b1[:], i8[:, :]))(i4[:])",
+          "Tuple((b1[:], i8[:, :]))(u2[:])", "Tuple((b1[:], i8[:, :]))(u4[:])"])
+def _projectLabeledSequence(labeled_sequence):
     binary_sequence = np.full_like(labeled_sequence, False, dtype=np.bool_)
     K = labeled_sequence.max()
+    intervals = np.empty((K, 2), dtype=np.int64)
+
     for k in range(1, K + 1):
         ids = np.argwhere(labeled_sequence == k)
         if len(ids) > 0:
             i1, i2 = np.min(ids), np.max(ids)
             binary_sequence[i1: i2 + 1] = True
-    return binary_sequence
+            intervals[k - 1] = np.array([i1, i2])
+    return binary_sequence, intervals
 
 
-@nb.njit(["b1[:, :](i8[:, :])", "b1[:, :](i4[:, :])",
-          "b1[:, :](u2[:, :])", "b1[:, :](u4[:, :])"], parallel=True)
-def _fill_gaps_nd(labeled_sequences):
-    M, N = labeled_sequences.shape
-    binary_sequences = np.empty((M, N), dtype=np.bool_)
-    for i in nb.prange(M):
-        binary_sequences[i] = _fill_gaps(labeled_sequences[i])
-    return binary_sequences
-
-
-@ReshapeArraysDecorator(dim=2, input_num=1, output_num=1)
-def FillGaps(labeled_sequences):
-    return _fill_gaps_nd(labeled_sequences)
+# @nb.njit(["b1[:, :](i8[:, :])", "b1[:, :](i4[:, :])",
+#           "b1[:, :](u2[:, :])", "b1[:, :](u4[:, :])"], parallel=True)
+# def _fill_gaps_nd(labeled_sequences):
+#     M, N = labeled_sequences.shape
+#     binary_sequences = np.empty((M, N), dtype=np.bool_)
+#     for i in nb.prange(M):
+#         binary_sequences[i] = _projectLabeledSequence(labeled_sequences[i])
+#     return binary_sequences
+#
+#
+# @ReshapeArraysDecorator(dim=2, input_num=1, output_num=1)
+# def FillGaps(labeled_sequences):
+#     return _fill_gaps_nd(labeled_sequences)
