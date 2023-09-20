@@ -14,10 +14,10 @@ from tqdm.notebook import tqdm
 
 from .baseclass import CATSBase, CATSResult
 from .core.association import PickDetectedPeaks
-from .core.projection import FilterDetection
+from .core.projection import FilterIntervalsFromClusterLabels
 from .core.clustering import concatenate_arrays_of_cluster_catalogs
 from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles, to2d_array_with_num_columns
-from .core.utils import format_index_by_dimensions, give_index_slice_by_limits, intervals_intersection
+from .core.utils import format_index_by_dimensions, give_index_slice_by_limits, intervals_intersection, StatusKeeper
 from .core.utils import aggregate_array_by_axis_and_func, format_interval_by_limits, make_default_index_on_axis
 from .core.plottingutils import plot_traces
 from .io import read_data
@@ -32,38 +32,66 @@ class CATSDetector(CATSBase):
     aggregate_axis_for_likelihood: Union[int, Tuple[int]] = None
     aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
 
-    def _detect(self, x, /, verbose=False, full_info=False):
-        full_info, pre_full_info = self.parse_info_dict(full_info)
+    def apply_Likelihood(self, result_container, /, bandpass_slice, full_info):
+        # Aggregation
+        counts = np.count_nonzero(result_container['spectrogram_SNR_clustered'][bandpass_slice], axis=-2)
+        counts = np.where(counts == 0, 1, counts).astype(result_container['spectrogram_SNR_clustered'].dtype)
 
-        result, history = super()._apply(x, finish_on='clustering', verbose=verbose, full_info=pre_full_info)
+        result_container['likelihood'] = \
+            result_container['spectrogram_SNR_clustered'][bandpass_slice].sum(axis=-2) / counts
+
+        del counts
+        del_vals_by_keys(result_container, full_info, ['spectrogram_SNR_clustered'])
+
+        result_container['likelihood'] = aggregate_array_by_axis_and_func(result_container['likelihood'],
+                                                                          self.aggregate_axis_for_likelihood,
+                                                                          self.aggregate_func_for_likelihood,
+                                                                          min_last_dims=1)
+
+    def apply_Intervals(self, result_container, /, full_info, t0):
+        result_container['detection'], result_container['detected_intervals'] = \
+            FilterIntervalsFromClusterLabels(result_container['spectrogram_cluster_ID'].max(axis=-2))
+
+        del_vals_by_keys(result_container, full_info, ['spectrogram_cluster_ID'])
+
+        result_container['picked_features'] = PickDetectedPeaks(result_container['likelihood'],
+                                                                result_container['detected_intervals'],
+                                                                dt=self.stft_hop_sec, t0=t0)
+
+        result_container['detected_intervals'] = result_container['detected_intervals'] * self.stft_hop_sec + t0
+
+    def _detect(self, x, /, verbose=False, full_info=False):
+        full_info = self.parse_info_dict(full_info)
+
+        result = dict.fromkeys(full_info.keys())
+        result['signal'] = x
+        history = StatusKeeper(verbose=verbose)
+
+        # STFT
+        self.apply_func(func_name='apply_STFT', result_container=result, status_keeper=history,
+                        process_name='STFT')
+        del_vals_by_keys(result, full_info, ['signal', 'coefficients'])
 
         stft_time = self.STFT.forward_time_axis(x.shape[-1])
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
 
-        with history(current_process='Likelihood'):
-            # Aggregation
-            counts = np.count_nonzero(result['spectrogram_SNR_clustered'][bandpass_slice], axis=-2)
-            counts = np.where(counts == 0, 1, counts).astype(result['spectrogram_SNR_clustered'].dtype)
+        # B-E-DATE
+        self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
+                        process_name='B-E-DATE trimming')
+        del_vals_by_keys(result, full_info, ['spectrogram', 'noise_std', 'noise_threshold_conversion'])
 
-            result['likelihood'] = result['spectrogram_SNR_clustered'][bandpass_slice].sum(axis=-2) / counts
+        # Clustering
+        self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
+                        process_name='Clustering')
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed'])
 
-            del counts
-            del_vals_by_keys(result, full_info, ['spectrogram_SNR_clustered'])
+        # Likelihood projection
+        self.apply_func(func_name='apply_Likelihood', result_container=result, status_keeper=history,
+                        process_name='Likelihood', bandpass_slice=bandpass_slice, full_info=full_info)
 
-            result['likelihood'] = aggregate_array_by_axis_and_func(result['likelihood'],
-                                                                    self.aggregate_axis_for_likelihood,
-                                                                    self.aggregate_func_for_likelihood,
-                                                                    min_last_dims=1)
-
-        with history(current_process='Detecting intervals'):
-            result['detection'], result['detected_intervals'] = \
-                FilterDetection(result['likelihood'] > 0.0,
-                                min_separation=self.min_separation_len, min_duration=self.min_duration_len)
-
-            result['picked_features'] = PickDetectedPeaks(result['likelihood'], result['detected_intervals'],
-                                                          dt=self.stft_hop_sec, t0=stft_time[0])
-
-            result['detected_intervals'] = result['detected_intervals'] * self.stft_hop_sec + stft_time[0]
+        # Detecting intervals
+        self.apply_func(func_name='apply_Intervals', result_container=result, status_keeper=history,
+                        process_name='Detecting intervals', full_info=full_info, t0=stft_time[0])
 
         del_vals_by_keys(result, full_info, ['likelihood', 'detection', 'detected_intervals', 'picked_features'])
 
@@ -144,13 +172,11 @@ class CATSDetector(CATSBase):
         full_info["detected_intervals"] = True  # default saved result
         full_info["picked_features"] = True     # default saved result
 
-        pre_full_info = full_info.copy()
-        pre_full_info['spectrogram_SNR_clustered'] = True  # needed for `CATSBase._apply`
-        return full_info, pre_full_info
+        return full_info
 
     def memory_usage_estimate(self, x, /, full_info=False):
         memory_usage_bytes, used_together = self._memory_usage(x)
-        full_info, pre_full_info = self.parse_info_dict(full_info)
+        full_info = self.parse_info_dict(full_info)
 
         precision_order = memory_usage_bytes['signal'] / x.size
         stft_time_len = len(self.STFT.forward_time_axis(x.shape[-1]))
@@ -171,7 +197,7 @@ class CATSDetector(CATSBase):
         }
         memory_usage_bytes.update(memory_usage_bytes_new)
 
-        used_together.append(('spectrogram_SNR_clustered',  'likelihood'))
+        used_together.append(('spectrogram_SNR_clustered', 'spectrogram_cluster_ID', 'likelihood'))
         used_together.append(("likelihood", "detection", "picked_features", "detected_intervals"))
         base_info = ["signal", "stft_frequency", "time_frames"]
 
@@ -234,7 +260,7 @@ class CATSDetector(CATSBase):
             rel_folder = fi.relative_to(folder).parent
             save_path = result_folder / rel_folder / Path(str(fi.name).replace(data_format, "_detection"))
             x = read_data(fi)['data']
-            detector.detect_to_file(x, save_path, verbose=verbose, full_info=full_info, compress=compress)
+            detector.denoise_to_file(x, save_path, verbose=verbose, full_info=full_info, compress=compress)
             del x
 
     def detect_on_files(self, data_folder, data_format, result_folder=None,
