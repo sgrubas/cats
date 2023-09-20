@@ -30,12 +30,12 @@ def _DATE(Y, xi_lamb, Q, original_mode):
     for ni in range(Nmin - 1, N - 1):
         M += Y_sort[ni]
         M_s = M / (ni + 1)
-        eta = M_s * xi_lamb
+        eta = M_s * xi_lamb  # threshold height (std * xi)
         found = (Y_sort[ni] <= eta < Y_sort[ni + 1])
         if found:
             break
     if original_mode:
-        eta = eta if found else eta0  # if not found in loop, then minimum
+        eta = eta if found else eta0  # if not found in the loop, then minimum
     return eta
 
 
