@@ -111,6 +111,7 @@ class CATSDetector(CATSBase):
                                    aggregate_axis_for_likelihood=self.aggregate_axis_for_likelihood,
                                    cluster_catalogs=result['cluster_catalogs'],
                                    frequency_groups=self.frequency_groups,
+                                   main_params=self.export_main_params(),
                                    **from_full_info)
 
     def detect(self, x: np.ndarray,
@@ -260,7 +261,7 @@ class CATSDetector(CATSBase):
             rel_folder = fi.relative_to(folder).parent
             save_path = result_folder / rel_folder / Path(str(fi.name).replace(data_format, "_detection"))
             x = read_data(fi)['data']
-            detector.denoise_to_file(x, save_path, verbose=verbose, full_info=full_info, compress=compress)
+            detector.detect_to_file(x, save_path, verbose=verbose, full_info=full_info, compress=compress)
             del x
 
     def detect_on_files(self, data_folder, data_format, result_folder=None,
@@ -333,6 +334,7 @@ class CATSDetectionResult(CATSResult):
                     gain: int = 1,
                     clip: bool = False,
                     each_trace: int = 1,
+                    amplitude_scale: float = None,
                     **kwargs):
 
         ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=1, default_ind=0)
@@ -359,8 +361,8 @@ class CATSDetectionResult(CATSResult):
 
         fig = plot_traces(traces, self.time(time_interval_sec),
                           intervals=detected_intervals, picks=picked_onsets, associated_picks=None,
-                          trace_loc=trace_loc, time_interval_sec=time_interval_sec,
-                          gain=gain, clip=clip, each_trace=each_trace, **kwargs)
+                          trace_loc=trace_loc, time_interval_sec=time_interval_sec, gain=gain, clip=clip,
+                          each_trace=each_trace, amplitude_scale=amplitude_scale, **kwargs)
         return fig
 
     def append(self, other):

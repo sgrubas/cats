@@ -80,6 +80,7 @@ class CATSDenoiser(CATSBase):
                                    history=history,
                                    cluster_catalogs=result['cluster_catalogs'],
                                    frequency_groups=self.frequency_groups,
+                                   main_params=self.export_main_params(),
                                    **from_full_info)
 
     def denoise(self, x: np.ndarray,
@@ -251,8 +252,9 @@ class CATSDenoisingResult(CATSResult):
                     show_denoised: bool = True,
                     trace_loc: np.ndarray = None,
                     gain: int = 1,
-                    clip: bool = True,
+                    clip: bool = False,
                     each_trace: int = 1,
+                    amplitude_scale: float = None,
                     **kwargs):
         signal = self.signal_denoised if show_denoised else self.signal
         ind = format_index_by_dimensions(ind=ind, shape=signal.shape[:-1], slice_dims=1, default_ind=0)
@@ -262,8 +264,8 @@ class CATSDenoisingResult(CATSResult):
 
         fig = plot_traces(traces, self.time(time_interval_sec),
                           intervals=None, picks=None, associated_picks=None,
-                          trace_loc=trace_loc, time_interval_sec=time_interval_sec,
-                          gain=gain, clip=clip, each_trace=each_trace, **kwargs)
+                          trace_loc=trace_loc, time_interval_sec=time_interval_sec, gain=gain, clip=clip,
+                          each_trace=each_trace, amplitude_scale=amplitude_scale, **kwargs)
         return fig
 
     def append(self, other):

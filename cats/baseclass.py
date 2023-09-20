@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.io import loadmat, savemat
 import holoviews as hv
-from typing import Tuple, Any
+from typing import Any, Union
 from pydantic import BaseModel, Field, Extra
 
 from .core.timefrequency import STFTOperator
@@ -17,7 +17,7 @@ from .core.clustering import Clustering, ClusterCatalogs, concatenate_arrays_of_
 from .core.date import BEDATE_trimming, group_frequency, bandpass_frequency_groups
 from .core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
 from .core.utils import get_interval_division, format_index_by_dimensions, cast_to_bool_dict
-from .core.utils import format_interval_by_limits, give_index_slice_by_limits, update_object_params
+from .core.utils import format_interval_by_limits, give_index_slice_by_limits
 from .core.utils import give_nonzero_limits, mat_structure_to_tight_dataframe_dict
 
 
@@ -51,15 +51,15 @@ class CATSBase(BaseModel, extra=Extra.allow):
     cluster_fullness: float = Field(0, ge=0.0, le=1.0)
 
     # Minor clustering params
-    log_freq_width: float = None
-    log_freq_distance: float = None
+    cluster_size_f_logHz: float = None
+    cluster_distance_f_logHz: float = None
     cluster_catalogs: bool = True
     clustering_multitrace: bool = False
     cluster_size_trace: int = Field(1, ge=1)
     cluster_distance_trace: int = Field(1, ge=1)
 
     # General minor params
-    freq_bandpass_Hz: Tuple[float, float] = None
+    freq_bandpass_Hz: Union[tuple[float, float], Any] = None
     # Minor DATE params
     date_Q: float = 0.95
     date_detection_mode: bool = True
@@ -107,10 +107,10 @@ Minimum separation frequency width between two different events.
                 cluster_fullness : float (0, 1] : minimum cluster fullness from its minimum size defined by `size` and \
 `distance` params
 
-                log_freq_width : float : cluster frequency width in [log10 Hz] scale. If not None, then it will be \
+                cluster_size_f_logHz : float : cluster frequency width in [log10 Hz] scale. If not None, then it will be \
 applied instead of `cluster_size_f_Hz`. Default None.
 
-                log_freq_distance : float : clustering distance in [log10 Hz] scale. If not None, then it will be \
+                cluster_distance_f_logHz : float : clustering distance in [log10 Hz] scale. If not None, then it will be \
 applied instead of `cluster_distance_f_Hz`. Default None.
 
                 cluster_catalogs : bool : whether to calculate catalogs of clusters statistics. Default False
@@ -175,15 +175,15 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.cluster_size_f_len = max(round(self.cluster_size_f_Hz / self.STFT.df), 1)
         self.cluster_size_trace_len = self.cluster_size_trace
 
-        self.log_freq_width = self.log_freq_width or 0.0
-        self.log_freq_distance = self.log_freq_distance or 0.0
+        self.cluster_size_f_logHz = self.cluster_size_f_logHz or 0.0
+        self.cluster_distance_f_logHz = self.cluster_distance_f_logHz or 0.0
 
         self.cluster_distance_t_sec = v if (v := self.cluster_distance_t_sec) is not None else self.stft_hop_sec
         self.cluster_distance_f_Hz = v if (v := self.cluster_distance_f_Hz) is not None else self.stft_df
         self.cluster_distance_t_len = max(round(self.cluster_distance_t_sec / self.stft_hop_sec), 1)
         self.cluster_distance_f_len = max(round(self.cluster_distance_f_Hz / self.stft_df), 1)
         self.cluster_distance_trace_len = self.cluster_distance_trace
-        self.cluster_minSNR = self.cluster_minSNR or self.minSNR
+        self.cluster_minSNR = self.cluster_minSNR if (self.cluster_minSNR is not None) else self.minSNR
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
@@ -202,11 +202,20 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.bandpassed_frequency_groups_slice = bandpass_frequency_groups(self.frequency_groups_index,
                                                                            self.freq_bandpass_slice)
 
+    def export_main_params(self):
+        return {kw: getattr(self, kw) for kw in type(self).__annotations__.keys()}
+
+    @classmethod
+    def from_result(cls, CATSResult):
+        return cls(**CATSResult.main_params)
+
     def reset_params(self, **params):
         """
             Updates the instance with changed parameters.
         """
-        update_object_params(self, **params)
+        kwargs = self.export_main_params()
+        kwargs.update(params)
+        self.__init__(**kwargs)
 
     def apply_STFT(self, result_container, /):
         result_container['coefficients'] = self.STFT * result_container['signal']
@@ -230,7 +239,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
         s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
         alpha = self.cluster_fullness
-        log_freq_cluster = (self.log_freq_width, self.log_freq_distance)
+        log_freq_cluster = (self.cluster_size_f_logHz, self.cluster_distance_f_logHz)
 
         result_container['spectrogram_SNR_clustered'] = np.zeros_like(result_container['spectrogram_SNR_trimmed'])
         result_container['spectrogram_cluster_ID'] = np.zeros(result_container['spectrogram_SNR_trimmed'].shape,
@@ -355,6 +364,7 @@ class CATSResult(BaseModel):
     minSNR: float = None
     threshold: float = None
     history: Any = None
+    main_params: dict = None
 
     @staticmethod
     def base_time_func(npts, dt_sec, t0, time_interval_sec):
@@ -408,7 +418,7 @@ class CATSResult(BaseModel):
         figsize = 250
         cmap = 'viridis'
         xlim = time_interval_sec
-        ylim = (max(1e-1, self.stft_frequency[1]), None)
+        ylim = (max(1e-1, self.stft_frequency[1] / 2), None)
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)

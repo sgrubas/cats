@@ -31,7 +31,7 @@ def Clustering(SNR, /, q, s, minSNR, alpha, log_freq_cluster):
             minSNR : float : minimum SNR of clusters
             alpha : float (0, 1] : minimum cluster fullness
             log_freq_cluster : tuple(float, float) : logarithmic clustering params (log10) for frequency axis in order:
-                                (log_freq_width, log_freq_distance). By default, they are 0.0, if not will be used
+                                (cluster_size_f_logHz, cluster_distance_f_logHz). By default, they are 0.0, if not will be used
                                 instead of their original equivalents `s_f` and `q_f` respectively.
     """
     func = {2: _ClusteringN2D, 3: _ClusteringN3D}

@@ -5,7 +5,7 @@ hv.extension('matplotlib')
 
 
 def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, trace_loc=None,
-                time_interval_sec=None, gain=1, clip=False, each_trace=1, **kwargs):
+                time_interval_sec=None, gain=1, amplitude_scale=None, clip=False, each_trace=1, **kwargs):
 
     trace_loc = trace_loc if (trace_loc is not None) else np.arange(data.shape[0]).astype(float)
 
@@ -28,7 +28,7 @@ def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, t
 
     dloc = min(np.diff(loc_slice))
     scale = gain * dloc
-    amax = np.median(abs(data_slice).max(axis=-1))
+    amax = amplitude_scale or np.median(abs(data_slice).max(axis=-1))
     dc = (data_slice / amax * scale)
     if clip:
         level = dloc / 2.1
