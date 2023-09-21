@@ -203,7 +203,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                                                            self.freq_bandpass_slice)
 
     def export_main_params(self):
-        return {kw: getattr(self, kw) for kw in type(self).__annotations__.keys()}
+        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
 
     @classmethod
     def from_result(cls, CATSResult):

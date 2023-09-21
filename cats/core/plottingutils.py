@@ -26,7 +26,7 @@ def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, t
     trace_dim = hv.Dimension("Trace")
     t_dim = hv.Dimension("Time", unit='s')
 
-    dloc = min(np.diff(loc_slice))
+    dloc = min(np.diff(loc_slice)) if len(loc_slice) > 1 else 1
     scale = gain * dloc
     amax = amplitude_scale or np.median(abs(data_slice).max(axis=-1))
     dc = (data_slice / amax * scale)
