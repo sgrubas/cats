@@ -45,7 +45,7 @@ CLUSTER_STAT_SIGNATURE_ND = lambda n: f"Tuple(({IND_ND(n)}, {IND_ND(n)}, i8, f8)
 @nb.njit([f"{CLUSTER_STAT_SIGNATURE_ND(2)}({IND_ND(2)}, {IND_ND(2)}, f8[:, :], u4[:, :], u4, f8)",
           f"{CLUSTER_STAT_SIGNATURE_ND(2)}({IND_ND(2)}, {IND_ND(2)}, f4[:, :], u4[:, :], u4, f8)"],
          cache=True)
-def iterative_neighbor_search_2D(ind, q, SNR, C, cid, log_freq_distance):
+def iterative_neighbor_search_2D(ind: tuple[int, int], q, SNR, C, cid, log_freq_distance):
     q_f, q_t = q
     Nf, Nt = SNR.shape
 

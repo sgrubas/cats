@@ -114,3 +114,30 @@ def sparsify_path(path, vec1, vec2, dist):
 
     ind1, ind2 = give_unpaired(len(vec1), len(vec2), sparse)
     return sparse, (ind1, ind2)
+
+
+@nb.njit("b1[:, :](b1[:, :], i8, i8)", cache=True)
+def _removeGaps_OLD(detection, min_separation, min_width):
+    M, Nt = detection.shape
+    filtered = np.full_like(detection, False)
+    for i in nb.prange(M):
+        intervals = _giveIntervals(detection[i])
+        n = len(intervals)
+        if (min_separation > 0) and (n > 0):
+            buffer = [(intervals[0, 0], intervals[0, 1])]
+            for j in range(1, n):
+                intv_new = intervals[j]
+                intv_old = buffer[-1]
+                if ((intv_new[0] - intv_old[1] - 1) <= min_separation) and \
+                   (((intv_new[1] - intv_new[0] + 1) < min_width) or
+                   ((intv_old[1] - intv_old[0] + 1) < min_width)):
+
+                    buffer[-1] = (intv_old[0], intv_new[1])
+                else:
+                    buffer.append((intv_new[0], intv_new[1]))
+            buffer = np.array(buffer) if len(buffer) > 0 else np.zeros((0, 2), dtype=np.int64)
+        else:
+            buffer = intervals
+        for j1, j2 in buffer:
+            filtered[i, j1: j2 + 1] = True
+    return filtered

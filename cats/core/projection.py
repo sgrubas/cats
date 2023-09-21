@@ -53,33 +53,6 @@ def GiveIntervals(detection, /):
     return intervals
 
 
-@nb.njit("b1[:, :](b1[:, :], i8, i8)", cache=True)
-def _removeGaps_OLD(detection, min_separation, min_width):
-    M, Nt = detection.shape
-    filtered = np.full_like(detection, False)
-    for i in nb.prange(M):
-        intervals = _giveIntervals(detection[i])
-        n = len(intervals)
-        if (min_separation > 0) and (n > 0):
-            buffer = [(intervals[0, 0], intervals[0, 1])]
-            for j in range(1, n):
-                intv_new = intervals[j]
-                intv_old = buffer[-1]
-                if ((intv_new[0] - intv_old[1] - 1) <= min_separation) and \
-                   (((intv_new[1] - intv_new[0] + 1) < min_width) or
-                   ((intv_old[1] - intv_old[0] + 1) < min_width)):
-
-                    buffer[-1] = (intv_old[0], intv_new[1])
-                else:
-                    buffer.append((intv_new[0], intv_new[1]))
-            buffer = np.array(buffer) if len(buffer) > 0 else np.zeros((0, 2), dtype=np.int64)
-        else:
-            buffer = intervals
-        for j1, j2 in buffer:
-            filtered[i, j1: j2 + 1] = True
-    return filtered
-
-
 @nb.njit(["f8[:, :](f8[:, :], f8, f8)", "f4[:, :](f4[:, :], f8, f8)",
           "i8[:, :](i8[:, :], i8, i8)", "i4[:, :](i4[:, :], i8, i8)"],
          cache=True, parallel=True)
@@ -144,28 +117,14 @@ def FilterIntervalsFromClusterLabels(detected_cluster_labels):
           "Tuple((b1[:], i8[:, :]))(u2[:])", "Tuple((b1[:], i8[:, :]))(u4[:])"])
 def _projectLabeledSequence(labeled_sequence):
     binary_sequence = np.full_like(labeled_sequence, False, dtype=np.bool_)
-    K = labeled_sequence.max()
-    intervals = np.empty((K, 2), dtype=np.int64)
+    cluster_IDs = np.unique(labeled_sequence)
+    cluster_IDs = cluster_IDs[cluster_IDs != 0]
+    intervals = np.empty((len(cluster_IDs), 2), dtype=np.int64)
 
-    for k in range(1, K + 1):
+    for j, k in enumerate(cluster_IDs):
         ids = np.argwhere(labeled_sequence == k)
-        if len(ids) > 0:
-            i1, i2 = np.min(ids), np.max(ids)
-            binary_sequence[i1: i2 + 1] = True
-            intervals[k - 1] = np.array([i1, i2])
+        i1, i2 = np.min(ids), np.max(ids)
+        binary_sequence[i1: i2 + 1] = True
+        intervals[j, 0] = i1
+        intervals[j, 1] = i2
     return binary_sequence, intervals
-
-
-# @nb.njit(["b1[:, :](i8[:, :])", "b1[:, :](i4[:, :])",
-#           "b1[:, :](u2[:, :])", "b1[:, :](u4[:, :])"], parallel=True)
-# def _fill_gaps_nd(labeled_sequences):
-#     M, N = labeled_sequences.shape
-#     binary_sequences = np.empty((M, N), dtype=np.bool_)
-#     for i in nb.prange(M):
-#         binary_sequences[i] = _projectLabeledSequence(labeled_sequences[i])
-#     return binary_sequences
-#
-#
-# @ReshapeArraysDecorator(dim=2, input_num=1, output_num=1)
-# def FillGaps(labeled_sequences):
-#     return _fill_gaps_nd(labeled_sequences)
