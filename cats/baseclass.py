@@ -56,6 +56,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
     clustering_multitrace: bool = False
     cluster_size_trace: int = Field(1, ge=1)
     cluster_distance_trace: int = Field(1, ge=1)
+    cluster_minSNR: float = None
 
     # General minor params
     freq_bandpass_Hz: Tuple[float, float] = None
@@ -181,6 +182,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.cluster_distance_f_len = max(round(self.cluster_distance_f_Hz / self.stft_df), 1)
         self.cluster_distance_trace_len = self.cluster_distance_trace
 
+        self.cluster_minSNR = self.cluster_minSNR if (self.cluster_minSNR is not None) else self.minSNR
+
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
         self.min_duration_len = max(self.cluster_size_t_len, 1)  # `-1` to include bounds (0, 1, 0)
@@ -250,7 +253,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
             result['spectrogram_SNR_clustered'], result['spectrogram_cluster_ID'] = \
                 Clustering(result['spectrogram_SNR_trimmed'], q=q, s=s,
-                           minSNR=self.minSNR, alpha=alpha, log_freq_cluster=log_freq_cluster)
+                           minSNR=self.cluster_minSNR, alpha=alpha, log_freq_cluster=log_freq_cluster)
 
             if self.cluster_catalogs:
                 result['cluster_catalogs'] = ClusterCatalogs(result['spectrogram_SNR_clustered'],
