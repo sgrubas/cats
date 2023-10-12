@@ -38,7 +38,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
     stft_window_sec: float = 0.5
     stft_overlap: float = Field(0.75, ge=0.0, lt=1.0)
     # main B-E-DATE params
-    minSNR: float = 4.0
+    minSNR: float = 7.0
     stationary_frame_sec: float = None
     bedate_freq_grouping_Hz: float = None
     bedate_log_freq_grouping: float = None
@@ -47,7 +47,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
     cluster_size_f_Hz: float = 15.0
     cluster_distance_t_sec: float = None
     cluster_distance_f_Hz: float = None
-    cluster_minSNR: float = None
+    cluster_minSNR: float = 0.0
     cluster_fullness: float = Field(0, ge=0.0, le=1.0)
 
     # Minor clustering params
@@ -183,7 +183,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.cluster_distance_t_len = max(round(self.cluster_distance_t_sec / self.stft_hop_sec), 1)
         self.cluster_distance_f_len = max(round(self.cluster_distance_f_Hz / self.stft_df), 1)
         self.cluster_distance_trace_len = self.cluster_distance_trace
-        self.cluster_minSNR = self.cluster_minSNR if (self.cluster_minSNR is not None) else self.minSNR
+        # self.cluster_minSNR = self.cluster_minSNR if (self.cluster_minSNR is not None) else self.minSNR
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 

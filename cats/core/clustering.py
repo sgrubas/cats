@@ -302,7 +302,8 @@ def clusters_stats_2D(SNR, CID, df, dt, fmax):
              'Frequency_start_Hz', 'Frequency_end_Hz', 'Frequency_center_of_mass_Hz',
              'Average_SNR', 'Peak_SNR', 'Area']
     df_stats = pd.DataFrame(columns=pd.Index(names, name='Statistics'),
-                            index=pd.Index(cids, name='Cluster_ID'))
+                            index=pd.Index(cids, name='Cluster_ID'),
+                            dtype=float)
     for i, stat in zip(cids, cluster_stats):
         df_stats.loc[i] = stat
     return df_stats
