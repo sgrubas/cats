@@ -365,6 +365,7 @@ class CATSResult(BaseModel):
     threshold: float = None
     history: Any = None
     main_params: dict = None
+    header_info: dict = None
 
     @staticmethod
     def base_time_func(npts, dt_sec, t0, time_interval_sec):
@@ -523,7 +524,8 @@ class CATSResult(BaseModel):
 
         return mdict
 
-    def save(self, filepath, compress=False):
+    def save(self, filepath, compress=False, header_info=None):
+        self.header_info = header_info
         mdict = self.filter_convert_attributes_to_dict()
         savemat(filepath, mdict, do_compression=compress)
         del mdict

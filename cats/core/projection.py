@@ -108,23 +108,22 @@ def FilterIntervalsFromClusterLabels(detected_cluster_labels):
     filtered_intervals = np.empty(detected_cluster_labels.shape[:-1], dtype=object)
     filtered_detection = np.full_like(detected_cluster_labels, False, dtype=bool)
     for ind, _ in np.ndenumerate(filtered_intervals):
-        filtered_detection[ind], filtered_intervals[ind] = _projectLabeledSequence(detected_cluster_labels[ind])
+        filtered_detection[ind] = _projectLabeledSequence(detected_cluster_labels[ind])
+        filtered_intervals[ind] = _giveIntervals(filtered_detection[ind])
 
     return filtered_detection, filtered_intervals
 
 
-@nb.njit(["Tuple((b1[:], i8[:, :]))(i8[:])", "Tuple((b1[:], i8[:, :]))(i4[:])",
-          "Tuple((b1[:], i8[:, :]))(u2[:])", "Tuple((b1[:], i8[:, :]))(u4[:])"])
+@nb.njit(["b1[:](i8[:])", "b1[:](i4[:])",
+          "b1[:](u2[:])", "b1[:](u4[:])"])
 def _projectLabeledSequence(labeled_sequence):
     binary_sequence = np.full_like(labeled_sequence, False, dtype=np.bool_)
     cluster_IDs = np.unique(labeled_sequence)
     cluster_IDs = cluster_IDs[cluster_IDs != 0]
-    intervals = np.empty((len(cluster_IDs), 2), dtype=np.int64)
 
     for j, k in enumerate(cluster_IDs):
         ids = np.argwhere(labeled_sequence == k)
         i1, i2 = np.min(ids), np.max(ids)
         binary_sequence[i1: i2 + 1] = True
-        intervals[j, 0] = i1
-        intervals[j, 1] = i2
-    return binary_sequence, intervals
+    return binary_sequence
+
