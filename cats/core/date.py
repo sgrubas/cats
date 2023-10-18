@@ -187,6 +187,10 @@ def _Lambda(d):
     return np.sqrt(2) * special.gamma((d + 1) / 2) / special.gamma(d / 2)
 
 
+def lambda_func(d):
+    return _Lambda(d)
+
+
 def _xi_loss(xi, d, rho):
     return (special.hyp0f1(d / 2, rho**2 * xi**2 / 4) - np.exp(rho**2 / 2))**2
 
@@ -196,6 +200,10 @@ def _xi(d, rho):
         return np.arccosh(np.exp(rho**2 / 2)) / rho
     else:
         return abs(optimize.minimize_scalar(_xi_loss, args=(d, rho)).x)
+
+
+def xi_func(d, rho):
+    return _xi(d, rho)
 
 
 def _Xi(d, rho, d_unique=None):
