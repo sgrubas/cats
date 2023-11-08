@@ -38,7 +38,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
     stft_window_sec: float = 0.5
     stft_overlap: float = Field(0.75, ge=0.0, lt=1.0)
     # main B-E-DATE params
-    minSNR: float = 7.0
+    minSNR: float = 5.5
     stationary_frame_sec: float = None
     bedate_freq_grouping_Hz: float = None
     bedate_log_freq_grouping: float = None

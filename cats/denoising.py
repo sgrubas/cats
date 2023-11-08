@@ -242,7 +242,7 @@ class CATSDenoisingResult(CATSResult):
         ind, i_time, i_stft = inds_slices
         trace_slice = ind + (i_time,)
         fig4 = hv.Curve((self.time(time_interval_sec), self.signal_denoised[trace_slice]), kdims=[t_dim], vdims=a_dim,
-                        label='4. Denoised data: $\tilde{s}(t)$').opts(linewidth=0.5)
+                        label='4. Denoised data: $\\tilde{s}(t)$').opts(linewidth=0.5)
 
         return (fig + fig4).opts(*opts).cols(1)
 
