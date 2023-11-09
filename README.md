@@ -1,11 +1,41 @@
 # Cluster Analysis of Trimmed Spectrograms (CATS)
-Framework for detection and denoising of sparse signals in the time-frequency domain. Useful for detection and 
-wavelet estimation of earthquakes and (micro)-seismic events.
+Framework for detection and denoising of sparse signals in the time-frequency domain. 
+Particularly, very useful in the detection and denoising of earthquakes.
 
-The package was tested on Python 3.9
+# Installation
+There are two ways to install the package:
+1. `pip install git+https://github.com/sgrubas/cats.git`
 
-Usage:
-1. Clone repository: `git clone https://github.com/sgrubas/cats.git`
-2. Open the `cats` directory with `setup.py` file
-3. Install: `python setup.py install` or `python setup.py develop` (for the flexible development mode)
-4. [See a tutorial on detection](https://github.com/sgrubas/cats/blob/main/tutorials/DetectionTutorial.ipynb)
+2.   1. Clone repository: `git clone https://github.com/sgrubas/cats.git`
+     2. Open the `cats` directory with `setup.py` file
+     3. Install: `python setup.py install` or `python setup.py develop` (for the flexible development mode)
+
+## Dependencies
+The package was tested on Python 3.9. See other dependencies in [requirements.txt](https://github.com/sgrubas/cats/blob/main/requirements.txt).
+
+# Tutorials
+- [See our tutorial on usage for the detection of seismic events](https://github.com/sgrubas/cats/blob/main/tutorials/DetectionTutorial.ipynb)
+
+# CATS workflow demo 
+<img src="https://github.com/sgrubas/NES/blob/main/NES/data/NES_OP_Sinus_0.06.png" alt="0.06%" width="400"/>
+
+# Citation
+If you find CATS useful for your research, please cite our paper:
+```
+@article{grubas2023cats,
+title = {Seismic event detection via cluster analysis of trimmed spectrograms},
+journal = {TBC},
+volume = {TBC},
+pages = {TBC},
+year = {2024},
+issn = {TBC},
+doi = {TBC},
+url = {TBC},
+author = {Serafim Grubas and Mirko van der Baan},
+keywords = {TBC}
+}
+```
+
+# Authors
+- Serafim Grubas (serafimgrubas@gmail.com, grubas@ualberta.ca)
+- Mirko van der Baan
