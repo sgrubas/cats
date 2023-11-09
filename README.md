@@ -1,6 +1,6 @@
 # Cluster Analysis of Trimmed Spectrograms (CATS)
 Framework for detection and denoising of sparse signals in the time-frequency domain. 
-Particularly, very useful in the detection and denoising of earthquakes.
+Particularly, very useful in the detection and denoising of earthquakes. Soon, here will be a link to our paper/preprint.
 
 # Installation
 There are two ways to install the package:
