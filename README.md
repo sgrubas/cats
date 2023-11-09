@@ -17,7 +17,7 @@ The package was tested on Python 3.9. See other dependencies in [requirements.tx
 - [See our tutorial on usage for the detection of seismic events](https://github.com/sgrubas/cats/blob/main/tutorials/DetectionTutorial.ipynb)
 
 # CATS workflow demo 
-<img src="https://github.com/sgrubas/cats/blob/main/tutorials/CATS_detection_demo.png" width="400"/>
+<img src="https://github.com/sgrubas/cats/blob/main/tutorials/CATS_detection_demo.png" width="600"/>
 
 # Citation
 If you find CATS useful for your research, please cite our paper:
