@@ -7,6 +7,7 @@ from .core import utils
 from .core.plottingutils import plot_traces
 from .metrics import EvaluateDetection, BinaryCrossentropy
 from .detection import CATSDetector, CATSDetectionResult
+from .denoising import CATSDenoiser, CATSDenoisingResult
 from .data import import_sample_data
 from . import misc
 from . import io

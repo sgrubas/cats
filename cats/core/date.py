@@ -16,44 +16,44 @@ def _Nmin(N, Q):
     return Nmin
 
 
-@nb.njit(["f8(f8[:], f8, f8, b1)",
-          "f4(f4[:], f8, f8, b1)"], cache=True)
-def _DATE(Y, xi_lamb, Q, original_mode):
+@nb.njit(["f8(f8[:], f8, f8, f8, b1)",
+          "f4(f4[:], f8, f8, f8, b1)"], cache=True)
+def _DATE(Y, xi, lamb, Q, original_mode):
     N = len(Y)
     Nmin = _Nmin(N, Q)
 
     Y_sort = np.sort(Y)
-
     M = M0 = sum(Y_sort[:Nmin - 1])
-    eta = eta0 = (M0 + Y_sort[Nmin - 1]) / Nmin * xi_lamb
+    std = std0 = (M0 + Y_sort[Nmin - 1]) / Nmin / lamb
     found = False
     for ni in range(Nmin - 1, N - 1):
         M += Y_sort[ni]
         M_s = M / (ni + 1)
-        eta = M_s * xi_lamb
-        found = (Y_sort[ni] <= eta < Y_sort[ni + 1])
+        std = M_s / lamb  # threshold height (std * xi)
+        found = (Y_sort[ni] <= std * xi < Y_sort[ni + 1])
         if found:
             break
     if original_mode:
-        eta = eta if found else eta0  # if not found in loop, then minimum
-    return eta
+        std = std if found else std0  # if not found in the loop, then minimum
+    return std
 
 
-@nb.njit(["f8[:, :, :](f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)",
-          "f4[:, :, :](f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)"], parallel=True, cache=True)
-def _BEDATE(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode):
+@nb.njit(["f8[:, :, :](f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], f8, b1)",
+          "f4[:, :, :](f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], f8, b1)"], parallel=True, cache=True)
+def _BEDATE(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
     K = PSD.shape[0]
     m, n = len(freq_groups), len(time_frames)
     Sgm = np.zeros((K, m, n), dtype=PSD.dtype)
     for i in nb.prange(m):  # iter over frequencies
         i1, i2 = freq_groups[i]
-        xi_lamb_i = xi_lamb[i]
+        xi_i = xi[i]
+        lamb_i = lamb[i]
         for k in nb.prange(K):  # iter over spectrograms
             psdl = PSD[k]
             for j in nb.prange(n):  # iter over time frames
                 j1, j2 = time_frames[j]
                 psd = psdl[i1: i2 + 1, j1: j2 + 1].ravel()
-                Sgm[k, i, j] = _DATE(psd, xi_lamb_i, Q, original_mode) / xi_lamb_i
+                Sgm[k, i, j] = _DATE(psd, xi_i, lamb_i, Q, original_mode)
     return Sgm
 
 
@@ -102,10 +102,12 @@ def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
         freq_dimensions[0] = 1
     if zero_Nyq_freqs[1]:
         freq_dimensions[-1] = 1
-    xi_lamb = _Xi_Lambda(freq_dimensions, rho, d_unique=[1, 2])
+
+    Lambda = _Lambda(freq_dimensions)
+    Xi = _Xi(freq_dimensions, rho, d_unique=[1, 2])
 
     # The B-E-DATE
-    Sgm = _BEDATE_API(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode)
+    Sgm = _BEDATE_API(PSD, time_frames, freq_groups, Xi, Lambda, Q, original_mode)
 
     return Sgm
 
@@ -113,27 +115,27 @@ def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
 ########################################################################################
 
 
-@nb.njit(["UniTuple(f8[:, :, :], 2)(f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)",
-          "UniTuple(f4[:, :, :], 2)(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8, b1)"],
+@nb.njit(["UniTuple(f8[:, :, :], 2)(f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], f8, b1)",
+          "UniTuple(f4[:, :, :], 2)(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], f8, b1)"],
          parallel=True, cache=True)
-def _BEDATE_trimming(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode):
+def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
     K = PSD.shape[0]
     m, n = len(freq_groups), len(time_frames)
     Sgm = np.zeros((K, m, n), dtype=PSD.dtype)
     SNR = np.zeros_like(PSD)
     for i in nb.prange(m):  # iter over frequencies
         i1, i2 = freq_groups[i]
-        xi_lamb_i = xi_lamb[i]
+        xi_i = xi[i]
+        lamb_i = lamb[i]
         for k in nb.prange(K):  # iter over spectrograms
             psdl = PSD[k]
             for j in nb.prange(n):  # iter over time frames
                 j1, j2 = time_frames[j]
 
                 psd = psdl[i1: i2 + 1, j1: j2 + 1]
-                eta = _DATE(psd.ravel(), xi_lamb_i, Q, original_mode)
-                Sgm[k, i, j] = sgm = eta / xi_lamb_i
+                Sgm[k, i, j] = sgm = _DATE(psd.ravel(), xi_i, lamb_i, Q, original_mode)
 
-                snr = (psd > eta) * psd / (sgm + 1e-8)
+                snr = (psd > sgm * xi_i) * psd / (sgm + 1e-8)
                 SNR[k, i1: i2 + 1, j1: j2 + 1] = snr
     return SNR, Sgm
 
@@ -152,14 +154,16 @@ def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_
         freq_dimensions[0] = 1
     if f_max == PSD.shape[-2] - 1:  # Nyquist's frequency is 1-dim (real number)
         freq_dimensions[-1] = 1
-    xi_lamb = _Xi_Lambda(freq_dimensions, minSNR, d_unique=[1, 2])
+    Lambda = _Lambda(freq_dimensions)
+    Xi = _Xi(freq_dimensions, minSNR, d_unique=[1, 2])
 
     # The B-E-DATE trimming
     bedate_slice = (..., groups_slice, slice(None))
     noise_std = np.zeros(PSD.shape[:-2] + (m, n), dtype=PSD.dtype)
     spectrogram_SNR_trimmed, noise_std[bedate_slice] = _BEDATE_trimming(PSD, time_frames,
                                                                         frequency_groups_index[groups_slice],
-                                                                        xi_lamb[groups_slice],
+                                                                        Xi[groups_slice],
+                                                                        Lambda[groups_slice],
                                                                         Q, original_mode)
 
     # Removing everything out of the bandpass range
@@ -170,7 +174,7 @@ def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_
     spectrogram_SNR_trimmed[..., :time_edge] = 0.0
     spectrogram_SNR_trimmed[..., -time_edge - 1:] = 0.0
 
-    return spectrogram_SNR_trimmed, noise_std, xi_lamb
+    return spectrogram_SNR_trimmed, noise_std, Xi
 
 
 # ------------------------ CONSTANTS ------------------------ #
@@ -183,6 +187,10 @@ def _Lambda(d):
     return np.sqrt(2) * special.gamma((d + 1) / 2) / special.gamma(d / 2)
 
 
+def lambda_func(d):
+    return _Lambda(d)
+
+
 def _xi_loss(xi, d, rho):
     return (special.hyp0f1(d / 2, rho**2 * xi**2 / 4) - np.exp(rho**2 / 2))**2
 
@@ -192,6 +200,10 @@ def _xi(d, rho):
         return np.arccosh(np.exp(rho**2 / 2)) / rho
     else:
         return abs(optimize.minimize_scalar(_xi_loss, args=(d, rho)).x)
+
+
+def xi_func(d, rho):
+    return _xi(d, rho)
 
 
 def _Xi(d, rho, d_unique=None):

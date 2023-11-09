@@ -10,7 +10,7 @@ import holoviews as hv
 import numba as nb
 from tqdm.notebook import tqdm
 
-from cats.core.utils import ReshapeArraysDecorator, give_rectangles, update_object_params, intervals_intersection
+from cats.core.utils import ReshapeArraysDecorator, give_rectangles, intervals_intersection
 from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
 from cats.core.utils import make_default_index_on_axis
@@ -61,11 +61,20 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         self.ch_functions = {'abs': np.abs, 'square': np.square}
         self.ch_func = self.ch_functions[self.characteristic]
 
+    def export_main_params(self):
+        return {kw: getattr(self, kw) for kw in type(self).__annotations__.keys()}
+
+    @classmethod
+    def from_result(cls, STALTAResult):
+        return cls(**STALTAResult.main_params)
+
     def reset_params(self, **params):
         """
             Updates the instance with changed parameters.
         """
-        update_object_params(self, **params)
+        kwargs = self.export_main_params()
+        kwargs.update(params)
+        self.__init__(**kwargs)
 
     def _detect(self, x, verbose=True, full_info=False):
         full_info = self.parse_info_dict(full_info)

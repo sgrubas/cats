@@ -29,5 +29,7 @@ def read_data(path, format=None):
 def _read_by_obspy(path, format=None):
     stream = obspy_read(path, format=format)
     data_dict = {'data': np.array([tr.data for tr in stream]),
-                 'stats': getattr(stream[0], 'stats', None)}
+                 # 'stats': getattr(stream[0], 'stats', None)
+                 'stats': [getattr(tr, 'stats', None) for tr in stream]
+                 }
     return data_dict

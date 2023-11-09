@@ -5,7 +5,7 @@ hv.extension('matplotlib')
 
 
 def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, trace_loc=None,
-                time_interval_sec=None, gain=1, clip=False, each_trace=1, **kwargs):
+                time_interval_sec=None, gain=1, amplitude_scale=None, clip=False, each_trace=1, **kwargs):
 
     trace_loc = trace_loc if (trace_loc is not None) else np.arange(data.shape[0]).astype(float)
 
@@ -26,9 +26,10 @@ def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, t
     trace_dim = hv.Dimension("Trace")
     t_dim = hv.Dimension("Time", unit='s')
 
-    dloc = min(np.diff(loc_slice))
+    dloc = np.nanmin(np.diff(loc_slice)) if len(loc_slice) > 1 else 1
     scale = gain * dloc
-    amax = np.median(abs(data_slice).max(axis=-1))
+    amax = amplitude_scale or np.nanmedian(np.nanmax(abs(data_slice), axis=-1))
+    amax = amax or 1.0
     dc = (data_slice / amax * scale)
     if clip:
         level = dloc / 2.1
@@ -79,7 +80,7 @@ def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, t
     curves = hv.Overlay(curves)
 
     #  Summary of all
-    ylims = (np.min(trace_loc) - dloc, np.max(trace_loc) + dloc)
+    ylims = (np.nanmin(trace_loc) - dloc, np.nanmax(trace_loc) + dloc)
     figure = hv.Overlay((traces, rects, onsets, curves))
     figure = figure.opts(ylim=ylims, xlim=time_interval_sec, fig_size=kwargs['fig_size'])
     return figure

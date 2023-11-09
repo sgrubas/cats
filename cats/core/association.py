@@ -15,7 +15,8 @@ import networkx as nx
 from .utils import ReshapeArraysDecorator
 
 
-@nb.njit(["f8(f8[:], f8[:], f8[:], i8)"], cache=True)
+@nb.njit(["f8(f8[:], f8[:], f8[:], i8)",
+          "f8(f4[:], f4[:], f8[:], i8)"], cache=True)
 def thresholded_distance(v1, v2, threshold, order):
     diff = np.abs(v1 - v2)
     if len(threshold) > 1:
@@ -32,7 +33,8 @@ def thresholded_distance(v1, v2, threshold, order):
     return diff
 
 
-@nb.njit(["f8[:](f8[:], f8[:, :], f8[:], i8)"], cache=True)
+@nb.njit(["f8[:](f8[:], f8[:, :], f8[:], i8)",
+          "f8[:](f4[:], f4[:, :], f8[:], i8)"], cache=True)
 def distance_on_vector(val, vector, threshold, order):
     n = len(vector)
     dists = np.empty(n)
@@ -41,7 +43,8 @@ def distance_on_vector(val, vector, threshold, order):
     return dists
 
 
-@nb.njit(["f8[:, :](f8[:, :], f8[:, :], f8[:], i8)"], parallel=True, cache=True)
+@nb.njit(["f8[:, :](f8[:, :], f8[:, :], f8[:], i8)",
+          "f8[:, :](f4[:, :], f4[:, :], f8[:], i8)"], parallel=True, cache=True)
 def distance_matrix(vec1, vec2, threshold, order):
     n1, n2 = len(vec1), len(vec2)
     D = np.empty((n1, n2))

@@ -14,7 +14,7 @@ from cats.core.timefrequency import STFTOperator
 from cats.core.association import PickDetectedPeaks
 from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, give_rectangles
-from cats.core.utils import update_object_params, give_nonzero_limits, complex_abs_square, intervals_intersection
+from cats.core.utils import give_nonzero_limits, complex_abs_square, intervals_intersection
 from cats.core.utils import StatusKeeper, make_default_index_on_axis
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
@@ -77,11 +77,20 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
+    def export_main_params(self):
+        return {kw: getattr(self, kw) for kw in type(self).__annotations__.keys()}
+
+    @classmethod
+    def from_result(cls, PSDResult):
+        return cls(**PSDResult.main_params)
+
     def reset_params(self, **params):
         """
-            Updates the instance with changed parameters. Will delete the noise model
+            Updates the instance with changed parameters.
         """
-        update_object_params(self, **params)
+        kwargs = self.export_main_params()
+        kwargs.update(params)
+        self.__init__(**kwargs)
 
     def set_noise_model(self, noisy_pieces):
         psd_noise_models = np.concatenate([complex_abs_square(self.STFT * xi) for xi in noisy_pieces], axis=-1)
