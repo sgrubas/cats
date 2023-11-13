@@ -20,15 +20,22 @@ CLASSIFIERS     = [
                     "Topic :: Scientific/Engineering",
                     ]
 INSTALL_REQUIRES = [
-                    'numpy',
-                    'numba',
-                    'scipy',
-                    'pydantic',
-                    'ssqueezepy',
+                    "numpy~=1.23.5",
+                    "numba~=0.56.4",
+                    "scipy~=1.10.1",
+                    "holoviews~=1.15.4",
                     'matplotlib',
-                    'holoviews',
-                    'networkx',
+                    "ssqueezepy~=0.6.3",
+                    "pydantic~=1.10.7",
+                    "setuptools~=60.0.0",
+                    "networkx~=3.1",
+                    "psutil~=5.9.5",
+                    "tqdm~=4.65.0",
+                    "obspy~=1.4.0",
+                    "ipywidgets~=8.0.6",
+                    "pandas~=1.5.3",
                     ]
+
 with open("README.md", "r") as f:
     LONG_DESCRIPTION = f.read()
 
