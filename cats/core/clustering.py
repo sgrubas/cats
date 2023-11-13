@@ -263,9 +263,10 @@ def _ClusteringN3D(SNR, q, s, minSNR, alpha, log_freq_cluster):
 
 # ---------------- UTILS ---------------- #
 
-
 @nb.njit(["f8[:](UniTuple(i8, 2), f8, f8, f8, f8[:], i4[:])",
-          "f8[:](UniTuple(i8, 2), f8, f8, f8, f4[:], i4[:])"], cache=True)
+          "f8[:](UniTuple(i8, 2), f8, f8, f8, f4[:], i4[:])",
+          "f8[:](UniTuple(i8, 2), f8, f8, f8, f8[:], i8[:])",
+          "f8[:](UniTuple(i8, 2), f8, f8, f8, f4[:], i8[:])"], cache=True)
 def _cluster_stats(shape, df, dt, fmax, arr, inds):
     freq_inds, time_inds = np.divmod(inds, shape[1])
 

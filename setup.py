@@ -27,7 +27,7 @@ INSTALL_REQUIRES = [
                     'matplotlib',
                     "ssqueezepy~=0.6.3",
                     "pydantic~=1.10.7",
-                    "setuptools~=60.0.0",
+                    "setuptools",
                     "networkx~=3.1",
                     "psutil~=5.9.5",
                     "tqdm~=4.65.0",
