@@ -11,7 +11,6 @@ cats.egg-info/
 /figures
 /tutorials/.ipynb_checkpoints
 /testing
-/tutorials/DenoisingTutorial.ipynb
 
 # Executables
 *.swf
