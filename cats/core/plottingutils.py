@@ -1,13 +1,30 @@
 import numpy as np
 import holoviews as hv
+from typing import Union
 from .utils import format_interval_by_limits, give_index_slice_by_limits, give_rectangles, intervals_intersection
 hv.extension('matplotlib')
 
 
-def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, trace_loc=None,
-                time_interval_sec=None, gain=1, amplitude_scale=None, clip=False, each_trace=1, **kwargs):
+def plot_traces(data: np.ndarray[:, :],
+                time: Union[float, np.ndarray] = None,
+                intervals: np.ndarray[:] = None,
+                picks: np.ndarray[:] = None,
+                associated_picks: np.ndarray[:] = None,
+                trace_loc: Union[float, np.ndarray] = None,
+                time_interval_sec: tuple[float, float] = None,
+                gain: float = 1,
+                amplitude_scale: float = None,
+                clip: bool = False,
+                each_trace: int = 1,
+                **kwargs):
 
-    trace_loc = trace_loc if (trace_loc is not None) else np.arange(data.shape[0]).astype(float)
+    if not isinstance(time, np.ndarray):
+        dt = 1 if time is None else time
+        time = np.arange(data.shape[-1]) * dt
+
+    if not isinstance(trace_loc, np.ndarray):
+        dx = 1 if trace_loc is None else trace_loc
+        trace_loc = np.arange(data.shape[0], dtype=float) * dx
 
     t1, t2 = time_interval_sec = format_interval_by_limits(time_interval_sec, (time.min(), time.max()))
     i_t = give_index_slice_by_limits(time_interval_sec, dt=time[1] - time[0], t0=time[0])
@@ -64,7 +81,6 @@ def plot_traces(data, time, intervals=None, picks=None, associated_picks=None, t
 
         onsets = [hv.Points(onset_picks, kdims=[t_dim, trace_dim]).opts(marker='|', facecolors='red',
                                                                         edgecolors=None, s=600)]
-
     onsets = hv.Overlay(onsets)
 
     #  Associated Picks
