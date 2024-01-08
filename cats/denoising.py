@@ -18,8 +18,8 @@ from tqdm.notebook import tqdm
 
 from .baseclass import CATSBase, CATSResult
 from .core.utils import cast_to_bool_dict, del_vals_by_keys
-from .core.utils import format_index_by_dimensions, give_index_slice_by_limits
-from .core.utils import format_interval_by_limits, StatusKeeper
+from .core.utils import format_index_by_dimensions, give_index_slice_by_limits, give_rectangles
+from .core.utils import format_interval_by_limits, StatusKeeper, intervals_intersection
 from .core.clustering import concatenate_arrays_of_cluster_catalogs
 from .core.plottingutils import plot_traces
 from .io import read_data
@@ -234,21 +234,54 @@ class CATSDenoisingResult(CATSResult):
 
     def plot(self,
              ind: Tuple[int] = None,
-             time_interval_sec: Tuple[float] = None,):
+             time_interval_sec: Tuple[float] = None,
+             intervals: bool = False,
+             picks: bool = False,
+             ):
 
         fig, opts, inds_slices, time_interval_sec = super().plot(ind, time_interval_sec)
+        ref_kw_opts = opts[-1].kwargs
+        t1, t2 = ref_kw_opts['xlim']
+
         t_dim = hv.Dimension('Time', unit='s')
         a_dim = hv.Dimension('Amplitude')
         ind, i_time, i_stft = inds_slices
         trace_slice = ind + (i_time,)
-        fig4 = hv.Curve((self.time(time_interval_sec), self.signal_denoised[trace_slice]), kdims=[t_dim], vdims=a_dim,
-                        label='4. Denoised data: $\\tilde{s}(t)$').opts(linewidth=0.5)
+        fig4 = hv.Curve((self.time(time_interval_sec), self.signal_denoised[trace_slice]),
+                        kdims=[t_dim], vdims=a_dim).opts(linewidth=0.5)
+
+        last_fig = [fig4]
+
+        cluster_catalogs = getattr(self, 'cluster_catalogs', None) if (intervals or picks) else None
+        catalog = cluster_catalogs[ind] if cluster_catalogs is not None else None
+
+        if (catalog is not None) and intervals:
+            detected_intervals = catalog[['Time_start_sec', 'Time_end_sec']].values
+            intervals = intervals_intersection(detected_intervals, (t1, t2))
+            interv_height = np.max(abs(self.signal_denoised[trace_slice])) * 1.1
+            rectangles = give_rectangles([intervals], [0.0], interv_height)
+            intervals_fig = hv.Rectangles(rectangles,
+                                          kdims=[t_dim, a_dim, 't2', 'l2']).opts(color='blue',
+                                                                                 linewidth=0,
+                                                                                 alpha=0.2)
+            last_fig.append(intervals_fig)
+
+        if (catalog is not None) and picks:
+            P = catalog['Time_center_of_mass_sec'].values
+            P = P[(t1 <= P) & (P <= t2)]
+            picks_fig = [hv.VLine(pi, kdims=[t_dim, a_dim]) for pi in P]
+            picks_fig = hv.Overlay(picks_fig).opts(hv.opts.VLine(color='r'))
+            last_fig.append(picks_fig)
+
+        fig4 = hv.Overlay(last_fig, label='4. Denoised data: $\\tilde{s}(t)$').opts(**ref_kw_opts)
 
         return (fig + fig4).opts(*opts).cols(1)
 
     def plot_traces(self,
                     ind: Tuple[int] = None,
                     time_interval_sec: Tuple[float] = None,
+                    intervals: bool = False,
+                    picks: bool = False,
                     show_denoised: bool = True,
                     trace_loc: np.ndarray = None,
                     gain: int = 1,
@@ -262,8 +295,25 @@ class CATSDenoisingResult(CATSResult):
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
         traces = signal[ind + (i_time,)]
 
+        cluster_catalogs = getattr(self, 'cluster_catalogs', None) if (intervals or picks) else None
+        catalog = cluster_catalogs[ind] if cluster_catalogs is not None else None
+
+        if (catalog is not None) and intervals:
+            detected_intervals = np.empty(catalog.shape, dtype=object)
+            for i, cati in np.ndenumerate(catalog):
+                detected_intervals[i] = cati[['Time_start_sec', 'Time_end_sec']].values
+        else:
+            detected_intervals = None
+
+        if (catalog is not None) and picks:
+            picked_onsets = np.empty(catalog.shape, dtype=object)
+            for i, cati in np.ndenumerate(catalog):
+                picked_onsets[i] = cati['Time_center_of_mass_sec'].values
+        else:
+            picked_onsets = None
+
         fig = plot_traces(traces, self.time(time_interval_sec),
-                          intervals=None, picks=None, associated_picks=None,
+                          intervals=detected_intervals, picks=picked_onsets, associated_picks=None,
                           trace_loc=trace_loc, time_interval_sec=time_interval_sec, gain=gain, clip=clip,
                           each_trace=each_trace, amplitude_scale=amplitude_scale, **kwargs)
         return fig
