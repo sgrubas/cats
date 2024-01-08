@@ -40,17 +40,27 @@ class CATSBase(BaseModel, extra=Extra.allow):
     # main B-E-DATE params
     minSNR: float = 5.5
     stationary_frame_sec: float = None
-    bedate_freq_grouping_Hz: float = None
-    bedate_log_freq_grouping: float = None
     # main Clustering params
     cluster_size_t_sec: float = 0.2
     cluster_size_f_Hz: float = 15.0
     cluster_distance_t_sec: float = None
     cluster_distance_f_Hz: float = None
+
+    # Extra STFT params
+    freq_bandpass_Hz: Union[tuple[float, float], Any] = None
+    stft_backend: str = 'ssqueezepy'
+    stft_kwargs: dict = {}
+    stft_nfft: int = -1
+
+    # Extra B-E-DATE params
+    bedate_freq_grouping_Hz: float = None
+    bedate_log_freq_grouping: float = None
+    date_Q: float = 0.95
+    date_detection_mode: bool = True
+
+    # Extra clustering params
     cluster_minSNR: float = 0.0
     cluster_fullness: float = Field(0, ge=0.0, le=1.0)
-
-    # Minor clustering params
     cluster_size_f_logHz: float = None
     cluster_distance_f_logHz: float = None
     cluster_catalogs: bool = True
@@ -58,15 +68,8 @@ class CATSBase(BaseModel, extra=Extra.allow):
     cluster_size_trace: int = Field(1, ge=1)
     cluster_distance_trace: int = Field(1, ge=1)
 
-    # General minor params
-    freq_bandpass_Hz: Union[tuple[float, float], Any] = None
-    # Minor DATE params
-    date_Q: float = 0.95
-    date_detection_mode: bool = True
-    # Minor STFT params
-    stft_backend: str = 'ssqueezepy'
-    stft_kwargs: dict = {}
-    stft_nfft: int = -1
+    # Misc
+    name: str = "CATS"
 
     def __init__(self, **kwargs):
         """

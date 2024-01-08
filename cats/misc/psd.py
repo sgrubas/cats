@@ -45,6 +45,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
     psd_noise_mean: Any = None
     psd_noise_std: Any = None
 
+    name: str = "PSD"
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._set_params()

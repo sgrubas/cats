@@ -43,6 +43,8 @@ class STALTADetector(BaseModel, extra=Extra.allow):
     aggregate_axis_for_likelihood: Union[int, Tuple[int]] = None
     aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
 
+    name: str = "STA/LTA"
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._set_params()
