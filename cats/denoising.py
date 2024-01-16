@@ -84,11 +84,11 @@ class CATSDenoiser(CATSBase):
                                    **from_full_info)
 
     def denoise(self, x: np.ndarray,
-               /,
-               verbose: bool = False,
-               full_info: Union[bool, str, List[str]] = False):
+                /,
+                verbose: bool = False,
+                full_info: Union[bool, str, List[str]] = False):
         """
-            Performs the denoising on the given dataset. If the data processing does not fit the available memory,
+            Performs denoising of a given dataset. If the data processing does not fit the available memory,
             the data are split into chunks.
 
             Arguments:
@@ -343,8 +343,6 @@ class CATSDenoisingResult(CATSResult):
         t0 = self.time_frames[-1, -1] + self.stft_dt_sec
 
         self._concat(other, "time_frames", 0, t0)
-        self._concat(other, "detected_intervals", -2, t0)
-        self._concat(other, "picked_features", -2, t0, (..., 0))
 
         self.cluster_catalogs = concatenate_arrays_of_cluster_catalogs(self.cluster_catalogs,
                                                                        other.cluster_catalogs, t0)
