@@ -12,8 +12,8 @@ from .core.utils import get_interval_division
 from .core.utils import give_index_slice_by_limits
 
 # TODO:
-#  - make sure that this class is needed
-#  - understand if clustering is needed for noise estimation
+#  - is it needed?
+#  - is clustering needed for noise estimation?
 
 
 class CATSNoiseEstimator(CATSBase):
@@ -45,7 +45,7 @@ class CATSNoiseEstimator(CATSBase):
 
         full_info, pre_full_info = self._parse_info_dict(full_info)
 
-        result, history = super()._apply(x, finish_on='clustering', verbose=verbose, full_info=pre_full_info)
+        result, history = ..., ...
 
         stft_time = self.STFT.forward_time_axis(x.shape[-1])
 

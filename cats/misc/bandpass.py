@@ -32,6 +32,8 @@ class BandpassDenoiser(BaseModel, extra=Extra.allow):
         with history(current_process='Bandpass filtering:'):
             result['signal_denoised'] = sosfilt(self.filter_sos, x, axis=-1)
 
+        history.print_total_time()
+
         return BandpassDenoisingResult(dt_sec=self.dt_sec,
                                        npts=x.shape[-1],
                                        history=history,
@@ -43,6 +45,12 @@ class BandpassDenoiser(BaseModel, extra=Extra.allow):
 
     def export_main_params(self):
         return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+
+    def __mul__(self, x):
+        return self._denoise(x, verbose=False)
+
+    def __pow__(self, x):
+        return self._denoise(x, verbose=True)
 
 
 class BandpassDenoisingResult(BaseModel):
