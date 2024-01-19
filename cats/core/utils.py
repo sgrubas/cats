@@ -306,3 +306,8 @@ def make_default_index_on_axis(tuple_ind, axis, default_ind_value):
     tuple_ind = list(tuple_ind)
     tuple_ind[axis] = default_ind_value
     return tuple(tuple_ind)
+
+
+def convert_to_datetime(t_sec, reference_datetime, base='us'):
+    factor = {'Ms': 1e-6, 'ks': 1e-3, 's': 1, 'ms': 1e3, 'us': 1e6, 'ns': 1e9}
+    return np.datetime64(reference_datetime) + (t_sec * factor[base]).astype(f'timedelta64[{base}]')

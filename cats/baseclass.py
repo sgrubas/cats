@@ -69,6 +69,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
     cluster_distance_trace: int = Field(1, ge=1)
 
     # Misc
+    reference_datetime: str = None  # datetime.datetime.isoformat
     name: str = "CATS"
 
     def __init__(self, **kwargs):
@@ -140,6 +141,10 @@ are found, then no outliers will be present in the trimmed spectrogram.
 The fastest CPU version is 'ssqueezepy', which is default.
 
                 stft_kwargs : dict : additional keyword arguments for STFT operator (see `cats.STFTOperator`).
+
+                reference_datetime : str : reference datetime is `datetime.datetime.isoformat`
+
+                name : str : name of the object
         """
         super().__init__(**kwargs)
         self._set_params()
@@ -410,7 +415,7 @@ class CATSResult(BaseModel):
         stft_time = self.stft_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Amplitude spectrogram: $|X(t,f)|$').opts(clim=PSD_clims, clabel='Amplitude')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
@@ -465,6 +470,10 @@ class CATSResult(BaseModel):
         self.stft_npts += other.stft_npts
 
         self.history.merge(other.history)
+
+        if self.main_params['reference_datetime'] is not None:
+            self.main_params['reference_datetime'] = min(self.main_params['reference_datetime'],
+                                                         other.main_params['reference_datetime'])
 
         assert self.minSNR == other.minSNR
         assert self.dt_sec == other.dt_sec
