@@ -385,7 +385,7 @@ class CATSResult(BaseModel):
     def stft_time(self, time_interval_sec=None):
         return CATSResult.base_time_func(self.stft_npts, self.stft_dt_sec, 0, time_interval_sec)
 
-    def plot(self, ind=None, time_interval_sec=None):
+    def plot(self, ind=None, time_interval_sec=None, SNR_spectrograms=True):
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')
         a_dim = hv.Dimension('Amplitude')
@@ -404,19 +404,29 @@ class CATSResult(BaseModel):
         C = self.spectrogram_SNR_clustered[inds_stft]
 
         PSD_clims = give_nonzero_limits(PSD, initials=(1e-1, 1e1))
-        SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
+
+        if not SNR_spectrograms:
+            SNR = PSD * (SNR > 0)
+            C = PSD * (C > 0)
+            label_trimmed = 'spectrogram: $|X(t,f)| \cdot (T(t,f) > 0)$'
+            label_clustered = 'spectrogram: $|X(t,f)| \cdot (\mathcal{L}(t,f) > 0)$'
+            SNR_clims = PSD_clims
+        else:
+            label_trimmed = 'SNR spectrogram: $T(t,f)$'
+            label_clustered = 'SNR spectrogram: $\mathcal{L}(t,f)$'
+            SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
 
         time = self.time(time_interval_sec)
         stft_time = self.stft_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Amplitude spectrogram: $|X(t,f)|$').opts(clim=PSD_clims, clabel='Amplitude')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
-                        label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
+                        label=f'2. Trimmed {label_trimmed}').opts(clim=SNR_clims)
         fig3 = hv.Image((stft_time, self.stft_frequency, C), kdims=[t_dim, f_dim],
-                        label='3. Clustered SNR spectrogram: $\mathcal{L}(t,f)$').opts(clim=SNR_clims)
+                        label=f'3. Clustered {label_clustered}').opts(clim=SNR_clims)
 
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250
