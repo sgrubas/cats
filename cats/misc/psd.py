@@ -321,7 +321,8 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 class PSDDetectionResult(CATSDetectionResult):
     noise_mean: Any = None
 
-    def plot(self, ind=None, time_interval_sec=None):
+    def plot(self, ind=None, time_interval_sec=None,
+             SNR_spectrograms: bool = True):
         if ind is None:
             ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')
@@ -460,7 +461,7 @@ class PSDDenoiser(PSDDetector):
             result['spectrogram_SNR_trimmed'][bandpass_slice] /= self.psd_noise_std[bandpass_slice] + 1e-16
             del_vals_by_keys(result, full_info, ['spectrogram'])
             result['spectrogram_SNR_trimmed'] = \
-                np.where(result['spectrogram_SNR_trimmed'] >= 1.0,
+                np.where(result['spectrogram_SNR_trimmed'] >= self.threshold,
                          self.ch_func(result['spectrogram_SNR_trimmed']), 0.0)
 
             # Removing spiky high-energy edges
@@ -496,6 +497,7 @@ class PSDDenoiser(PSDDetector):
         history.print_total_time()
 
         from_full_info = {kw: result.get(kw, None) for kw in full_info}
+
         kwargs = {**from_full_info,
                   "noise_mean": self.psd_noise_mean,
                   "noise_std": self.psd_noise_std,
