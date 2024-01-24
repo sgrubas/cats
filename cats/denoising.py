@@ -31,10 +31,17 @@ class CATSDenoiser(CATSBase):
     """
         Denoiser of seismic events based on Cluster Analysis of Trimmed Spectrograms
     """
+    background_weight: float = 0.0
 
     def apply_ISTFT(self, result_container, /, N):
-        sparse = result_container['coefficients'] * (result_container['spectrogram_SNR_clustered'] > 0)
-        result_container['signal_denoised'] = (self.STFT / sparse)[..., :N]
+        weights = result_container['spectrogram_SNR_clustered'] > 0
+        if self.background_weight:
+            weights = np.where(weights, 1.0, self.background_weight)
+
+        weighted_coefficients = result_container['coefficients'] * weights
+
+        result_container['signal_denoised'] = (self.STFT / weighted_coefficients)[..., :N]
+        del weights, weighted_coefficients
 
     def _denoise(self, x, /, verbose=False, full_info=False):
         full_info = self.parse_info_dict(full_info)
@@ -235,20 +242,38 @@ class CATSDenoisingResult(CATSResult):
     def plot(self,
              ind: Tuple[int] = None,
              time_interval_sec: Tuple[float] = None,
+             SNR_spectrograms: bool = False,
+             weighted_coefficients: bool = False,
              intervals: bool = False,
              picks: bool = False,
              ):
 
-        fig, opts, inds_slices, time_interval_sec = super().plot(ind, time_interval_sec)
+        fig, opts, inds_slices, time_interval_sec = super().plot(ind, time_interval_sec, SNR_spectrograms)
         ref_kw_opts = opts[-1].kwargs
         t1, t2 = ref_kw_opts['xlim']
 
-        t_dim = hv.Dimension('Time', unit='s')
-        a_dim = hv.Dimension('Amplitude')
+        t_dim, a_dim = fig[0].dimensions()
+
         ind, i_time, i_stft = inds_slices
         trace_slice = ind + (i_time,)
-        fig4 = hv.Curve((self.time(time_interval_sec), self.signal_denoised[trace_slice]),
-                        kdims=[t_dim], vdims=a_dim).opts(linewidth=0.5)
+
+        # Weighted coefficients
+        if weighted_coefficients:
+            psd_fig = fig[1]
+            f_dim = psd_fig.dimensions()[1]
+
+            C = fig[-1].data['z']
+            weights = np.where(C > 0, 1.0, self.main_params['background_weight'])
+            WPSD = fig[1].data['z'] * weights
+            psd_opts = psd_fig.opts.get().options
+            fig31 = hv.Image((psd_fig.data[t_dim.name], psd_fig.data[f_dim.name], WPSD),
+                             kdims=[t_dim, f_dim],
+                             label='3.1. Weighted amplitude spectrogram: $|X(t,f) \cdot W(t,f)|$').opts(**psd_opts)
+            fig = fig + fig31
+
+        # Denoised signal
+        fig4 = hv.Curve((fig[0].data[t_dim.name], self.signal_denoised[trace_slice]),
+                        kdims=[t_dim], vdims=a_dim).opts(linewidth=1)
 
         last_fig = [fig4]
 
