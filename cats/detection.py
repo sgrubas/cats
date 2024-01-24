@@ -283,9 +283,10 @@ class CATSDetectionResult(CATSResult):
 
     def plot(self,
              ind: Tuple[int] = None,
-             time_interval_sec: Tuple[float] = None,):
+             time_interval_sec: Tuple[float] = None,
+             SNR_spectrograms: bool = True):
 
-        fig, opts, inds_slices, time_interval_sec = super().plot(ind, time_interval_sec)
+        fig, opts, inds_slices, time_interval_sec = super().plot(ind, time_interval_sec, SNR_spectrograms)
         t_dim = hv.Dimension('Time', unit='s')
         L_dim = hv.Dimension('Likelihood')
 
