@@ -99,6 +99,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
             window = np.ones(nperseg)
         else:
             window = signal.get_window(wtype, nperseg)
+
         return window
 
     def _set_STFT_kwargs(self):
@@ -126,7 +127,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
             forw_kw['hop_len'] = inv_kw['hop_len'] = self.nperseg - self.noverlap
             forw_kw['modulated'] = inv_kw['modulated'] = kwargs.get('modulated', False)
             inv_kw['win_exp'] = kwargs.get('win_exp', 1)
-            forw_kw['padtype'], forw_kw['derivative'] = self.padtype,   False
+            forw_kw['padtype'], forw_kw['derivative'] = self.padtype, False
             forw_kw['t'], forw_kw['fs'] = None, self.fs
 
         self.forw_kw = forw_kw
@@ -145,9 +146,9 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         padmode = compatible_padmodes.get(self.padtype, self.padtype)
         N = X.shape[-1]
         if self.backend == 'scipy':
-            Y = np.pad(X, [(0, 0), (self.padedge, self.padedge)], mode=padmode)
+            Y = np.pad(X, pad_width=[(0, 0), (self.padedge, self.padedge)], mode=padmode)
             ext_n = ((N - self.nperseg % 2) % self.hop) % self.nperseg
-            return np.pad(Y, [(0, 0), (0, ext_n)], mode='constant')
+            return np.pad(Y, pad_width=[(0, 0), (0, ext_n)], mode='constant')
         else:
             return X
 
@@ -180,8 +181,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         N = self.inverse_time_samples(C.shape[-1])
         if self.backend == 'scipy':
             t, X = signal.istft(C, **self.inv_kw)
-            if N is not None: 
-                X = X[:N]
+            X = X[:N]
         else:
             gpu_status = 'gpu' in self.backend
             os.environ['SSQ_GPU'] = '1' if gpu_status else '0'
