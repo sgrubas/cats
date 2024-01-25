@@ -463,7 +463,7 @@ class CATSDetectionResult(CATSResult):
         folder = Path(folder)
         folder.mkdir(parents=True, exist_ok=True)
 
-        header = dict(delta=self.dt_sec, starttime=self.main_params.get('reference_datetime', None))
+        header = dict(delta=self.dt_sec, starttime=self.main_params.get('reference_datetime', 0))
         header = obspy.core.trace.Stats(header)
         if reference_header is not None:
             header.update(reference_header)
