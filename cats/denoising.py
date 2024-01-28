@@ -15,6 +15,7 @@ import holoviews as hv
 import numpy as np
 from pathlib import Path
 from tqdm.notebook import tqdm
+from scipy import signal
 
 from .baseclass import CATSBase, CATSResult
 from .core.utils import cast_to_bool_dict, del_vals_by_keys
@@ -32,6 +33,12 @@ class CATSDenoiser(CATSBase):
         Denoiser of seismic events based on Cluster Analysis of Trimmed Spectrograms
     """
     background_weight: float = 0.0
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not signal.check_NOLA(self.stft_window, self.stft_window_len, self.stft_overlap_len, tol=1e-10):
+            raise ValueError("For inverse STFT, Nonzero Overlap Add (NOLA) is required, currently"
+                             " not enough STFT overlap is set.")
 
     def apply_ISTFT(self, result_container, /, N):
         weights = result_container['spectrogram_SNR_clustered'] > 0
