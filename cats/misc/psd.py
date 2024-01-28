@@ -351,7 +351,7 @@ class PSDDetectionResult(CATSDetectionResult):
         stft_time = self.stft_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
@@ -661,7 +661,7 @@ class PSDDenoisingResult(CATSDetectionResult):
         stft_time = self.stft_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
