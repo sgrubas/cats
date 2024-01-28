@@ -26,6 +26,17 @@ class BandpassDenoiser(BaseModel, extra=Extra.allow):
         self.filter_sos = butter(self.order, [self.f1_Hz, self.f2_Hz],
                                  btype='bandpass', output='sos', fs=self.fs)
 
+    def export_main_params(self):
+        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+
+    def reset_params(self, **params):
+        """
+            Updates the instance with changed parameters.
+        """
+        kwargs = self.export_main_params()
+        kwargs.update(params)
+        self.__init__(**kwargs)
+
     def _denoise(self, x, verbose=False):
         result = {"signal": x}
         history = StatusKeeper(verbose=verbose)
@@ -42,9 +53,6 @@ class BandpassDenoiser(BaseModel, extra=Extra.allow):
 
     def denoise(self, x, verbose=False):
         return self._denoise(x, verbose=verbose)
-
-    def export_main_params(self):
-        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
 
     def __mul__(self, x):
         return self._denoise(x, verbose=False)
