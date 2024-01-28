@@ -49,7 +49,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
     # Extra STFT params
     freq_bandpass_Hz: Union[tuple[float, float], Any] = None
     stft_backend: str = 'ssqueezepy'
-    stft_kwargs: dict = {}
+    stft_kwargs: dict = None
     stft_nfft: int = -1
 
     # Extra B-E-DATE params
@@ -146,8 +146,9 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
     def _set_params(self):
         # Setting STFT
+        stft_kwargs = {} if self.stft_kwargs is None else self.stft_kwargs
         self.STFT = STFTOperator(window_specs=(self.stft_window_type, self.stft_window_sec), overlap=self.stft_overlap,
-                                 dt_sec=self.dt_sec, nfft=self.stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
+                                 dt_sec=self.dt_sec, nfft=self.stft_nfft, backend=self.stft_backend, **stft_kwargs)
         self.stft_overlap_len = self.STFT.noverlap
         self.stft_overlap_sec = (self.stft_overlap_len - 1) * self.dt_sec
 
