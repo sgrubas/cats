@@ -3,6 +3,7 @@ from typing import Union, Any, Callable
 from cats.metrics import linalg_metric_func, binary_metric_func, find_word_starting_with
 from bayes_opt import BayesianOptimization
 import numpy as np
+import inspect
 
 
 class BayesTuner(BaseModel, extra=Extra.allow):
@@ -42,11 +43,15 @@ class BayesTuner(BaseModel, extra=Extra.allow):
         self.scoring_operator.update_operator(**self.best_params['params'])
         return self.scoring_operator.operator
 
+    def evaluate_best_model(self, x=None, y=None):
+        self.scoring_operator.update_operator(**self.best_params['params'])
+        return self.scoring_operator.evaluate_metric(x=x, y=y)
+
 
 class BaseScoring(BaseModel, extra=Extra.allow):
     operator: Any
-    reference_data: Any
-    noisy_data_generator: Callable
+    x_generator: Union[Callable, Any]
+    y_generator: Union[Callable, Any]
     metric_function: Callable
     time_coefficient: float = 0.0
     time_power: Union[float, int] = 2
@@ -63,24 +68,39 @@ class BaseScoring(BaseModel, extra=Extra.allow):
         kwargs.update(self.fixed_params)
         self.operator.reset_params(**kwargs)
 
+    @staticmethod
+    def parse_data_generator(data_generator):
+        if inspect.isgeneratorfunction(data_generator) or callable(data_generator):
+            return data_generator()
+        else:
+            return data_generator
+
+    def evaluate_metric(self, x=None, y=None):
+        x = self.parse_data_generator(self.x_generator if x is None else x)
+        y = self.parse_data_generator(self.y_generator if y is None else y)
+
+        metrics = []
+        elapsed_time = []
+        for xi, yi in zip(x, y):
+            if self.prepare_operator is not None:
+                self.prepare_operator(self.operator, xi)
+            operator_result = self.operator * xi
+            metrics.append(self.metric_function(yi, operator_result))
+            elapsed_time.append(operator_result.history.history['Total'])
+
+        return {'Metric': metrics, "Elapsed_time_sec": elapsed_time}
+
     def score_function(self, **kwargs):
         self.update_operator(**kwargs)
+        evals = self.evaluate_metric()
+        metrics, elapsed_time = evals['Metric'], evals['Elapsed_time_sec']
+
         score = 0.0
-        n_times = 0
-        for data_i in self.noisy_data_generator():
-            if self.prepare_operator is not None:
-                self.prepare_operator(self.operator, data_i)
+        for mi, ti in zip(metrics, elapsed_time):
+            time_factor = np.exp(- self.time_coefficient * ti**self.time_power) if self.time_coefficient else 1.0
+            score += mi * time_factor
 
-            operator_result = self.operator * data_i
-            score_i = self.metric_function(self.reference_data, operator_result)
-
-            if self.time_coefficient:
-                elapsed = operator_result.history.history['Total']
-                score_i *= np.exp(- self.time_coefficient * elapsed**self.time_power)
-            n_times += 1
-            score += score_i
-
-        return score / n_times
+        return score / len(metrics)
 
 
 class DenoiserScoring(BaseScoring):
