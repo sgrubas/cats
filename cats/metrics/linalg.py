@@ -1,18 +1,21 @@
 import numpy as np
 import re
+from functools import partial
+
+num_pattern = r"-?\d+\.?\d*"
 
 
 def calculate_metric(y_true, y_pred, metric_name, axis=-1):
-    return metric_func(metric_name, axis=axis)(y_true, y_pred)
+    return linalg_metric_func(metric_name, axis=axis)(y_true, y_pred)
 
 
-def metric_func(metric_name, axis=-1):
+def linalg_metric_func(metric_name, axis=-1):
     relative = bool(find_word_starting_with(metric_name, "rel", case_insensitive=True))
     accuracy = bool(find_word_starting_with(metric_name, "acc", case_insensitive=True))
 
     order = find_word_starting_with(metric_name, "inf", case_insensitive=True)
     if len(order) < 1:
-        order = re.findall(r"-?\d+\.?\d*", metric_name)
+        order = re.findall(num_pattern, metric_name)
     if len(order) != 1:
         raise ValueError(f"One type of metric must be specified, but given {order}")
 
@@ -20,8 +23,7 @@ def metric_func(metric_name, axis=-1):
 
     err_f = accuracy_exp_linalg_norm if accuracy else error_linalg_norm
 
-    def _err_func(y_true, y_pred):
-        return err_f(y_true, y_pred, relative=relative, metric_ord=order, axis=axis)
+    _err_func = partial(err_f, relative=relative, metric_ord=order, axis=axis)
 
     return _err_func
 
@@ -45,6 +47,6 @@ def find_word_starting_with(text, startwith, case_insensitive=True):
     else:
         letters = startwith
     letters = r''.join(map(lambda x: r"[{0}]".format(x), letters))
-    pattern = r"-?\b{0}\w*\b".format(letters)
+    pattern = r"-?\b{0}\S*\b".format(letters)
 
     return re.findall(pattern, text)

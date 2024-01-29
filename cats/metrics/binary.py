@@ -11,30 +11,95 @@
 import numpy as np
 import numba as nb
 from cats.core.utils import ReshapeArraysDecorator
+from cats.core.association import MatchSequences
+from .linalg import find_word_starting_with
+import re
+from functools import partial
 
 
 _EPS = 1e-9
+num_pattern = r"-?\d+\.?\d*"
 
 
-@nb.njit("f8[:](i8[:], i8[:])")
-def _BinaryCrossentropy(y_true, y_pred):
+@nb.njit("f8(i8[:], i8[:])")
+def _binary_crossentropy(y_true, y_pred):
     bce = y_true * np.log(y_pred + _EPS)
     bce += (1 - y_true) * np.log(1 - y_pred + _EPS)
-    return -bce
-
-
-@nb.njit("f8[:, :](i8[:, :], i8[:, :])", parallel=True)
-def _BinaryCrossentropyN(y_true, y_pred):
-    M = y_true.shape[0]
-    bce = np.empty(y_true.shape)
-    for i in nb.prange(M):
-        bce[i] = _BinaryCrossentropy(y_true[i], y_pred[i])
-    return bce
+    return -bce.mean()
 
 
 @ReshapeArraysDecorator(dim=2, input_num=2)
-def BinaryCrossentropy(y_true, y_pred, /):
-    return _BinaryCrossentropyN(y_true.astype(np.int64), y_pred.astype(np.int64))
+def binary_crossentropy(y_true, y_pred, /):
+    return _binary_crossentropy(y_true.astype(np.int64), y_pred.astype(np.int64))
+
+
+@nb.njit("f8(i8[:], i8[:], f8)")
+def _f_beta_raw(y_true, y_pred, beta):
+    true_ids = (y_true == 1)
+    det = y_pred[true_ids]
+    TP = det.sum()
+    FN = len(det) - TP
+    FP = y_pred[~true_ids].sum()
+
+    Precision = TP / (TP + FP + _EPS)
+    Recall = TP / (TP + FN + _EPS)
+
+    f = (1 + beta**2) * Precision * Recall
+    denom = (Precision * beta**2 + Recall) + _EPS
+
+    return f / denom
+
+
+@ReshapeArraysDecorator(dim=2, input_num=2)
+def f_beta_raw(y_true, y_pred, beta, /):
+    return _f_beta_raw(y_true.astype(np.int64), y_pred.astype(np.int64), beta)
+
+
+def f_beta(recall, precision, beta):
+    f = (1 + beta**2) * precision * recall
+    denom = (precision * beta**2 + recall) + _EPS
+    return f / denom
+
+
+def evaluate_detection_picks(picks_true, picks_pred, max_time_dist=2.5, beta=0.5):
+    shape = picks_pred.shape
+    TP, FP, FN = 0, 0, 0
+    for ind in np.ndindex(*shape):
+        onsets = picks_pred[ind]
+        ref_onsets = picks_true[ind]
+        matched = MatchSequences(ref_onsets, onsets, max_dist=max_time_dist, verbose=False)
+        detection_status = np.isnan(matched.T)
+        tp = (~detection_status).prod(axis=-1).sum()
+        fp, fn = detection_status.sum(axis=0)
+        TP += tp
+        FP += fp
+        FN += fn
+
+    Precision = TP / (TP + FP + _EPS)
+    Recall = TP / (TP + FN + _EPS)
+
+    return f_beta(Recall, Precision, beta)
+
+
+def binary_metric_func(metric_name):
+    picks = find_word_starting_with(metric_name, "pick", case_insensitive=True)
+    f_score = find_word_starting_with(metric_name, "f", case_insensitive=True)
+    crossentropy = bool(find_word_starting_with(metric_name, "crossentr", case_insensitive=True))
+    crossentropy = crossentropy or bool(find_word_starting_with(metric_name, "entropy", case_insensitive=True))
+
+    if f_score:
+        beta = float(re.findall(num_pattern, f_score[0])[0])
+        if picks:
+            picks_proximity_sec = float(re.findall(num_pattern, picks[0])[0])
+            err_func = partial(evaluate_detection_picks, max_time_dist=picks_proximity_sec, beta=beta)
+        else:
+            err_func = partial(f_beta_raw, beta=beta)
+    elif crossentropy:
+        err_func = binary_crossentropy
+    else:
+        raise ValueError(f"Unknown metric given {metric_name}, only 'F', 'crossentropy', or 'picks F'")
+
+    return err_func
 
 
 """ Classification labels """

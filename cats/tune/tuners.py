@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Extra
 from typing import Union, Any, Callable
-from cats.metrics import metric_func
+from cats.metrics import linalg_metric_func, binary_metric_func, find_word_starting_with
 from bayes_opt import BayesianOptimization
 import numpy as np
 
@@ -91,7 +91,7 @@ class DenoiserScoring(BaseScoring):
         self.set_metric_function()
 
     def set_metric_function(self):
-        func = metric_func(self.metric_function, axis=-1)
+        func = linalg_metric_func(self.metric_function, axis=-1)
 
         def _metric_func(y_true, denoising_result):
             return func(y_true, denoising_result.signal_denoised)
@@ -99,5 +99,23 @@ class DenoiserScoring(BaseScoring):
         self.metric_function = _metric_func
 
 
-class DetectorScoring(BaseScoring):
-    pass
+class DetectorScoring(DenoiserScoring):
+    metric_function: Union[str, Callable] = "picks2.5 f0.5"
+
+    def set_metric_function(self):
+        picks = find_word_starting_with(self.metric_function, "pick", case_insensitive=True)
+        func = binary_metric_func(self.metric_function)
+
+        def _metric_func(y_true, detector_result):
+            if picks:
+                features = detector_result.picked_features
+                y_pred = np.empty(features.shape, dtype=object)
+                for ind in np.ndindex(*features.shape):
+                    y_pred[ind] = features[ind][:, 0]
+            else:
+                raise NotImplementedError("This metric has not been implemented yet")
+                # y_pred = ProjectIntervals(detector_result.detected_intervals)
+
+            return func(y_true, y_pred)
+
+        self.metric_function = _metric_func
