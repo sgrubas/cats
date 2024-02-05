@@ -17,7 +17,7 @@ from .core.clustering import Clustering, ClusterCatalogs, concatenate_arrays_of_
 from .core.date import BEDATE_trimming, group_frequency, bandpass_frequency_groups
 from .core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
 from .core.utils import get_interval_division, format_index_by_dimensions, cast_to_bool_dict
-from .core.utils import format_interval_by_limits, give_index_slice_by_limits
+from .core.utils import format_interval_by_limits, give_index_slice_by_limits, save_pickle, load_pickle
 from .core.utils import give_nonzero_limits, mat_structure_to_tight_dataframe_dict
 
 
@@ -345,6 +345,13 @@ The fastest CPU version is 'ssqueezepy', which is default.
             n_chunks = int(np.ceil(memory_info["min_required"] / memory_info["available_for_cats"]))
 
         return n_chunks
+
+    def save(self, filename):
+        save_pickle(self, filename)
+
+    @staticmethod
+    def load(filename):
+        return load_pickle(filename)
 
 
 class CATSResult(BaseModel):

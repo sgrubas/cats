@@ -152,6 +152,9 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         return self.detect(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
+        return self.detect(x, verbose=True, full_info='qc')
+
+    def __matmul__(self, x):
         return self.detect(x, verbose=True, full_info=True)
 
     @staticmethod
@@ -221,7 +224,8 @@ class STALTADetectionResult(CATSDetectionResult):
     stalta_dt_sec: float = None
     stalta_npts: int = None
 
-    def plot(self, ind=None, time_interval_sec=(None, None)):
+    def plot(self, ind=None, time_interval_sec=(None, None),
+             SNR_spectrograms=True):
         if ind is None:
             ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')

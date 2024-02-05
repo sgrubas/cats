@@ -4,6 +4,7 @@ from functools import wraps
 from pydantic import BaseModel, Extra
 from typing import Union, Dict, List, Set, Tuple
 from timeit import default_timer
+import pickle
 
 
 #  Generic decorator for formatting inputs & outputs of function when N-dimensional array
@@ -306,3 +307,14 @@ def make_default_index_on_axis(tuple_ind, axis, default_ind_value):
     tuple_ind = list(tuple_ind)
     tuple_ind[axis] = default_ind_value
     return tuple(tuple_ind)
+
+
+def save_pickle(obj, filename):
+    with open(f'{filename}.pickle', 'wb') as handle:
+        pickle.dump(obj, handle)
+
+
+def load_pickle(filename):
+    with open(filename, 'rb') as handle:
+        operator = pickle.load(handle)
+    return operator

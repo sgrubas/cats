@@ -154,6 +154,9 @@ class CATSDetector(CATSBase):
         return self.detect(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
+        return self.detect(x, verbose=True, full_info='qc')
+
+    def __matmul__(self, x):
         return self.detect(x, verbose=True, full_info=True)
 
     @staticmethod

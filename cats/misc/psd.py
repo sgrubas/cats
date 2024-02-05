@@ -15,7 +15,7 @@ from cats.core.association import PickDetectedPeaks
 from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, give_rectangles
 from cats.core.utils import give_nonzero_limits, complex_abs_square, intervals_intersection
-from cats.core.utils import StatusKeeper, make_default_index_on_axis
+from cats.core.utils import StatusKeeper, make_default_index_on_axis, save_pickle, load_pickle
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
 from cats.denoising import CATSDenoiser
@@ -75,7 +75,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         self.min_duration_len = max(round(self.min_duration_sec / self.stft_hop_sec), 1)
         self.min_separation_len = max(round(self.min_separation_sec / self.stft_hop_sec), 1)
 
-        self.ch_functions = {'abs': lambda x: x, 'square': np.square}
+        self.ch_functions = {'abs': np.abs, 'square': np.square}
         self.ch_func = self.ch_functions[self.characteristic]
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
@@ -223,6 +223,9 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         return self.detect(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
+        return self.detect(x, verbose=True, full_info='qc')
+
+    def __matmul__(self, x):
         return self.detect(x, verbose=True, full_info=True)
 
     @staticmethod
@@ -316,6 +319,13 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                 self.set_noise_model_by_intervals(x, noise_model_intervals_sec)
             self.detect_to_file(x, save_path, verbose=verbose, full_info=full_info, compress=compress)
             del x
+
+    def save(self, filename):
+        save_pickle(self, filename)
+
+    @staticmethod
+    def load(filename):
+        return load_pickle(filename)
 
 
 class PSDDetectionResult(CATSDetectionResult):
@@ -530,6 +540,9 @@ class PSDDenoiser(PSDDetector):
         return self.denoise(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
+        return self.denoise(x, verbose=True, full_info='qc')
+
+    def __matmul__(self, x):
         return self.denoise(x, verbose=True, full_info=True)
 
     @staticmethod

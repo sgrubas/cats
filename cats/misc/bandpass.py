@@ -3,14 +3,14 @@ from scipy.signal import butter, sosfilt
 from scipy.io import loadmat, savemat
 from pydantic import BaseModel, Field, Extra
 from cats.core.utils import (StatusKeeper, format_index_by_dimensions, format_interval_by_limits,
-                             give_index_slice_by_limits)
+                             give_index_slice_by_limits, save_pickle, load_pickle)
 from typing import Any
 from cats.baseclass import CATSResult
 import holoviews as hv
 
 
 class BandpassDenoiser(BaseModel, extra=Extra.allow):
-    dt_sec: float = 1
+    dt_sec: float = Field(1.0, ge=0.0)
     f1_Hz: float = Field(1.0, ge=0.0)
     f2_Hz: float = Field(25.0, ge=0.0)
     order: int = 5
@@ -60,6 +60,15 @@ class BandpassDenoiser(BaseModel, extra=Extra.allow):
     def __pow__(self, x):
         return self._denoise(x, verbose=True)
 
+    def __matmul__(self, x):
+        return self.__pow__(x)
+
+    def save(self, filename):
+        save_pickle(self, filename)
+
+    @staticmethod
+    def load(filename):
+        return load_pickle(filename)
 
 class BandpassDenoisingResult(BaseModel):
     dt_sec: float = None

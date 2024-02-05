@@ -134,6 +134,9 @@ class CATSDenoiser(CATSBase):
         return self.denoise(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
+        return self.denoise(x, verbose=True, full_info='qc')
+
+    def __matmul__(self, x):
         return self.denoise(x, verbose=True, full_info=True)
 
     @staticmethod
