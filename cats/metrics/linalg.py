@@ -37,8 +37,7 @@ def error_linalg_norm(y_true, y_pred, relative=True, metric_ord=2, axis=-1):
 
 def accuracy_exp_linalg_norm(y_true, y_pred, relative=True, metric_ord=2, axis=-1):
     err = error_linalg_norm(y_true, y_pred, relative=relative, metric_ord=metric_ord, axis=axis)
-    acc = np.exp(-err)
-    return acc
+    return np.exp(-err)
 
 
 def find_word_starting_with(text, startwith, case_insensitive=True):

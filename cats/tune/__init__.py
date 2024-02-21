@@ -1,1 +1,1 @@
-from .tuners import BaseScoring, DenoiserScoring, DetectorScoring, BayesTuner
+from .tuners import BaseScoring, DenoiserScoring, DetectorScoring
