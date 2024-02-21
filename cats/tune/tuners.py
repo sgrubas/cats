@@ -3,7 +3,6 @@ from typing import Union, Any, Callable
 from cats.metrics import linalg_metric_func, binary_metric_func, find_word_starting_with
 import numpy as np
 import inspect
-# from bayes_opt import BayesianOptimization
 
 
 class BaseScoring(BaseModel, extra=Extra.allow):
