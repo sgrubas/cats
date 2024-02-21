@@ -347,11 +347,14 @@ The fastest CPU version is 'ssqueezepy', which is default.
         return n_chunks
 
     def save(self, filename):
-        save_pickle(self, filename)
+        save_pickle(self.export_main_params(), filename)
 
-    @staticmethod
-    def load(filename):
-        return load_pickle(filename)
+    @classmethod
+    def load(cls, filename):
+        loaded = load_pickle(filename)
+        if isinstance(loaded, cls):
+            loaded = loaded.export_main_params()
+        return cls(**loaded)
 
 
 class CATSResult(BaseModel):
