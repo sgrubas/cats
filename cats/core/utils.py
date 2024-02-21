@@ -316,5 +316,5 @@ def save_pickle(obj, filename):
 
 def load_pickle(filename):
     with open(filename, 'rb') as handle:
-        operator = pickle.load(handle)
-    return operator
+        obj = pickle.load(handle)
+    return obj
