@@ -11,4 +11,3 @@ tqdm==4.65.0
 obspy==1.4.0
 ipywidgets==8.0.6
 pandas==1.5.3
-bayesian-optimization==1.4.3
