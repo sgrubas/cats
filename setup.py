@@ -39,7 +39,7 @@ CLASSIFIERS = [
 #                     "scikit-learn"
 #                     ]
 
-with open("../requirements.txt", mode='r') as f:
+with open("requirements.txt", mode='r') as f:
     INSTALL_REQUIRES = list(map(lambda x: x.replace('\n', ''), f.readlines()))
 
 with open("README.md", "r") as f:
