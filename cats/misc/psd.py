@@ -655,6 +655,7 @@ class PSDDenoisingResult(CATSDetectionResult):
     def plot(self,
              ind=None,
              time_interval_sec=None,
+             SNR_spectrograms: bool = False,
              weighted_coefficients: bool = False,
              intervals=False,
              picks=False):
@@ -680,7 +681,14 @@ class PSDDenoisingResult(CATSDetectionResult):
         SNR = self.spectrogram_SNR_trimmed[inds_Stft]
 
         PSD_clims = give_nonzero_limits(PSD, initials=(1e-1, 1e1))
-        SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
+
+        if not SNR_spectrograms:
+            SNR = PSD * (SNR > 0)
+            label_trimmed = 'power spectrogram: $|X(t,f)|^2 \cdot (T(t,f) > 0)$'
+            SNR_clims = PSD_clims
+        else:
+            label_trimmed = 'SNR spectrogram: $T(t,f)$'
+            SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
 
         time = self.time(time_interval_sec)
         stft_time = self.stft_time(time_interval_sec)
@@ -690,7 +698,7 @@ class PSDDenoisingResult(CATSDetectionResult):
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
-                        label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
+                        label=f'2. Trimmed {label_trimmed}').opts(clim=SNR_clims)
 
         figs = [fig0, fig1, fig2]
 
