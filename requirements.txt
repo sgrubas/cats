@@ -2,7 +2,7 @@ numpy==1.23.5
 numba>=0.56.4
 scipy==1.10.1
 holoviews==1.15.4
-ssqueezepy==0.6.3
+ssqueezepy==0.6.4
 pydantic==1.10.7
 setuptools>=60.0.0
 networkx==3.1

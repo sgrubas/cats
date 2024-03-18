@@ -4,7 +4,7 @@ import numpy as np
 from pathlib import Path
 
 
-def read_data(path, format=None):
+def read_data(path, format=None, **kwargs):
     """
         Reads data with various formats supported by `obspy.read` and `.mat` format.
 
@@ -23,13 +23,12 @@ def read_data(path, format=None):
     if path.name[-4:] == '.mat':
         return read_mat(path)
     else:
-        return _read_by_obspy(path, format=format)
+        return _read_by_obspy(path, format=format, **kwargs)
 
 
-def _read_by_obspy(path, format=None):
-    stream = obspy_read(path, format=format)
+def _read_by_obspy(path, format=None, **kwargs):
+    stream = obspy_read(path, format=format, **kwargs)
     data_dict = {'data': np.array([tr.data for tr in stream]),
-                 # 'stats': getattr(stream[0], 'stats', None)
                  'stats': [getattr(tr, 'stats', None) for tr in stream]
                  }
     return data_dict

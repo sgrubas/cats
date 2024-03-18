@@ -142,18 +142,19 @@ def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
 def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_slice, bandpass_slice,
-                    time_frames, minSNR, time_edge, Q=0.95, original_mode=False):
+                    time_frames, minSNR, time_edge, Q=0.95, original_mode=False, fft_bounds=True):
 
     m, n = len(frequency_groups_index), len(time_frames)
     groups_slice = bandpassed_frequency_groups_slice
 
     # constants for B-E-DATE
     freq_dimensions = np.full(m, 2)
-    f_min, f_max = frequency_groups_index[0, 1], frequency_groups_index[-1, 0]
-    if f_min == 0:  # zero frequency is 1-dim (real number)
-        freq_dimensions[0] = 1
-    if f_max == PSD.shape[-2] - 1:  # Nyquist's frequency is 1-dim (real number)
-        freq_dimensions[-1] = 1
+    if fft_bounds:
+        f_min, f_max = frequency_groups_index[0, 1], frequency_groups_index[-1, 0]
+        if f_min == 0:  # zero frequency is 1-dim (real number)
+            freq_dimensions[0] = 1
+        if f_max == PSD.shape[-2] - 1:  # Nyquist's frequency is 1-dim (real number)
+            freq_dimensions[-1] = 1
     Lambda = _Lambda(freq_dimensions)
     Xi = _Xi(freq_dimensions, minSNR, d_unique=[1, 2])
 
@@ -278,7 +279,9 @@ def group_frequency(frequency, freq_step, log_step=False):
 
 def bandpass_frequency_groups(frequency_groups_index, bandpass_index_slice):
     if isinstance(bandpass_index_slice, slice):
-        f1, f2 = bandpass_index_slice.start, bandpass_index_slice.stop - 1
+        f1 = bandpass_index_slice.start or frequency_groups_index.min()
+        f2 = bandpass_index_slice.stop
+        f2 = f2 - 1 if f2 else frequency_groups_index.max()
     else:
         f1, f2 = bandpass_index_slice
     groups_inds = np.argwhere((f1 <= frequency_groups_index[:, 1]) & (frequency_groups_index[:, 0] <= f2))

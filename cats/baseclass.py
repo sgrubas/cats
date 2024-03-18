@@ -17,7 +17,7 @@ from .core.clustering import Clustering, ClusterCatalogs, concatenate_arrays_of_
 from .core.date import BEDATE_trimming, group_frequency, bandpass_frequency_groups
 from .core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
 from .core.utils import get_interval_division, format_index_by_dimensions, cast_to_bool_dict
-from .core.utils import format_interval_by_limits, give_index_slice_by_limits
+from .core.utils import format_interval_by_limits, give_index_slice_by_limits, save_pickle, load_pickle
 from .core.utils import give_nonzero_limits, mat_structure_to_tight_dataframe_dict
 
 
@@ -49,7 +49,7 @@ class CATSBase(BaseModel, extra=Extra.allow):
     # Extra STFT params
     freq_bandpass_Hz: Union[tuple[float, float], Any] = None
     stft_backend: str = 'ssqueezepy'
-    stft_kwargs: dict = {}
+    stft_kwargs: dict = None
     stft_nfft: int = -1
 
     # Extra B-E-DATE params
@@ -151,8 +151,9 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
     def _set_params(self):
         # Setting STFT
+        stft_kwargs = {} if self.stft_kwargs is None else self.stft_kwargs
         self.STFT = STFTOperator(window_specs=(self.stft_window_type, self.stft_window_sec), overlap=self.stft_overlap,
-                                 dt_sec=self.dt_sec, nfft=self.stft_nfft, backend=self.stft_backend, **self.stft_kwargs)
+                                 dt_sec=self.dt_sec, nfft=self.stft_nfft, backend=self.stft_backend, **stft_kwargs)
         self.stft_overlap_len = self.STFT.noverlap
         self.stft_overlap_sec = (self.stft_overlap_len - 1) * self.dt_sec
 
@@ -350,6 +351,16 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         return n_chunks
 
+    def save(self, filename):
+        save_pickle(self.export_main_params(), filename)
+
+    @classmethod
+    def load(cls, filename):
+        loaded = load_pickle(filename)
+        if isinstance(loaded, cls):
+            loaded = loaded.export_main_params()
+        return cls(**loaded)
+
 
 class CATSResult(BaseModel):
     signal: Any = None
@@ -390,7 +401,7 @@ class CATSResult(BaseModel):
     def stft_time(self, time_interval_sec=None):
         return CATSResult.base_time_func(self.stft_npts, self.stft_dt_sec, 0, time_interval_sec)
 
-    def plot(self, ind=None, time_interval_sec=None):
+    def plot(self, ind=None, time_interval_sec=None, SNR_spectrograms=True):
         t_dim = hv.Dimension('Time', unit='s')
         f_dim = hv.Dimension('Frequency', unit='Hz')
         a_dim = hv.Dimension('Amplitude')
@@ -409,7 +420,17 @@ class CATSResult(BaseModel):
         C = self.spectrogram_SNR_clustered[inds_stft]
 
         PSD_clims = give_nonzero_limits(PSD, initials=(1e-1, 1e1))
-        SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
+
+        if not SNR_spectrograms:
+            SNR = PSD * (SNR > 0)
+            C = PSD * (C > 0)
+            label_trimmed = 'spectrogram: $|X(t,f)| \cdot (T(t,f) > 0)$'
+            label_clustered = 'spectrogram: $|X(t,f)| \cdot (\mathcal{L}(t,f) > 0)$'
+            SNR_clims = PSD_clims
+        else:
+            label_trimmed = 'SNR spectrogram: $T(t,f)$'
+            label_clustered = 'SNR spectrogram: $\mathcal{L}(t,f)$'
+            SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
 
         time = self.time(time_interval_sec)
         stft_time = self.stft_time(time_interval_sec)
@@ -419,9 +440,9 @@ class CATSResult(BaseModel):
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Amplitude spectrogram: $|X(t,f)|$').opts(clim=PSD_clims, clabel='Amplitude')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
-                        label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
+                        label=f'2. Trimmed {label_trimmed}').opts(clim=SNR_clims)
         fig3 = hv.Image((stft_time, self.stft_frequency, C), kdims=[t_dim, f_dim],
-                        label='3. Clustered SNR spectrogram: $\mathcal{L}(t,f)$').opts(clim=SNR_clims)
+                        label=f'3. Clustered {label_clustered}').opts(clim=SNR_clims)
 
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250

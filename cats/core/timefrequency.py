@@ -10,14 +10,12 @@ import numpy as np
 from scipy import signal
 import ssqueezepy as ssq
 import os
-from .utils import ReshapeArraysDecorator, update_object_params
+from .utils import ReshapeArraysDecorator
 from pydantic import BaseModel, Field, Extra
 from typing import Union, Literal
 
 
-############################################################
-#                      STFT transform                      #
-############################################################
+# --------------------- STFT transform --------------------- #
 
 
 class STFTOperator(BaseModel, extra=Extra.allow):
@@ -71,12 +69,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         self.hop = (self.nperseg - self.noverlap)
         self.fs = 1 / self.dt_sec
 
-        self.nfft = self.nperseg if (self.nfft is None) else self.nfft
-        if self.nfft < 0:
-            self.nfft = 2**int(np.ceil(np.log2(self.nperseg)))
-        else:
-            self.nfft = max(self.nfft, self.nperseg)
-        self.nfft = self.nfft + self.nfft % 2
+        self.set_nfft()
 
         self.padedge = self.nperseg // 2
         self.f = np.linspace(0, 0.5 * self.fs, self.nfft // 2 + 1)
@@ -99,7 +92,16 @@ class STFTOperator(BaseModel, extra=Extra.allow):
             window = np.ones(nperseg)
         else:
             window = signal.get_window(wtype, nperseg)
+
         return window
+
+    def set_nfft(self):
+        self.nfft = self.nperseg if (self.nfft is None) else self.nfft  # None means nperseg
+        if self.nfft < 0:
+            self.nfft = 2 ** int(np.ceil(np.log2(self.nperseg)))  # closest biggest power of 2
+        else:
+            self.nfft = max(self.nfft, self.nperseg)  # biggest of two
+        self.nfft = self.nfft + self.nfft % 2  # Always make "even" number
 
     def _set_STFT_kwargs(self):
         kwargs = {"padded": self.scipy_padded, "detrend": self.scipy_detrend,
@@ -126,15 +128,20 @@ class STFTOperator(BaseModel, extra=Extra.allow):
             forw_kw['hop_len'] = inv_kw['hop_len'] = self.nperseg - self.noverlap
             forw_kw['modulated'] = inv_kw['modulated'] = kwargs.get('modulated', False)
             inv_kw['win_exp'] = kwargs.get('win_exp', 1)
-            forw_kw['padtype'], forw_kw['derivative'] = self.padtype,   False
+            forw_kw['padtype'], forw_kw['derivative'] = self.padtype, False
             forw_kw['t'], forw_kw['fs'] = None, self.fs
 
         self.forw_kw = forw_kw
         self.inv_kw = inv_kw
 
+    def export_main_params(self):
+        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+
     def reset_params(self, **params):
-        update_object_params(self, **params)
-        
+        kwargs = self.export_main_params()
+        kwargs.update(params)
+        self.__init__(**kwargs)
+
     def padsignal(self, X):
         """
             Performs padding of `X` to the last axis with `window_length // 2` to the both ends
@@ -143,11 +150,10 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         """
         compatible_padmodes = {"replicate ": "edge", "zero": "constant"}
         padmode = compatible_padmodes.get(self.padtype, self.padtype)
-        N = X.shape[-1]
         if self.backend == 'scipy':
-            Y = np.pad(X, [(0, 0), (self.padedge, self.padedge)], mode=padmode)
-            ext_n = ((N - self.nperseg % 2) % self.hop) % self.nperseg
-            return np.pad(Y, [(0, 0), (0, ext_n)], mode='constant')
+            Y = np.pad(X, pad_width=[(0, 0), (self.padedge, self.padedge)], mode=padmode)
+            ext_n = (-(Y.shape[-1] - self.nperseg) % self.hop) % self.nperseg
+            return np.pad(Y, pad_width=[(0, 0), (0, ext_n)], mode='constant')
         else:
             return X
 
@@ -164,7 +170,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         else:
             gpu_status = 'gpu' in self.backend
             os.environ['SSQ_GPU'] = '1' if gpu_status else '0'
-        
+
             C = ssq.stft(Y, **self.forw_kw)
             if not isinstance(C, np.ndarray):
                 C = C.cpu().numpy()
@@ -180,8 +186,6 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         N = self.inverse_time_samples(C.shape[-1])
         if self.backend == 'scipy':
             t, X = signal.istft(C, **self.inv_kw)
-            if N is not None: 
-                X = X[:N]
         else:
             gpu_status = 'gpu' in self.backend
             os.environ['SSQ_GPU'] = '1' if gpu_status else '0'
@@ -198,8 +202,8 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         """
             Performs Forward STFT
 
-            X : numpy array : shape (..., N), where `N` time samples. 
-                              `X` can have any dimesional structure for any number of signals, 
+            X : numpy array : shape (..., N), where `N` time samples.
+                              `X` can have any dimesional structure for any number of signals,
                               but the last axis `N` must be `time` axis
         """
         return self._forward_backend(X)
@@ -209,7 +213,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         """
             Performs Inverse STFT
 
-            C : numpy array : shape (..., Nf, Nt), where `Nf` frequencies, `Nt` time frames. 
+            C : numpy array : shape (..., Nf, Nt), where `Nf` frequencies, `Nt` time frames.
                               `C` can have any dimensional structure for any number of spectrograms,
                               but the last two axes `Nf` and `Nt` must be `frequency` and `time` axes respectively.
         """
@@ -217,20 +221,23 @@ class STFTOperator(BaseModel, extra=Extra.allow):
 
     def forward_time_axis(self, N):
         if self.backend == 'scipy':
-            N_padded = N - self.nperseg % 2
-            N_padded += ((N - self.nperseg % 2) % self.hop) % self.nperseg
+            N_padded = N + self.padedge * 2
+            N_padded += (-(N_padded - self.nperseg) % self.hop) % self.nperseg
+            N_padded += 1 - self.nperseg / 2
+            time = np.arange(self.nperseg / 2, N_padded, self.hop) * self.dt_sec
+            time -= (self.nperseg / 2) * self.dt_sec
         else:
             N_padded = N - 1
-        Nt = N_padded // self.hop + 1
-        time = np.arange(Nt) * self.dt_sec * self.hop
+            Nt = N_padded // self.hop + 1
+            time = np.arange(Nt) * self.dt_sec * self.hop
         return time
-    
+
     def inverse_time_samples(self, Nt):
         return (Nt - 1) * self.hop + self.nperseg % 2 + self.hop
-    
+
     def __mul__(self, X):
         return self.forward(X)
-    
+
     def __truediv__(self, C):
         return self.inverse(C)
 
@@ -245,7 +252,7 @@ class CWTOperator(BaseModel, extra=Extra.allow):
     wavelet: Union[str, tuple[str, dict]] = ('morlet', {'mu': 5})
     scales: Union[Literal['log', 'log-piecewise', 'linear', 'log:maximal'],
                   tuple[float],
-                  list[float]] = 'log-piecewise'
+                  list[float]] = 'log'
     nv: int = 32  # >= 16
     l1_norm: bool = True
     derivative: bool = False
@@ -299,8 +306,13 @@ class CWTOperator(BaseModel, extra=Extra.allow):
                            "rpadded": self.padtype,
                            "l1_norm": self.l1_norm}
 
+    def export_main_params(self):
+        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+
     def reset_params(self, **params):
-        update_object_params(self, **params)
+        kwargs = self.export_main_params()
+        kwargs.update(params)
+        self.__init__(**kwargs)
 
     @ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=True, output_num=1, first_shape=True)
     def forward(self, X):
@@ -324,8 +336,5 @@ class CWTOperator(BaseModel, extra=Extra.allow):
     def __truediv__(self, C):
         return self.inverse(C)
 
-    def forward_time_axis(self, N):
-        pass
-
-    def inverse_time_axis(self, N):
-        pass
+    def get_scales(self, N):
+        return ssq.utils.process_scales(self.scales, N, self.wavelet, nv=self.nv).squeeze()

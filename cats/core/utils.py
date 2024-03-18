@@ -4,6 +4,7 @@ from functools import wraps
 from pydantic import BaseModel, Extra
 from typing import Union, Dict, List, Set, Tuple
 from timeit import default_timer
+import pickle
 
 
 #  Generic decorator for formatting inputs & outputs of function when N-dimensional array
@@ -308,6 +309,12 @@ def make_default_index_on_axis(tuple_ind, axis, default_ind_value):
     return tuple(tuple_ind)
 
 
-def convert_to_datetime(t_sec, reference_datetime, base='us'):
-    factor = {'Ms': 1e-6, 'ks': 1e-3, 's': 1, 'ms': 1e3, 'us': 1e6, 'ns': 1e9}
-    return np.datetime64(reference_datetime) + (t_sec * factor[base]).astype(f'timedelta64[{base}]')
+def save_pickle(obj, filename):
+    with open(f'{filename}.pickle', 'wb') as handle:
+        pickle.dump(obj, handle)
+
+
+def load_pickle(filename):
+    with open(filename, 'rb') as handle:
+        obj = pickle.load(handle)
+    return obj

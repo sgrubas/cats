@@ -1,40 +1,46 @@
 from setuptools import setup, find_packages
 
-NAME            = "cats"
-VERSION         = "0.1.0"
-DESCRIPTION     = "Cluster Analysis of Trimmed Spectrograms (CATS)"
-URL             = "https://github.com/sgrubas/CATS"
-LICENSE         = "MIT"
-MAINTAINER      = "Serafim Grubas"
-AUTHORS         = "Serafim Grubas, Mirko van der Baan"
-EMAIL           = "serafimgrubas@gmail.com, grubas@ualberta.ca"
-KEYWORDS        = ["Clustering", "Detection", "Denoising", "Noise estimation", 
-                   "Spectrogram", "Time-Frequency", "Sparse", "Earthquake", "Voice"]
-CLASSIFIERS     = [
-                    "Development Status :: Beta",
-                    "Intended Audience :: Geophysicist",
-                    "Natural Language :: English",
-                    f"License :: {LICENSE}",
-                    "Operating System :: OS Independent",
-                    "Programming Language :: Python :: 3.9",
-                    "Topic :: Scientific/Engineering",
-                    ]
-INSTALL_REQUIRES = [
-                    "numpy",
-                    "numba",
-                    "scipy",
-                    "holoviews",
-                    'matplotlib',
-                    "ssqueezepy",
-                    "pydantic~=1.10.7",
-                    "setuptools",
-                    "networkx",
-                    "psutil",
-                    "tqdm",
-                    "obspy",
-                    "ipywidgets",
-                    "pandas",
-                    ]
+NAME = "cats"
+VERSION = "0.1.0"
+DESCRIPTION = "Cluster Analysis of Trimmed Spectrograms (CATS)"
+URL = "https://github.com/sgrubas/CATS"
+LICENSE = "MIT"
+MAINTAINER = "Serafim Grubas"
+AUTHORS = "Serafim Grubas, Mirko van der Baan"
+EMAIL = "serafimgrubas@gmail.com, grubas@ualberta.ca"
+KEYWORDS = ["Clustering", "Detection", "Denoising", "Noise estimation",
+            "Spectrogram", "Time-Frequency", "Sparse", "Earthquake", "Voice"]
+
+CLASSIFIERS = [
+               "Development Status :: Beta",
+               "Intended Audience :: Geophysicist",
+               "Natural Language :: English",
+               f"License :: {LICENSE}",
+               "Operating System :: OS Independent",
+               "Programming Language :: Python :: 3.9",
+               "Topic :: Scientific/Engineering",
+              ]
+
+# INSTALL_REQUIRES = [
+#                     "numpy",
+#                     "numba",
+#                     "scipy",
+#                     "holoviews",
+#                     'matplotlib',
+#                     "ssqueezepy",
+#                     "pydantic~=1.10.7",
+#                     "setuptools",
+#                     "networkx",
+#                     "psutil",
+#                     "tqdm",
+#                     "obspy",
+#                     "ipywidgets",
+#                     "pandas",
+#                     "scikit-learn"
+#                     ]
+
+with open("requirements.txt", mode='r') as f:
+    INSTALL_REQUIRES = list(map(lambda x: x.replace('\n', ''), f.readlines()))
 
 with open("README.md", "r") as f:
     LONG_DESCRIPTION = f.read()

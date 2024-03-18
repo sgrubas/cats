@@ -13,7 +13,7 @@ from tqdm.notebook import tqdm
 from cats.core.utils import ReshapeArraysDecorator, give_rectangles, intervals_intersection
 from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
-from cats.core.utils import make_default_index_on_axis
+from cats.core.utils import make_default_index_on_axis, save_pickle, load_pickle
 from cats.core.projection import FilterDetection
 from cats.core.association import PickDetectedPeaks
 from cats.baseclass import CATSBase
@@ -152,6 +152,9 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         return self.detect(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
+        return self.detect(x, verbose=True, full_info='qc')
+
+    def __matmul__(self, x):
         return self.detect(x, verbose=True, full_info=True)
 
     @staticmethod
@@ -216,12 +219,22 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         CATSDetector.basefunc_detect_on_files(self, data_folder, data_format, result_folder, verbose, full_info,
                                               compress)
 
+    def save(self, filename):
+        save_pickle(self.export_main_params(), filename)
+
+    @classmethod
+    def load(cls, filename):
+        loaded = load_pickle(filename)
+        if isinstance(loaded, cls):
+            loaded = loaded.export_main_params()
+        return cls(**loaded)
 
 class STALTADetectionResult(CATSDetectionResult):
     stalta_dt_sec: float = None
     stalta_npts: int = None
 
-    def plot(self, ind=None, time_interval_sec=(None, None)):
+    def plot(self, ind=None, time_interval_sec=(None, None),
+             SNR_spectrograms=True):
         if ind is None:
             ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')

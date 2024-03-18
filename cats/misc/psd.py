@@ -15,7 +15,7 @@ from cats.core.association import PickDetectedPeaks
 from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, give_rectangles
 from cats.core.utils import give_nonzero_limits, complex_abs_square, intervals_intersection
-from cats.core.utils import StatusKeeper, make_default_index_on_axis
+from cats.core.utils import StatusKeeper, make_default_index_on_axis, save_pickle, load_pickle
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
 from cats.denoising import CATSDenoiser
@@ -75,13 +75,13 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         self.min_duration_len = max(round(self.min_duration_sec / self.stft_hop_sec), 1)
         self.min_separation_len = max(round(self.min_separation_sec / self.stft_hop_sec), 1)
 
-        self.ch_functions = {'abs': lambda x: x, 'square': np.square}
+        self.ch_functions = {'abs': np.abs, 'square': np.square}
         self.ch_func = self.ch_functions[self.characteristic]
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
     def export_main_params(self):
-        return {kw: getattr(self, kw) for kw in type(self).__annotations__.keys()}
+        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
 
     @classmethod
     def from_result(cls, PSDResult):
@@ -223,6 +223,9 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         return self.detect(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
+        return self.detect(x, verbose=True, full_info='qc')
+
+    def __matmul__(self, x):
         return self.detect(x, verbose=True, full_info=True)
 
     @staticmethod
@@ -317,11 +320,22 @@ class PSDDetector(BaseModel, extra=Extra.allow):
             self.detect_to_file(x, save_path, verbose=verbose, full_info=full_info, compress=compress)
             del x
 
+    def save(self, filename):
+        save_pickle(self.export_main_params(), filename)
+
+    @classmethod
+    def load(cls, filename):
+        loaded = load_pickle(filename)
+        if isinstance(loaded, cls):
+            loaded = loaded.export_main_params()
+        return cls(**loaded)
+
 
 class PSDDetectionResult(CATSDetectionResult):
     noise_mean: Any = None
 
-    def plot(self, ind=None, time_interval_sec=None):
+    def plot(self, ind=None, time_interval_sec=None,
+             SNR_spectrograms: bool = True):
         if ind is None:
             ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')
@@ -350,7 +364,7 @@ class PSDDetectionResult(CATSDetectionResult):
         stft_time = self.stft_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
@@ -433,6 +447,8 @@ class PSDDetectionResult(CATSDetectionResult):
 
 
 class PSDDenoiser(PSDDetector):
+    background_weight: float = 0.0
+
     def _denoise(self, x, verbose=True, full_info=False):
         assert self.psd_noise_mean is not None, f"Noise model must be set priorly, use `.set_noise_model(...)`"
 
@@ -460,7 +476,7 @@ class PSDDenoiser(PSDDetector):
             result['spectrogram_SNR_trimmed'][bandpass_slice] /= self.psd_noise_std[bandpass_slice] + 1e-16
             del_vals_by_keys(result, full_info, ['spectrogram'])
             result['spectrogram_SNR_trimmed'] = \
-                np.where(result['spectrogram_SNR_trimmed'] >= 1.0,
+                np.where(result['spectrogram_SNR_trimmed'] >= self.threshold,
                          self.ch_func(result['spectrogram_SNR_trimmed']), 0.0)
 
             # Removing spiky high-energy edges
@@ -488,14 +504,21 @@ class PSDDenoiser(PSDDetector):
         del_vals_by_keys(result, full_info, ['likelihood', 'detection', 'detected_intervals', 'picked_features'])
 
         with history(current_process='Inverse STFT:'):
-            sparse = result['coefficients'] * (result['spectrogram_SNR_trimmed'] > 0.0)
-            result['signal_denoised'] = (self.STFT / sparse)[..., :x.shape[-1]]
+            weights = result['spectrogram_SNR_trimmed'] > 0
+            if self.background_weight:
+                weights = np.where(weights, 1.0, self.background_weight)
+
+            weighted_coefficients = result['coefficients'] * weights
+
+            result['signal_denoised'] = (self.STFT / weighted_coefficients)[..., :x.shape[-1]]
+            del weights, weighted_coefficients
 
         del_vals_by_keys(result, full_info, ['coefficients', 'spectrogram_SNR_trimmed'])
 
         history.print_total_time()
 
         from_full_info = {kw: result.get(kw, None) for kw in full_info}
+
         kwargs = {**from_full_info,
                   "noise_mean": self.psd_noise_mean,
                   "noise_std": self.psd_noise_std,
@@ -528,6 +551,9 @@ class PSDDenoiser(PSDDetector):
         return self.denoise(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
+        return self.denoise(x, verbose=True, full_info='qc')
+
+    def __matmul__(self, x):
         return self.denoise(x, verbose=True, full_info=True)
 
     @staticmethod
@@ -629,6 +655,8 @@ class PSDDenoisingResult(CATSDetectionResult):
     def plot(self,
              ind=None,
              time_interval_sec=None,
+             SNR_spectrograms: bool = False,
+             weighted_coefficients: bool = False,
              intervals=False,
              picks=False):
 
@@ -653,17 +681,40 @@ class PSDDenoisingResult(CATSDetectionResult):
         SNR = self.spectrogram_SNR_trimmed[inds_Stft]
 
         PSD_clims = give_nonzero_limits(PSD, initials=(1e-1, 1e1))
-        SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
+
+        if not SNR_spectrograms:
+            SNR = PSD * (SNR > 0)
+            label_trimmed = 'power spectrogram: $|X(t,f)|^2 \cdot (T(t,f) > 0)$'
+            SNR_clims = PSD_clims
+        else:
+            label_trimmed = 'SNR spectrogram: $T(t,f)$'
+            SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
 
         time = self.time(time_interval_sec)
         stft_time = self.stft_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
-                        label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
+                        label=f'2. Trimmed {label_trimmed}').opts(clim=SNR_clims)
+
+        figs = [fig0, fig1, fig2]
+
+        # Weighted coefficients
+        if weighted_coefficients:
+            psd_fig = fig1
+            f_dim = psd_fig.dimensions()[1]
+
+            C = fig2.data['z']
+            weights = np.where(C > 0, 1.0, self.main_params['background_weight'])
+            WPSD = fig1.data['z'] * weights
+            psd_opts = psd_fig.opts.get().options
+            fig21 = hv.Image((psd_fig.data[t_dim.name], psd_fig.data[f_dim.name], WPSD),
+                             kdims=[t_dim, f_dim],
+                             label='2.1. Weighted amplitude spectrogram: $|X(t,f) \cdot W(t,f)|$').opts(**psd_opts)
+            figs.append(fig21)
 
         if (ax := self.aggregate_axis_for_likelihood) is not None:
             ind = make_default_index_on_axis(ind, ax, 0)
@@ -692,6 +743,8 @@ class PSDDenoisingResult(CATSDetectionResult):
 
         fig3 = hv.Overlay(last_figs, label='4. Denoised data: $\\tilde{s}(t)$')
 
+        figs.append(fig3)
+
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250
         cmap = 'viridis'
@@ -702,7 +755,7 @@ class PSDDenoisingResult(CATSDetectionResult):
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, show_legend=False)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      aspect_weight=0, sublabel_format='')
-        figs = [fig0, fig1, fig2, fig3]
+
         fig = hv.Layout(figs).cols(1).opts(layout_opts, curve_opts, spectr_opts)
         return fig
 
