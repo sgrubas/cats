@@ -252,7 +252,7 @@ class CWTOperator(BaseModel, extra=Extra.allow):
     wavelet: Union[str, tuple[str, dict]] = ('morlet', {'mu': 5})
     scales: Union[Literal['log', 'log-piecewise', 'linear', 'log:maximal'],
                   tuple[float],
-                  list[float]] = 'log-piecewise'
+                  list[float]] = 'log'
     nv: int = 32  # >= 16
     l1_norm: bool = True
     derivative: bool = False
@@ -336,8 +336,5 @@ class CWTOperator(BaseModel, extra=Extra.allow):
     def __truediv__(self, C):
         return self.inverse(C)
 
-    def forward_time_axis(self, N):
-        pass
-
-    def inverse_time_axis(self, N):
-        pass
+    def get_scales(self, N):
+        return ssq.utils.process_scales(self.scales, N, self.wavelet, nv=self.nv).squeeze()
