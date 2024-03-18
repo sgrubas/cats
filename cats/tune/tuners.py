@@ -1,15 +1,19 @@
-from pydantic import BaseModel, Extra
-from typing import Union, Any, Callable
+from pydantic import BaseModel
+from typing import Union, Any, Callable, Dict
 from cats.metrics import linalg_metric_func, binary_metric_func, find_word_starting_with
 import numpy as np
 import inspect
 
 
-class BaseScoring(BaseModel, extra=Extra.allow):
+# TODO:
+#  - memory usage is another metric (memory profiling?)
+
+
+class BaseScoring(BaseModel):
     operator: Any
     x_generator: Union[Callable, Any]
     y_generator: Union[Callable, Any]
-    metric_function: Callable
+    metric_functions: Dict[str, Callable]
     fixed_params: dict = {}
     param_parser: Callable = None
     prepare_operator: Callable = None
@@ -30,49 +34,60 @@ class BaseScoring(BaseModel, extra=Extra.allow):
         else:
             return data_generator
 
-    def evaluate_metric(self, x=None, y=None):
+    def evaluate(self, x=None, y=None):
         x = self.parse_data_generator(self.x_generator if x is None else x)
         y = self.parse_data_generator(self.y_generator if y is None else y)
 
-        metrics = []
-        elapsed_time = []
+        metrics = {name: [] for name in self.metric_functions.keys()}
+        metrics["Elapsed_time_sec"] = []
+
         for xi, yi in zip(x, y):
             if self.prepare_operator is not None:
                 self.prepare_operator(self.operator, xi)
             operator_result = self.operator * xi
-            metrics.append(self.metric_function(yi, operator_result))
-            elapsed_time.append(operator_result.history.history['Total'])
+            for name, func in self.metric_functions.items():
+                metrics[name].append(func(yi, operator_result))
+                metrics["Elapsed_time_sec"].append(operator_result.history.history['Total'])
 
-        return {'Metric': metrics, "Elapsed_time_sec": elapsed_time}
+        return metrics
 
 
 class DenoiserScoring(BaseScoring):
-    metric_function: Union[str, Callable] = "rel l2"
+    metric_functions: Union[str, Callable, Dict[str, Callable]] = "rel l2"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.set_metric_function()
 
     def set_metric_function(self):
-        if not callable(self.metric_function):
-            func = linalg_metric_func(self.metric_function, axis=-1)
-            negative = bool(find_word_starting_with(self.metric_function, "neg", case_insensitive=True))
+        if isinstance(self.metric_functions, str):
+            func = linalg_metric_func(self.metric_functions, axis=-1)
+            negative = bool(find_word_starting_with(self.metric_functions, "neg", case_insensitive=True))
             sign = -1.0 if negative else 1.0
 
             def _metric_func(y_true, denoising_result):
                 return sign * func(y_true, denoising_result.signal_denoised)
 
-            self.metric_function = _metric_func
+            self.metric_functions = {self.metric_functions: _metric_func}
+
+        elif callable(self.metric_functions):
+            self.metric_functions = {"metric": self.metric_functions}
+
+        elif isinstance(self.metric_functions, dict):
+            pass
+
+        else:
+            raise ValueError(f"Unknown input type for {type(self.metric_functions) = }")
 
 
 class DetectorScoring(DenoiserScoring):
-    metric_function: Union[str, Callable] = "picks2.5 f0.5"
+    metric_functions: Union[str, Callable, Dict[str, Callable]] = "picks2.5 f0.5"
 
     def set_metric_function(self):
-        if not callable(self.metric_function):
-            picks = find_word_starting_with(self.metric_function, "pick", case_insensitive=True)
-            func = binary_metric_func(self.metric_function)
-            negative = bool(find_word_starting_with(self.metric_function, "neg", case_insensitive=True))
+        if isinstance(self.metric_functions, str):
+            picks = find_word_starting_with(self.metric_functions, "pick", case_insensitive=True)
+            func = binary_metric_func(self.metric_functions)
+            negative = bool(find_word_starting_with(self.metric_functions, "neg", case_insensitive=True))
             sign = -1.0 if negative else 1.0
 
             def _metric_func(y_true, detector_result):
@@ -82,51 +97,19 @@ class DetectorScoring(DenoiserScoring):
                     for ind in np.ndindex(*features.shape):
                         y_pred[ind] = features[ind][:, 0]
                 else:
-                    raise NotImplementedError("This metric has not been implemented yet")
+                    raise NotImplementedError(f"Metric {self.metric_functions} has not been implemented yet")
                     # y_pred = ProjectIntervals(detector_result.detected_intervals)
 
                 return sign * func(y_true, y_pred)
 
-            self.metric_function = _metric_func
+            self.metric_functions = {self.metric_functions: _metric_func}
 
+        elif callable(self.metric_functions):
+            self.metric_functions = {"metric": self.metric_functions}
 
-# class BayesTuner(BaseModel, extra=Extra.allow):
-#     scoring_operator: Any
-#     pbounds: dict[str, Union[tuple[float, float], tuple[int, int]]]
-#     constraint: Any = None
-#     random_state: Any = None
-#     verbose: Any = 2
-#     bounds_transformer: Any = None
-#     allow_duplicate_points: Any = False
-#
-#     def __init__(self, **kwargs):
-#         super().__init__(**kwargs)
-#         self.optimizer = BayesianOptimization(f=self.scoring_operator.score_function,
-#                                               pbounds=self.pbounds,
-#                                               random_state=self.random_state,
-#                                               constraint=self.constraint,
-#                                               verbose=self.verbose,
-#                                               bounds_transformer=self.bounds_transformer,
-#                                               allow_duplicate_points=self.allow_duplicate_points)
-#
-#     def tune(self, init_points=5, n_iter=25,
-#              acquisition_function=None, acq=None, kappa=None,
-#              kappa_decay=None, kappa_decay_delay=None, xi=None, **gp_params):
-#
-#         self.optimizer.maximize(init_points=init_points, n_iter=n_iter,
-#                                 acquisition_function=acquisition_function,
-#                                 acq=acq, kappa=kappa, kappa_decay=kappa_decay,
-#                                 kappa_decay_delay=kappa_decay_delay, xi=xi, **gp_params)
-#
-#     @property
-#     def best_params(self):
-#         return self.optimizer.max
-#
-#     @property
-#     def best_model(self):
-#         self.scoring_operator.update_operator(**self.best_params['params'])
-#         return self.scoring_operator.operator
-#
-#     def evaluate_best_model(self, x=None, y=None):
-#         self.scoring_operator.update_operator(**self.best_params['params'])
-#         return self.scoring_operator.evaluate_metric(x=x, y=y)
+        elif isinstance(self.metric_functions, dict):
+            pass
+
+        else:
+            raise ValueError(f"Unknown input type for {type(self.metric_functions) = }")
+
