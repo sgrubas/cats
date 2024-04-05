@@ -94,6 +94,8 @@ def binary_metric_func(metric_name):
     f_score = find_word_starting_with(metric_name, "f", case_insensitive=True)
     crossentropy = bool(find_word_starting_with(metric_name, "crossentr", case_insensitive=True))
     crossentropy = crossentropy or bool(find_word_starting_with(metric_name, "entropy", case_insensitive=True))
+    Re_Pr = find_word_starting_with(metric_name, "recall", case_insensitive=True)
+    Re_Pr = Re_Pr or find_word_starting_with(metric_name, "precision", case_insensitive=True)
 
     if f_score:
         beta = float(re.findall(num_pattern, f_score[0])[0])
@@ -102,6 +104,12 @@ def binary_metric_func(metric_name):
             err_func = partial(f_beta_on_picks, max_time_dist=picks_proximity_sec, beta=beta)
         else:
             err_func = partial(f_beta_raw, beta=beta)
+    elif Re_Pr:
+        if picks:
+            picks_proximity_sec = float(re.findall(num_pattern, picks[0])[0])
+            err_func = partial(recall_precision_picks, max_time_dist=picks_proximity_sec)
+        else:
+            raise NotImplementedError("This metric hasn't been implemented yet")
     elif crossentropy:
         err_func = binary_crossentropy
     else:
