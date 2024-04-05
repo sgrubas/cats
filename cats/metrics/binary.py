@@ -61,13 +61,21 @@ def f_beta(recall, precision, beta):
     return f / denom
 
 
-def evaluate_detection_picks(picks_true, picks_pred, max_time_dist=2.5, beta=0.5):
+def f_beta_on_picks(picks_true, picks_pred, max_time_dist=2.5, beta=0.5):
+    Recall, Precision = recall_precision_picks(picks_true=picks_true, picks_pred=picks_pred,
+                                               max_time_dist=max_time_dist)
+    return f_beta(Recall, Precision, beta)
+
+
+def recall_precision_picks(picks_true, picks_pred, max_time_dist=2.5):
     shape = picks_pred.shape
     TP, FP, FN = 0, 0, 0
     for ind in np.ndindex(*shape):
-        onsets = picks_pred[ind]
-        ref_onsets = picks_true[ind]
+        onsets = np.array(picks_pred[ind], ndmin=1)
+        ref_onsets = np.array(picks_true[ind], ndmin=1)
         matched = MatchSequences(ref_onsets, onsets, max_dist=max_time_dist, verbose=False)
+        if len(matched.shape) == 1:
+            matched = matched.reshape(2, 1)
         detection_status = np.isnan(matched.T)
         tp = (~detection_status).prod(axis=-1).sum()
         fp, fn = detection_status.sum(axis=0)
@@ -78,7 +86,7 @@ def evaluate_detection_picks(picks_true, picks_pred, max_time_dist=2.5, beta=0.5
     Precision = TP / (TP + FP + _EPS)
     Recall = TP / (TP + FN + _EPS)
 
-    return f_beta(Recall, Precision, beta)
+    return Recall, Precision
 
 
 def binary_metric_func(metric_name):
@@ -91,7 +99,7 @@ def binary_metric_func(metric_name):
         beta = float(re.findall(num_pattern, f_score[0])[0])
         if picks:
             picks_proximity_sec = float(re.findall(num_pattern, picks[0])[0])
-            err_func = partial(evaluate_detection_picks, max_time_dist=picks_proximity_sec, beta=beta)
+            err_func = partial(f_beta_on_picks, max_time_dist=picks_proximity_sec, beta=beta)
         else:
             err_func = partial(f_beta_raw, beta=beta)
     elif crossentropy:
