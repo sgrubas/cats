@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, sosfiltfilt
 from scipy.io import loadmat, savemat
 from pydantic import BaseModel, Field, Extra
 from cats.core.utils import (StatusKeeper, format_index_by_dimensions, format_interval_by_limits,
@@ -41,7 +41,7 @@ class BandpassDenoiser(BaseModel, extra=Extra.allow):
         result = {"signal": x}
         history = StatusKeeper(verbose=verbose)
         with history(current_process='Bandpass filtering:'):
-            result['signal_denoised'] = sosfilt(self.filter_sos, x, axis=-1)
+            result['signal_denoised'] = sosfiltfilt(self.filter_sos, x, axis=-1)
 
         history.print_total_time()
 

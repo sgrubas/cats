@@ -35,7 +35,7 @@ def plot_traces(data: np.ndarray[:, :],
     loc_slice = trace_loc[ind_slice[0]]
 
     kwargs.setdefault('color', 'black')
-    kwargs.setdefault('lw', 0.5)
+    kwargs.setdefault('linewidth', 0.5)
     kwargs.setdefault('fig_size', 400)
 
     assert (data_slice.ndim == 2)
@@ -57,7 +57,7 @@ def plot_traces(data: np.ndarray[:, :],
 
     #  Data
     traces = hv.Overlay([hv.Curve((time[i_t], xi), kdims=[t_dim], vdims=[trace_dim]) for xi in dc])
-    traces = traces.opts(hv.opts.Curve(color=kwargs['color'], linewidth=kwargs['lw']))
+    traces = traces.opts(hv.opts.Curve(color=kwargs['color'], linewidth=kwargs['linewidth']))
 
     #  Events intervals
     rects = []
@@ -80,8 +80,9 @@ def plot_traces(data: np.ndarray[:, :],
             onset_picks.append(np.stack([p_i, np.full_like(p_i, locy)], axis=-1))
         onset_picks = np.concatenate(onset_picks, axis=0)
 
-        onsets = [hv.Points(onset_picks, kdims=[t_dim, trace_dim]).opts(marker='|', facecolors='red',
-                                                                        edgecolors=None, s=600)]
+        onsets = [hv.Points(onset_picks,
+                            kdims=[t_dim, trace_dim]).opts(marker='|', facecolors='red',
+                                                           edgecolors=None, s=600)]
     onsets = hv.Overlay(onsets)
 
     #  Associated Picks
