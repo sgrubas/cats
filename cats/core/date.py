@@ -203,10 +203,6 @@ def _xi(d, rho):
         return abs(optimize.minimize_scalar(_xi_loss, args=(d, rho)).x)
 
 
-def xi_func(d, rho):
-    return _xi(d, rho)
-
-
 def _Xi(d, rho, d_unique=None):
     if np.isscalar(d):
         return _xi(d, rho)
@@ -218,6 +214,10 @@ def _Xi(d, rho, d_unique=None):
         for ind, di in np.ndenumerate(d):
             xsi[ind] = xsi_kw[di]
         return xsi
+
+
+def xi_func(d, rho, d_unique=None):
+    return _Xi(d, rho, d_unique=d_unique)
 
 
 def _Xi_Lambda(d, rho, d_unique=None):
