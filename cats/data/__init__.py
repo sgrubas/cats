@@ -2,6 +2,11 @@ import numpy as np
 import pkg_resources
 import pickle
 import zipfile
+from typing import Literal
+
+
+# TODO:
+#   - import of pretrained CATS models
 
 
 def import_sample_data():
@@ -13,3 +18,8 @@ def import_sample_data():
             meta = pickle.load(f)
         Data.update(meta)
     return Data
+
+
+def import_pretuned_CATS(mode: Literal["detector", "denoiser"] = "detector",
+                         multitrace: bool = False):
+    pass
