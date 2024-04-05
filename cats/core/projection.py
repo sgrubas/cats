@@ -53,8 +53,10 @@ def GiveIntervals(detection, /):
     return intervals
 
 
-@nb.njit(["f8[:, :](f8[:, :], f8, f8)", "f4[:, :](f4[:, :], f8, f8)",
-          "i8[:, :](i8[:, :], i8, i8)", "i4[:, :](i4[:, :], i8, i8)"],
+@nb.njit(["f8[:, :](f8[:, :], f8, f8)",
+          "f4[:, :](f4[:, :], f8, f8)",
+          "i8[:, :](i8[:, :], i8, i8)",
+          "i4[:, :](i4[:, :], i8, i8)"],
          cache=True, parallel=True)
 def filter_intervals(intervals, min_separation, min_duration):
     if len(intervals > 1):
