@@ -1,3 +1,5 @@
+import obspy
+
 from .mat import write_mat, read_mat, HDRC_FIELDS_INFO
 from obspy import read as obspy_read
 import numpy as np
@@ -28,7 +30,14 @@ def read_data(path, format=None, **kwargs):
 
 def _read_by_obspy(path, format=None, **kwargs):
     stream = obspy_read(path, format=format, **kwargs)
-    data_dict = {'data': np.array([tr.data for tr in stream]),
-                 'stats': [getattr(tr, 'stats', None) for tr in stream]
-                 }
-    return data_dict
+    return convert_stream_to_dict(stream)
+
+
+def convert_stream_to_dict(stream):
+    return {'data': np.array([tr.data for tr in stream]),
+            'stats': [getattr(tr, 'stats', None) for tr in stream]}
+
+
+def convert_numpy_to_stream(data, headers=None):
+    ...
+    # return obspy.Stream
