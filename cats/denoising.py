@@ -231,7 +231,7 @@ class CATSDenoiser(CATSBase):
         for fi in (pbar := tqdm(files, desc="Files")):
             pbar.set_postfix({"File": fi})
             rel_folder = fi.relative_to(folder).parent
-            save_path = result_folder / rel_folder / Path(str(fi.name).replace(data_format, "_detection"))
+            save_path = result_folder / rel_folder / Path(str(fi.name).replace(data_format, "_denoising"))
             x = read_data(fi)['data']
             denoiser.denoise_to_file(x, save_path, verbose=verbose, full_info=full_info, compress=compress)
             del x
