@@ -11,6 +11,8 @@ import holoviews as hv
 import numpy as np
 from pathlib import Path
 from tqdm.notebook import tqdm
+import obspy
+import datetime
 
 from .baseclass import CATSBase, CATSResult
 from .core.association import PickDetectedPeaks
@@ -425,3 +427,55 @@ class CATSDetectionResult(CATSResult):
                 picked_features[ind] = to2d_array_with_num_columns(feats, num_columns=2)
 
         return mdict
+
+    def extend_detected_intervals(self, pre_time_sec=None, post_time_sec=None):
+        extended_intervals = np.empty_like(self.detected_intervals)
+        auto_pre = (pre_time_sec is None)
+        auto_post = (post_time_sec is None)
+        auto_extension = auto_pre or auto_post
+        for ind, intvs in np.ndenumerate(self.detected_intervals):
+            ext_intv = intvs.copy()
+            if auto_extension:
+                d_intv = np.diff(ext_intv, axis=-1).squeeze()
+            else:
+                d_intv = None
+            pre_time_sec = d_intv if auto_pre else pre_time_sec
+            post_time_sec = d_intv if auto_post else post_time_sec
+            ext_intv[:, 0] -= pre_time_sec
+            ext_intv[:, 1] += post_time_sec
+            extended_intervals[ind] = np.clip(ext_intv, 0.0, (self.npts - 1) * self.dt_sec)
+        return extended_intervals
+
+    def slice_input_traces(self, reference_traces=None, pre_time_sec=None, post_time_sec=None):
+        extended_intervals = self.extend_detected_intervals(pre_time_sec, post_time_sec)
+        shape = extended_intervals.shape
+        start_time_sec = np.empty(shape, dtype=object)
+        sliced_traces = np.empty(shape, dtype=object)
+        signal = self.signal if reference_traces is None else reference_traces
+        convert_ind = lambda intv: give_index_slice_by_limits(intv, self.dt_sec)
+        for ind in np.ndindex(shape):
+            sliced_traces[ind] = np.array([signal[ind][convert_ind(intv)]
+                                           for intv in extended_intervals[ind]], dtype=object)
+            start_time_sec[ind] = extended_intervals[ind][:, 0]
+        return sliced_traces, start_time_sec
+
+    def save_sliced_traces(self, sliced_traces, start_time_sec, folder=None, reference_header=None, format="SAC"):
+        folder = "SlicedTraces" if folder is None else folder
+        folder = Path(folder)
+        folder.mkdir(parents=True, exist_ok=True)
+
+        header = dict(delta=self.dt_sec, starttime=self.main_params.get('reference_datetime', 0))
+        header = obspy.core.trace.Stats(header)
+        if reference_header is not None:
+            header.update(reference_header)
+        reference_time = header.starttime
+        for ind, sliced_trace in np.ndenumerate(sliced_traces):
+            for tr, t0 in zip(sliced_trace, start_time_sec[ind]):
+                if len(tr) > 0:
+                    header.update({"starttime": reference_time + datetime.timedelta(seconds=t0)})
+                    trace = obspy.core.trace.Trace(tr, header=header)
+                    t0_str = f"{t0:.3f}"
+                    filename = [header.network, header.station, header.channel, *map(str, ind), f"Event_{t0_str}"]
+                    filename = '_'.join([fn for fn in filename if len(fn) > 0])
+
+                    trace.write((folder / f"{filename}.{format.casefold()}").as_posix(), format)
