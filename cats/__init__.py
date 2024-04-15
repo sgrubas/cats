@@ -8,7 +8,7 @@ from .core.plottingutils import plot_traces
 from . import metrics
 from .detection import CATSDetector, CATSDetectionResult
 from .denoising import CATSDenoiser, CATSDenoisingResult
-from .data import import_sample_data
+from .data import import_sample_data, load_pretuned_CATS
 from . import misc
 from . import io
 from . import tune
