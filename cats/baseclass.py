@@ -448,7 +448,7 @@ class CATSResult(BaseModel):
         figsize = 250
         cmap = 'viridis'
         xlim = time_interval_sec
-        ylim = (max(1e-1, self.stft_frequency[1] / 2), None)
+        ylim = (self.stft_frequency[1] / 2, None)
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)
