@@ -19,12 +19,12 @@ from cats.core.utils import intervals_intersection, give_rectangles
 
 class CATS_CWT(BaseModel, extra=Extra.allow):
     """
-        CATS operator. Implements 4 main steps:
-            1) TF transform
+        CATS denoising operator. Implements 4 main steps:
+            1) CWT transform
             2) Noise estimation via B-E-DATE
             3) Trimming spectrogram based minSNR
             4) Clustering trimmed spectrogram
-            5) Inverse TF transform (if `denoise` mode is chosen)
+            5) Inverse CWT transform (if `denoise` mode is chosen)
         """
     # main TF params
     dt_sec: float
