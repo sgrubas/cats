@@ -357,25 +357,7 @@ def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
 
 
 def OptimalNeighborhoodDistance(minSNR, d=2, pmin=0.95, qmax=10, maxN=1):
-    """
-        Estimates optimal value for neighborhood distance for the clustering.
-        Estimation is based on probability `pmin` that in a given neighborhood distance
-        there are no more than `maxN` noise elements. The main idea behind this estimation is that
-        the sparsity of the trimmed spectrogram is directly dependent on the `minSNR` used for the trimming from DATE.
-        This estimation is to reduce the number of manually adjusted non-intuitive parameters by using `minSNR`.
 
-        Arguments:
-            minSNR : float : minimum SNR used in DATE algorithm
-            d : int : dimension of random numbers. Default `d=2`, i.e. spectrograms almost all the frequency bins
-                      are complex numbers (2-dim real numbers)
-            pmin : float : minimum confidence level that within neighborhood distance,
-                           there are no more than `maxN` noise elements.
-                           Default `0.95`, empirically estimated as the optimal level of confidence for various `minSNR`
-            qmax : int : maximal size of the neighborhood distance.
-                         Default `10`, but should not be bigger than minimum cluster size
-            maxN : int : maximal number of allowed noise elements to be present within the neighborhood distance.
-                         Default `1`, based on that isolated single points are automatically considered as noise
-    """
     # thresholding function value from DATE, defined for `noise variance = 1`
     xi = _xi(d=d, rho=minSNR)
     # percentage of chi-distributed noise elements to be > `xi` (`d` degrees of freedom)
