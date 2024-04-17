@@ -1,6 +1,18 @@
 # Cluster Analysis of Trimmed Spectrograms (CATS)
-Framework for detection and denoising of sparse signals in the time-frequency domain. 
-Particularly, very useful in the detection and denoising of earthquakes. Soon, here will be a link to our paper/preprint.
+CATS is a signal processing technique and framework for detecting and denoising sparse signals in the time-frequency domain. 
+Particularly, very useful for processing earthquakes. 
+This work is still in progress, and the package is under active development. 
+Soon, here will be links to our papers/preprints.
+
+## Key features of CATS
+- **Versatile**. Any signals (not necessarily seismic) that are sparse in the time-frequency domain can be localized by CATS.
+- **Flexible**. Any time-frequency transform can be used as a base (STFT, CWT, ...). Fast detection with STFT or more accurate denoising with CWT.
+- **Fast** and **accurate**. Here will be links to our papers showing this.
+- **Transparent** and **QC-friendly**. 
+  - Minimum number of parameters which are easy to autotune.
+  - Interpretable and visualizable workflow steps and parameters.
+  - Collected cluster statistics can be used for custom post-processing and quality control (QC).
+
 
 # Installation
 There are two ways to install the package:
@@ -14,7 +26,9 @@ There are two ways to install the package:
 The package was tested on Python 3.9. See other dependencies in [requirements.txt](https://github.com/sgrubas/cats/blob/main/requirements.txt).
 
 # Tutorials
-- [See our tutorial on usage for the detection of seismic events](https://github.com/sgrubas/cats/blob/main/tutorials/DetectionTutorial.ipynb)
+- [Detection of seismic events](https://github.com/sgrubas/cats/blob/main/tutorials/DetectionTutorial.ipynb)
+- [Autotuning CATS detector with Optuna](https://github.com/sgrubas/cats/blob/main/tutorials/DetectionAutotuner.ipynb)
+- [Denoising seismic events](https://github.com/sgrubas/cats/blob/main/tutorials/DenoisingTutorial.ipynb)
 
 # CATS workflow demo 
 <img src="https://github.com/sgrubas/cats/blob/main/tutorials/CATS_detection_demo.png" width="600"/>
