@@ -11,6 +11,7 @@ from scipy.io import loadmat, savemat
 import holoviews as hv
 from typing import Any, Union
 from pydantic import BaseModel, Field, Extra
+import obspy
 
 from .core.timefrequency import STFTOperator
 from .core.clustering import Clustering, ClusterCatalogs, concatenate_arrays_of_cluster_catalogs
@@ -19,6 +20,7 @@ from .core.env_variables import get_min_bedate_block_size, get_max_memory_availa
 from .core.utils import get_interval_division, format_index_by_dimensions, cast_to_bool_dict
 from .core.utils import format_interval_by_limits, give_index_slice_by_limits, save_pickle, load_pickle
 from .core.utils import give_nonzero_limits, mat_structure_to_tight_dataframe_dict
+from .io import convert_stream_to_dict
 
 
 # ------------------------ BASE CLASSES ------------------------ #
@@ -69,7 +71,6 @@ class CATSBase(BaseModel, extra=Extra.allow):
     cluster_distance_trace: int = Field(1, ge=1)
 
     # Misc
-    reference_datetime: str = None  # datetime.datetime.isoformat
     name: str = "CATS"
 
     def __init__(self, **kwargs):
@@ -214,6 +215,10 @@ The fastest CPU version is 'ssqueezepy', which is default.
     def export_main_params(self):
         return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
 
+    @property
+    def main_params(self):
+        return self.export_main_params()
+
     @classmethod
     def from_result(cls, CATSResult):
         return cls(**CATSResult.main_params)
@@ -351,6 +356,15 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         return n_chunks
 
+    @staticmethod
+    def convert_input_data(x):
+        if isinstance(x, obspy.Stream):
+            x_dict = convert_stream_to_dict(x)
+            data, stats = x_dict['data'], x_dict['stats']
+        else:
+            data, stats = x, None
+        return data, stats
+
     def save(self, filename):
         save_pickle(self.export_main_params(), filename)
 
@@ -384,7 +398,7 @@ class CATSResult(BaseModel):
     threshold: float = None
     history: Any = None
     main_params: dict = None
-    header_info: dict = None
+    stats: Any = None
 
     @staticmethod
     def base_time_func(npts, dt_sec, t0, time_interval_sec):
@@ -449,11 +463,12 @@ class CATSResult(BaseModel):
         cmap = 'viridis'
         xlim = time_interval_sec
         ylim = (self.stft_frequency[1] / 2, None)
+        layout_title = str(self.stats[ind].starttime)if (self.stats is not None) else ''
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
-                                     aspect_weight=0, sublabel_format='')
+                                     title=layout_title, aspect_weight=0, sublabel_format='')
         inds_slices = (ind, i_time, i_stft)
         figs = (fig0 + fig1 + fig2 + fig3)
         return figs, (layout_opts, spectr_opts, curve_opts), inds_slices, time_interval_sec
@@ -557,8 +572,11 @@ class CATSResult(BaseModel):
 
         return mdict
 
-    def save(self, filepath, compress=False, header_info=None):
-        self.header_info = header_info
+    def save(self, filepath, compress=False, stats=None):
+        if self.stats is None:
+            self.stats = stats
+        else:
+            self.stats.update(stats)
         mdict = self.filter_convert_attributes_to_dict()
         savemat(filepath, mdict, do_compression=compress)
         del mdict

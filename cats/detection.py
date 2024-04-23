@@ -144,13 +144,18 @@ class CATSDetector(CATSBase):
                             - "detected_intervals" - detected intervals (start, end) in seconds (always returned)
                             - "picked_features" - features in intervals [onset, peak likelihood] (always returned)
         """
-        n_chunks = self.split_data_by_memory(x, full_info=full_info, to_file=False)
+        data, stats = self.convert_input_data(x)
+
+        n_chunks = self.split_data_by_memory(data, full_info=full_info, to_file=False)
         single_chunk = n_chunks > 1
-        data_chunks = np.array_split(x, n_chunks, axis=-1)
+        data_chunks = np.array_split(data, n_chunks, axis=-1)
         results = []
         for dc in tqdm(data_chunks, desc='Data chunks', display=single_chunk):
             results.append(self._detect(dc, verbose=verbose, full_info=full_info))
-        return CATSDetectionResult.concatenate(*results)
+
+        result = CATSDetectionResult.concatenate(*results)
+        setattr(result, "stats", stats)
+        return result
 
     def __mul__(self, x):
         return self.detect(x, verbose=False, full_info=False)
@@ -369,6 +374,10 @@ class CATSDetectionResult(CATSResult):
                           intervals=detected_intervals, picks=picked_onsets, associated_picks=None,
                           trace_loc=trace_loc, time_interval_sec=time_interval_sec, gain=gain, clip=clip,
                           each_trace=each_trace, amplitude_scale=amplitude_scale, **kwargs)
+
+        ind_ref = (0,) * len(traces.shape[:-1])
+        layout_title = str(self.stats[ind_ref].starttime) if (self.stats is not None) else ''
+        fig = fig.opts(aspect=2, title=layout_title)
         return fig
 
     def append(self, other):
@@ -459,23 +468,40 @@ class CATSDetectionResult(CATSResult):
             start_time_sec[ind] = extended_intervals[ind][:, 0]
         return sliced_traces, start_time_sec
 
-    def save_sliced_traces(self, sliced_traces, start_time_sec, folder=None, reference_header=None, format="SAC"):
-        folder = "SlicedTraces" if folder is None else folder
+    def write_sliced_traces(self, sliced_traces, start_time_sec, folder=None, prefix_name=None,
+                            reference_header=None, format="SAC"):
+        folder = folder or "SlicedTraces"
+        prefix_name = prefix_name or "Event"
         folder = Path(folder)
         folder.mkdir(parents=True, exist_ok=True)
 
-        header = dict(delta=self.dt_sec, starttime=self.main_params.get('reference_datetime', 0))
-        header = obspy.core.trace.Stats(header)
-        if reference_header is not None:
-            header.update(reference_header)
-        reference_time = header.starttime
-        for ind, sliced_trace in np.ndenumerate(sliced_traces):
+        total = np.prod(sliced_traces.shape)
+        for ind, sliced_trace in tqdm(np.ndenumerate(sliced_traces), total=total):
             for tr, t0 in zip(sliced_trace, start_time_sec[ind]):
                 if len(tr) > 0:
-                    header.update({"starttime": reference_time + datetime.timedelta(seconds=t0)})
+
+                    header = obspy.core.trace.Stats({"delta": self.dt_sec})  # default header
+                    if self.stats is not None:
+                        header.update(self.stats[ind])  # update header with available obspy.Stats for trace[ind]
+                    if reference_header is not None:
+                        header.update(reference_header)  # update header with given reference header
+
+                    header.update({"starttime": header.starttime + datetime.timedelta(seconds=t0)})  # time shift
                     trace = obspy.core.trace.Trace(tr, header=header)
-                    t0_str = f"{t0:.3f}"
-                    filename = [header.network, header.station, header.channel, *map(str, ind), f"Event_{t0_str}"]
+
+                    t0_str = str(header.starttime).replace('-', '')
+                    t0_str = t0_str.replace(':', '_').replace('.', '_')
+                    # t0_str = f"{t0:.3f}"
+                    filename = [prefix_name, header.network, header.station, header.channel, *map(str, ind), t0_str]
                     filename = '_'.join([fn for fn in filename if len(fn) > 0])
 
                     trace.write((folder / f"{filename}.{format.casefold()}").as_posix(), format)
+
+    def save_detected_events(self, pre_time_sec=None, post_time_sec=None, folder='DetectedEvents',
+                             prefix_name="", reference_header=None, format="SAC"):
+        """
+            Saves via obspy.Trace.write()
+        """
+        sliced_traces, start_time_sec = self.slice_input_traces(pre_time_sec=pre_time_sec, post_time_sec=post_time_sec)
+        self.write_sliced_traces(sliced_traces, start_time_sec, folder=folder, prefix_name=prefix_name,
+                                 reference_header=reference_header, format=format)

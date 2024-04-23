@@ -5,6 +5,7 @@ import holoviews as hv
 from typing import Any, Union, Literal, List, Tuple
 from pydantic import BaseModel, Field, Extra
 from tqdm.notebook import tqdm
+import obspy
 
 from cats.core.plottingutils import plot_traces
 from cats.core.timefrequency import CWTOperator
@@ -15,6 +16,7 @@ from cats.core.utils import get_interval_division, format_index_by_dimensions, c
 from cats.core.utils import format_interval_by_limits, give_index_slice_by_limits, save_pickle, load_pickle
 from cats.core.utils import give_nonzero_limits, mat_structure_to_tight_dataframe_dict, del_vals_by_keys
 from cats.core.utils import intervals_intersection, give_rectangles
+from cats.io import convert_stream_to_dict, convert_dict_to_stream
 
 
 class CATS_CWT(BaseModel, extra=Extra.allow):
@@ -100,6 +102,10 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
 
     def export_main_params(self):
         return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+
+    @property
+    def main_params(self):
+        return self.export_main_params()
 
     @classmethod
     def from_result(cls, CATS_CWTResult):
@@ -223,13 +229,18 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
                 verbose: bool = False,
                 full_info: Union[bool, str, List[str]] = False):
 
-        n_chunks = self.split_data_by_memory(x, full_info=full_info, to_file=False)
+        data, stats = self.convert_input_data(x)
+
+        n_chunks = self.split_data_by_memory(data, full_info=full_info, to_file=False)
         single_chunk = n_chunks > 1
-        data_chunks = np.array_split(x, n_chunks, axis=-1)
+        data_chunks = np.array_split(data, n_chunks, axis=-1)
         results = []
         for dc in tqdm(data_chunks, desc='Data chunks', display=single_chunk):
             results.append(self._denoise(dc, verbose=verbose, full_info=full_info))
-        return CATS_CWTResult.concatenate(*results)
+
+        result = CATS_CWTResult.concatenate(*results)
+        setattr(result, "stats", stats)
+        return result
 
     def __mul__(self, x):
         return self.denoise(x, verbose=False, full_info=False)
@@ -239,6 +250,15 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
 
     def __matmul__(self, x):
         return self.denoise(x, verbose=True, full_info=True)
+
+    @staticmethod
+    def convert_input_data(x):
+        if isinstance(x, obspy.Stream):
+            x_dict = convert_stream_to_dict(x)
+            data, stats = x_dict['data'], x_dict['stats']
+        else:
+            data, stats = x, None
+        return data, stats
 
     @staticmethod
     def _info_keys():
@@ -390,7 +410,7 @@ class CATS_CWTResult(BaseModel):
     minSNR: float = None
     history: Any = None
     main_params: dict = None
-    header_info: dict = None
+    stats: Any = None
 
     @staticmethod
     def base_time_func(npts, dt_sec, t0, time_interval_sec):
@@ -451,12 +471,13 @@ class CATS_CWTResult(BaseModel):
         cmap = 'viridis'
         xlim = time_interval_sec
         ylim = (None, None)
+        layout_title = str(self.stats[ind].starttime) if (self.stats is not None) else ''
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True, logy=False, invert_yaxis=True,
                                     logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=5, fig_size=figsize, fontsize=fontsize)
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
-                                     aspect_weight=0, sublabel_format='')
+                                     title=layout_title, aspect_weight=0, sublabel_format='')
         inds_slices = (ind, i_time, i_time)
         figs = (fig0 + fig1 + fig2 + fig3)
         return figs, (layout_opts, spectr_opts, curve_opts), inds_slices, time_interval_sec
@@ -563,6 +584,10 @@ class CATS_CWTResult(BaseModel):
                           intervals=detected_intervals, picks=picked_onsets, associated_picks=None,
                           trace_loc=trace_loc, time_interval_sec=time_interval_sec, gain=gain, clip=clip,
                           each_trace=each_trace, amplitude_scale=amplitude_scale, **kwargs)
+
+        ind_ref = (0,) * len(signal.shape[:-1])
+        layout_title = str(self.stats[ind_ref].starttime) if (self.stats is not None) else ''
+        fig = fig.opts(title=layout_title)
         return fig
 
     def append(self, other):
@@ -669,3 +694,14 @@ class CATS_CWTResult(BaseModel):
         mdict = loadmat(filepath, simplify_cells=True)
         mdict = cls.convert_dict_to_attributes(mdict)
         return cls(**mdict)
+
+    def get_denoised_obspy_stream(self):
+        return convert_dict_to_stream({"data": self.signal_denoised,
+                                       "stats": self.stats})
+
+    def save_denoised_obspy_stream(self, filename, format):
+        """
+            Saves via `obspy.Stream.write`
+        """
+        stream = self.get_denoised_obspy_stream()
+        stream.write(filename=filename, format=format)

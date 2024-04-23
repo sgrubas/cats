@@ -15,7 +15,8 @@ import holoviews as hv
 import numpy as np
 from pathlib import Path
 from tqdm.notebook import tqdm
-from scipy import signal
+from scipy.signal import check_NOLA
+import obspy
 
 from .baseclass import CATSBase, CATSResult
 from .core.utils import cast_to_bool_dict, del_vals_by_keys
@@ -23,7 +24,7 @@ from .core.utils import format_index_by_dimensions, give_index_slice_by_limits, 
 from .core.utils import format_interval_by_limits, StatusKeeper, intervals_intersection
 from .core.clustering import concatenate_arrays_of_cluster_catalogs
 from .core.plottingutils import plot_traces
-from .io import read_data
+from .io import read_data, convert_dict_to_stream
 
 
 # ------------------ CATS DENOISER API ------------------ #
@@ -36,7 +37,7 @@ class CATSDenoiser(CATSBase):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        if not signal.check_NOLA(self.stft_window, self.stft_window_len, self.stft_overlap_len, tol=1e-10):
+        if not check_NOLA(self.stft_window, self.stft_window_len, self.stft_overlap_len, tol=1e-10):
             raise ValueError("For inverse STFT, Nonzero Overlap Add (NOLA) is required, currently"
                              " not enough STFT overlap is set.")
 
@@ -97,7 +98,7 @@ class CATSDenoiser(CATSBase):
                                    main_params=self.export_main_params(),
                                    **from_full_info)
 
-    def denoise(self, x: np.ndarray,
+    def denoise(self, x: Union[np.ndarray, obspy.Stream],
                 /,
                 verbose: bool = False,
                 full_info: Union[bool, str, List[str]] = False):
@@ -122,13 +123,19 @@ class CATSDenoiser(CATSBase):
                             - "spectrogram_cluster_ID" - cluster indexes on `spectrogram_SNR_clustered`
                             - "signal_denoised" - inverse STFT of `coefficients` * (`spectrogram_SNR_clustered` > 0)
         """
-        n_chunks = self.split_data_by_memory(x, full_info=full_info, to_file=False)
+
+        data, stats = self.convert_input_data(x)
+
+        n_chunks = self.split_data_by_memory(data, full_info=full_info, to_file=False)
         single_chunk = n_chunks > 1
-        data_chunks = np.array_split(x, n_chunks, axis=-1)
+        data_chunks = np.array_split(data, n_chunks, axis=-1)
         results = []
         for dc in tqdm(data_chunks, desc='Data chunks', display=single_chunk):
             results.append(self._denoise(dc, verbose=verbose, full_info=full_info))
-        return CATSDenoisingResult.concatenate(*results)
+
+        result = CATSDenoisingResult.concatenate(*results)
+        setattr(result, "stats", stats)
+        return result
 
     def __mul__(self, x):
         return self.denoise(x, verbose=False, full_info=False)
@@ -351,6 +358,10 @@ class CATSDenoisingResult(CATSResult):
                           intervals=detected_intervals, picks=picked_onsets, associated_picks=None,
                           trace_loc=trace_loc, time_interval_sec=time_interval_sec, gain=gain, clip=clip,
                           each_trace=each_trace, amplitude_scale=amplitude_scale, **kwargs)
+
+        ind_ref = (0,) * len(signal.shape[:-1])
+        layout_title = str(self.stats[ind_ref].starttime) if (self.stats is not None) else ''
+        fig = fig.opts(title=layout_title)
         return fig
 
     def append(self, other):
@@ -392,3 +403,14 @@ class CATSDenoisingResult(CATSResult):
         assert self.stft_dt_sec == other.stft_dt_sec
         assert np.all(self.stft_frequency == other.stft_frequency)
         assert np.all(self.noise_threshold_conversion == other.noise_threshold_conversion)
+
+    def get_denoised_obspy_stream(self):
+        return convert_dict_to_stream({"data": self.signal_denoised,
+                                       "stats": self.stats})
+
+    def save_denoised_obspy_stream(self, filename, format):
+        """
+            Saves via `obspy.Stream.write`
+        """
+        stream = self.get_denoised_obspy_stream()
+        stream.write(filename=filename, format=format)
