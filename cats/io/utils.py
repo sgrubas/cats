@@ -37,9 +37,20 @@ def read_by_obspy(path, format=None, **kwargs):
     return obspy.read(path, format=format, **kwargs)
 
 
+def list_to_object_numpy(list_obj, shape=None):
+    N = len(list_obj)
+    numpy_obj = np.empty(N, dtype=object)
+    for i in range(N):
+        numpy_obj[i] = list_obj[i]
+
+    if shape is not None:
+        numpy_obj = numpy_obj.reshape(shape)
+    return numpy_obj
+
+
 def convert_stream_to_dict(stream):
     return {'data': np.array([tr.data for tr in stream]),
-            'stats': [getattr(tr, 'stats', None) for tr in stream]}
+            'stats': list_to_object_numpy([getattr(tr, 'stats', None) for tr in stream])}
 
 
 def get_stats_by_index(stats, ind, shape=None):
@@ -52,10 +63,13 @@ def get_stats_by_index(stats, ind, shape=None):
 
 def convert_dict_to_stream(data_in_dict):
     data = data_in_dict["data"]
-    stats = data_in_dict["stats"]
+    stats = data_in_dict.get("stats", None)
+    if not isinstance(stats, np.ndarray) and (stats is not None):
+        stats = list_to_object_numpy(stats)
     shape = data.shape[:-1]
 
-    traces = [obspy.Trace(data=data[ind], header=get_stats_by_index(stats, ind))
+    traces = [obspy.Trace(data=data[ind],
+                          header=get_stats_by_index(stats, ind))
               for ind in np.ndindex(shape)]
     stream = obspy.Stream(traces)
     return stream
