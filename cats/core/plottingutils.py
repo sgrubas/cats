@@ -100,5 +100,6 @@ def plot_traces(data: np.ndarray[:, :],
     #  Summary of all
     ylims = (np.nanmin(trace_loc) - dloc, np.nanmax(trace_loc) + dloc)
     figure = hv.Overlay((traces, rects, onsets, curves))
-    figure = figure.opts(ylim=ylims, xlim=time_interval_sec, fig_size=kwargs['fig_size'])
+    figure = figure.opts(ylim=ylims, xlim=time_interval_sec, fig_size=kwargs['fig_size'],
+                         aspect=2, fontsize=dict(labels=15, ticks=14, title=18))
     return figure
