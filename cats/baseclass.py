@@ -58,11 +58,10 @@ class CATSBase(BaseModel, extra=Extra.allow):
     bedate_freq_grouping_Hz: float = None
     bedate_log_freq_grouping: float = None
     date_Q: float = 0.95
-    date_detection_mode: bool = True
+    date_Nmin_percentile: float = Field(0.25, gt=0.0, lt=0.5)
+    date_original_mode: bool = False
 
     # Extra clustering params
-    cluster_minSNR: float = 0.0
-    cluster_fullness: float = Field(0, ge=0.0, le=1.0)
     cluster_size_f_logHz: float = None
     cluster_distance_f_logHz: float = None
     cluster_catalogs: bool = True
@@ -193,7 +192,6 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.cluster_distance_t_len = max(round(self.cluster_distance_t_sec / self.stft_hop_sec), 1)
         self.cluster_distance_f_len = max(round(self.cluster_distance_f_Hz / self.stft_df), 1)
         self.cluster_distance_trace_len = self.cluster_distance_trace
-        # self.cluster_minSNR = self.cluster_minSNR if (self.cluster_minSNR is not None) else self.minSNR
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
@@ -241,8 +239,9 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         T, STD, THR = BEDATE_trimming(result_container['spectrogram'], self.frequency_groups_index,
                                       self.bandpassed_frequency_groups_slice, self.freq_bandpass_slice,
-                                      result_container['time_frames'], self.minSNR, self.time_edge, self.date_Q,
-                                      not self.date_detection_mode)
+                                      result_container['time_frames'], self.minSNR, self.time_edge,
+                                      Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
+                                      original_mode=self.date_original_mode, fft_base=True, dim=2)
 
         result_container['spectrogram_SNR_trimmed'] = T
         result_container['noise_std'] = STD
@@ -252,7 +251,6 @@ The fastest CPU version is 'ssqueezepy', which is default.
         mc = self.clustering_multitrace
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_f_len, self.cluster_distance_t_len)
         s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
-        alpha = self.cluster_fullness
         log_freq_cluster = (self.cluster_size_f_logHz, self.cluster_distance_f_logHz)
 
         result_container['spectrogram_SNR_clustered'] = np.zeros_like(result_container['spectrogram_SNR_trimmed'])
@@ -260,13 +258,12 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                                               dtype=np.uint32)
 
         result_container['spectrogram_SNR_clustered'], result_container['spectrogram_cluster_ID'] = \
-            Clustering(result_container['spectrogram_SNR_trimmed'], q=q, s=s,
-                       minSNR=self.cluster_minSNR, alpha=alpha, log_freq_cluster=log_freq_cluster)
+            Clustering(result_container['spectrogram_SNR_trimmed'], q=q, s=s, log_freq_cluster=log_freq_cluster)
 
         if self.cluster_catalogs:
             result_container['cluster_catalogs'] = ClusterCatalogs(result_container['spectrogram_SNR_clustered'],
                                                                    result_container['spectrogram_cluster_ID'],
-                                                                   self.stft_frequency, self.stft_hop_sec)
+                                                                   self.stft_df, self.stft_hop_sec)
         else:
             result_container['cluster_catalogs'] = None
 
@@ -300,20 +297,22 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                                                  L=self.stationary_frame_len)))
         bedate_size = np.prod(bedate_shape)
 
+        cluster_sc = 2.0  # clustering requires < 2 copies of spectrogram (max estimate)
+
         x_bytes = x.nbytes
         precision_order = x_bytes / x.size
 
         memory_usage_bytes = {
-            "stft_frequency":              8. * stft_shape[-2],                 # float64 always
-            "time_frames":                 8. * bedate_shape[-1],               # float64 always
-            "signal":                      1. * x_bytes,                        # float / int
-            "coefficients":                2. * precision_order * stft_size,    # complex
-            "spectrogram":                 1. * precision_order * stft_size,    # float
-            "noise_threshold_conversion":  8. * bedate_shape[-2],               # float
-            "noise_std":                   1. * precision_order * bedate_size,  # float
-            "spectrogram_SNR_trimmed":     1. * precision_order * stft_size,    # float
-            "spectrogram_SNR_clustered":   1. * precision_order * stft_size,    # float
-            "spectrogram_cluster_ID":      4. * stft_size,                      # uint32 always
+            "stft_frequency":              8. * stft_shape[-2],                            # float64 always
+            "time_frames":                 8. * bedate_shape[-1],                          # float64 always
+            "signal":                      1. * x_bytes,                                   # float / int
+            "coefficients":                2. * precision_order * stft_size,               # complex
+            "spectrogram":                 1. * precision_order * stft_size,               # float
+            "noise_threshold_conversion":  8. * bedate_shape[-2],                          # float
+            "noise_std":                   1. * precision_order * bedate_size,             # float
+            "spectrogram_SNR_trimmed":     1. * precision_order * stft_size * cluster_sc,  # float
+            "spectrogram_SNR_clustered":   1. * precision_order * stft_size,               # float
+            "spectrogram_cluster_ID":      4. * stft_size,                                 # uint32 always
         }
         used_together = [('coefficients', 'spectrogram'),
                          ('spectrogram', 'noise_threshold_conversion', 'noise_std', 'spectrogram_SNR_trimmed'),
@@ -356,11 +355,13 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         return n_chunks
 
-    @staticmethod
-    def convert_input_data(x):
+    def convert_input_data(self, x):
         if isinstance(x, obspy.Stream):
             x_dict = convert_stream_to_dict(x)
             data, stats = x_dict['data'], x_dict['stats']
+            dt_sec_data = stats.flat[0].delta
+            if self.dt_sec != dt_sec_data:  # update sampling rate if different from data
+                self.reset_params(dt_sec=dt_sec_data, stft_nfft=-1)
         else:
             data, stats = x, None
         return data, stats
