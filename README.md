@@ -30,8 +30,13 @@ The package was tested on Python 3.9. See other dependencies in [requirements.tx
 - [Autotuning CATS detector with Optuna](https://github.com/sgrubas/cats/blob/main/tutorials/DetectionAutotuner.ipynb)
 - [Denoising seismic events](https://github.com/sgrubas/cats/blob/main/tutorials/DenoisingTutorial.ipynb)
 
-# CATS workflow demo 
-<img src="https://github.com/sgrubas/cats/blob/main/tutorials/CATS_detection_demo.png" width="600"/>
+# Demos:
+## Signal detection with CATSDetector 
+<img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDetection_CATS.png" width="500"/>
+
+## Signal denoising with CATSDenoiser and CATSDenoiser_CWT
+<img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS.png" width="500"/>
+<img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS_CWT.png" width="500"/>
 
 # Citation
 If you find CATS useful for your research, please cite our paper:
