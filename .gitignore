@@ -8,7 +8,6 @@ bin-release/
 .settings/
 /cats/__pycache__/
 cats.egg-info/
-/figures
 /tutorials/.ipynb_checkpoints
 /testing
 
