@@ -25,6 +25,9 @@ from .core.plottingutils import plot_traces
 from .io import read_data
 
 
+# TODO:
+#   - detect to/on files: support `obspy.Stream`
+
 # ------------------ CATS DETECTOR API ------------------ #
 
 class CATSDetector(CATSBase):
