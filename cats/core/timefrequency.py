@@ -142,7 +142,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         kwargs.update(params)
         self.__init__(**kwargs)
 
-    def padsignal(self, X):
+    def padsignal(self, X: np.ndarray):
         """
             Performs padding of `X` to the last axis with `window_length // 2` to the both ends
 
@@ -151,9 +151,9 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         compatible_padmodes = {"replicate ": "edge", "zero": "constant"}
         padmode = compatible_padmodes.get(self.padtype, self.padtype)
         if self.backend == 'scipy':
-            Y = np.pad(X, pad_width=[(0, 0), (self.padedge, self.padedge)], mode=padmode)
+            Y = np.pad(array=X, pad_width=[(0, 0), (self.padedge, self.padedge)], mode=padmode)
             ext_n = (-(Y.shape[-1] - self.nperseg) % self.hop) % self.nperseg
-            return np.pad(Y, pad_width=[(0, 0), (0, ext_n)], mode='constant')
+            return np.pad(array=Y, pad_width=[(0, 0), (0, ext_n)], mode='constant')
         else:
             return X
 
@@ -338,3 +338,7 @@ class CWTOperator(BaseModel, extra=Extra.allow):
 
     def get_scales(self, N):
         return ssq.utils.process_scales(self.scales, N, self.wavelet, nv=self.nv).squeeze()
+
+    def get_frequencies(self, N):
+        return ssq.experimental.scale_to_freq(self.get_scales(N), self.wavelet, N,
+                                              fs=self.fs, padtype=self.padtype).squeeze()
