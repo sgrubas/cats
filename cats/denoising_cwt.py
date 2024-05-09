@@ -19,7 +19,7 @@ from cats.core.utils import intervals_intersection, give_rectangles
 from cats.io import convert_stream_to_dict, convert_dict_to_stream
 
 
-class CATS_CWT(BaseModel, extra=Extra.allow):
+class CATSDenoiser_CWT(BaseModel, extra=Extra.allow):
     """
         CATS denoising operator. Implements 4 main steps:
             1) CWT transform
@@ -63,7 +63,7 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
     cluster_distance_trace: int = Field(1, ge=1)
 
     # Misc
-    name: str = "CATS_CWT"
+    name: str = "CATSDenoiser_CWT"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
