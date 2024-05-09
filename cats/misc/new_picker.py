@@ -69,7 +69,7 @@ class NewPicker(BaseModel, extra=Extra.allow):
                                          time_frames=_frames,
                                          freq_groups=_groups,
                                          xi=_xi, lamb=_lambda,
-                                         Q=0.95, original_mode=False)
+                                         Nmin=int(0.25 * N), original_mode=False)
         result_container['P_envelope_trimmed'] = P_comp_trimmed = bedated[0]
         result_container['S_envelope_trimmed'] = S_comp_trimmed = bedated[1]
         result_container['P_envelope_noise_std'] = sgms[0]
