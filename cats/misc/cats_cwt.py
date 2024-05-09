@@ -52,12 +52,11 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
     # Extra B-E-DATE params
     bedate_scales_grouping: int = 1
     date_Q: float = 0.95
-    date_detection_mode: bool = True
+    date_Nmin_percentile: float = Field(0.25, gt=0.0, lt=0.5)
+    date_original_mode: bool = False
 
     # Extra clustering params
     background_weight: float = 0.0
-    cluster_minSNR: float = 0.0
-    cluster_fullness: float = Field(0, ge=0.0, le=1.0)
     cluster_catalogs: bool = True
     clustering_multitrace: bool = False
     cluster_size_trace: int = Field(1, ge=1)
@@ -74,8 +73,8 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
         self.cwt_kwargs = self.cwt_kwargs or {}
 
         # Setting CWT operator
-        self.CWT = CWTOperator(dt_sec=self.dt_sec, wavelet=self.wavelet_type, scales=self.scales_type, nv=self.nvoices,
-                               **self.cwt_kwargs)
+        self.CWT = CWTOperator(dt_sec=self.dt_sec, wavelet=self.wavelet_type, scales=self.scales_type,
+                               nv=self.nvoices, **self.cwt_kwargs)
 
         # DATE params
         self.stationary_frame_sec = v if (v := self.stationary_frame_sec) is not None else 0.0
@@ -122,7 +121,9 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
     def apply_CWT(self, result_container, /):
         result_container['coefficients'] = self.CWT * result_container['signal']
         result_container['spectrogram'] = np.abs(result_container['coefficients'])
-        result_container['scales'] = self.CWT.get_scales(result_container['signal'].shape[-1])
+        N = result_container['signal'].shape[-1]
+        result_container['scales'] = self.CWT.get_scales(N)
+        result_container['frequencies'] = self.CWT.get_frequencies(N)
 
     def apply_BEDATE(self, result_container, /):
 
@@ -135,12 +136,12 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
         result_container["scales_groups"] = scales_groups
         result_container['time_frames'] = get_interval_division(N=result_container['spectrogram'].shape[-1],
                                                                 L=self.stationary_frame_len)
-
-        T, STD, THR = BEDATE_trimming(result_container['spectrogram'],
-                                      scales_groups_index, bandpassed_scales_groups_slice,
-                                      bandpass_scales_slice,
-                                      result_container['time_frames'], self.minSNR, self.time_edge, self.date_Q,
-                                      not self.date_detection_mode, fft_bounds=False)
+        dim = 1 + np.iscomplexobj(result_container["coefficients"])  # checks if coefs are complex for dims
+        T, STD, THR = BEDATE_trimming(result_container['spectrogram'], scales_groups_index,
+                                      bandpassed_scales_groups_slice, bandpass_scales_slice,
+                                      result_container['time_frames'], self.minSNR, self.time_edge,
+                                      Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
+                                      original_mode=self.date_original_mode, fft_base=False, dim=dim)
 
         result_container['spectrogram_SNR_trimmed'] = T
         result_container['noise_std'] = STD
@@ -150,7 +151,6 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
         mc = self.clustering_multitrace
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_scales, self.cluster_distance_t_len)
         s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_scales, self.cluster_size_t_len)
-        alpha = self.cluster_fullness
         log_freq_cluster = (0.0, 0.0)
 
         result_container['spectrogram_SNR_clustered'] = np.zeros_like(result_container['spectrogram_SNR_trimmed'])
@@ -158,13 +158,27 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
                                                               dtype=np.uint32)
 
         result_container['spectrogram_SNR_clustered'], result_container['spectrogram_cluster_ID'] = \
-            Clustering(result_container['spectrogram_SNR_trimmed'], q=q, s=s,
-                       minSNR=self.cluster_minSNR, alpha=alpha, log_freq_cluster=log_freq_cluster)
+            Clustering(result_container['spectrogram_SNR_trimmed'], q=q, s=s, log_freq_cluster=log_freq_cluster)
 
         if self.cluster_catalogs:
-            result_container['cluster_catalogs'] = ClusterCatalogs(result_container['spectrogram_SNR_clustered'],
-                                                                   result_container['spectrogram_cluster_ID'],
-                                                                   result_container['scales'], self.dt_sec)
+            catalog = ClusterCatalogs(result_container['spectrogram_SNR_clustered'],
+                                      result_container['spectrogram_cluster_ID'],
+                                      df=1.0,
+                                      dt=self.dt_sec)
+
+            # ---- Convert scale index into Frequencies (Hz)
+            freqs_cols = ['Frequency_start_Hz', 'Frequency_end_Hz', 'Frequency_center_of_mass_Hz']
+            freqs = result_container['frequencies']
+            freq_index = np.arange(len(freqs))
+            for ind, cat in np.ndenumerate(catalog):
+                for col in freqs_cols:
+                    catalog[ind][col] = np.interp(cat[col].values, freq_index, freqs)
+                catalog[ind].rename(columns={'Frequency_start_Hz': 'Frequency_end_Hz',
+                                             "Frequency_end_Hz": "Frequency_start_Hz"},
+                                    inplace=True)
+
+            result_container['cluster_catalogs'] = catalog
+
         else:
             result_container['cluster_catalogs'] = None
 
@@ -251,11 +265,13 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
     def __matmul__(self, x):
         return self.denoise(x, verbose=True, full_info=True)
 
-    @staticmethod
-    def convert_input_data(x):
+    def convert_input_data(self, x):
         if isinstance(x, obspy.Stream):
             x_dict = convert_stream_to_dict(x)
             data, stats = x_dict['data'], x_dict['stats']
+            dt_sec_data = stats.flat[0].delta
+            if self.dt_sec != dt_sec_data:  # update sampling rate if different from data
+                self.reset_params(dt_sec=dt_sec_data)
         else:
             data, stats = x, None
         return data, stats
@@ -271,13 +287,14 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
                 "spectrogram_SNR_clustered",
                 "spectrogram_cluster_ID",
                 "scales",
+                "frequencies",
                 "scales_groups",
                 "signal_denoised"]
 
     @staticmethod
     def get_qc_keys():
         return ["signal", "spectrogram", "spectrogram_SNR_trimmed",
-                "spectrogram_SNR_clustered", "signal_denoised", "scales"]
+                "spectrogram_SNR_clustered", "signal_denoised", "scales", "frequencies"]
 
     def parse_info_dict(self, full_info):
         info_keys = self._info_keys()
@@ -301,20 +318,23 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
                                        len(get_interval_division(N=time_len, L=self.stationary_frame_len)))
         bedate_size = np.prod(bedate_shape)
 
+        cluster_sc = 2.0  # clustering requires < 2 copies of spectrogram (max estimate)
+
         x_bytes = x.nbytes
         precision_order = x_bytes / x.size
 
         memory_usage_bytes = {
-            "stft_frequency": 8. * ft_shape[-2],                 # float64 always
-            "time_frames":                 8. * bedate_shape[-1],               # float64 always
-            "signal":                      1. * x_bytes,                        # float / int
-            "coefficients": 2. * precision_order * ft_size,    # complex
-            "spectrogram": 1. * precision_order * ft_size,    # float
-            "noise_threshold_conversion":  8. * bedate_shape[-2],               # float
-            "noise_std":                   1. * precision_order * bedate_size,  # float
-            "spectrogram_SNR_trimmed": 1. * precision_order * ft_size,    # float
-            "spectrogram_SNR_clustered": 1. * precision_order * ft_size,    # float
-            "spectrogram_cluster_ID": 4. * ft_size,                      # uint32 always
+            "scales":                      8. * scale_len,                               # scale
+            "frequencies":                 8. * scale_len,                               # freqs
+            "time_frames":                 8. * bedate_shape[-1],                        # float64 always
+            "signal":                      1. * x_bytes,                                 # float / int
+            "coefficients":                2. * precision_order * ft_size,               # complex
+            "spectrogram":                 1. * precision_order * ft_size,               # float
+            "noise_threshold_conversion":  8. * bedate_shape[-2],                        # float
+            "noise_std":                   1. * precision_order * bedate_size,           # float
+            "spectrogram_SNR_trimmed":     1. * precision_order * ft_size * cluster_sc,  # float
+            "spectrogram_SNR_clustered":   1. * precision_order * ft_size,               # float
+            "spectrogram_cluster_ID":      4. * ft_size,                                 # uint32 always
         }
         used_together = [('coefficients', 'spectrogram'),
                          ('spectrogram', 'noise_threshold_conversion', 'noise_std', 'spectrogram_SNR_trimmed'),
@@ -383,7 +403,7 @@ class CATS_CWT(BaseModel, extra=Extra.allow):
                           'spectrogram_cluster_ID'),
                          ('coefficients', 'signal_denoised')]
 
-        base_info = ["signal", "stft_frequency", "time_frames"]
+        base_info = ["signal", "frequencies", "scales", "time_frames"]
 
         return self.memory_info(memory_usage_bytes, used_together, base_info, full_info)
 
@@ -402,6 +422,7 @@ class CATS_CWTResult(BaseModel):
     spectrogram_cluster_ID: Any = None
     signal_denoised: Any = None
     scales: Any = None
+    frequencies: Any = None
     scales_groups: Any = None
     cluster_catalogs: Any = None
     dt_sec: float = None
@@ -424,9 +445,9 @@ class CATS_CWTResult(BaseModel):
     def time(self, time_interval_sec=None):
         return CATS_CWTResult.base_time_func(self.npts, self.dt_sec, 0, time_interval_sec)
 
-    def _plot(self, ind=None, time_interval_sec=None, SNR_spectrograms=True):
+    def _plot(self, ind=None, time_interval_sec=None, SNR_spectrograms=True, show_frequency=True):
         t_dim = hv.Dimension('Time', unit='s')
-        f_dim = hv.Dimension('Scale number')
+        f_dim = hv.Dimension("Frequency (Hz)" if show_frequency else 'Scale')
         a_dim = hv.Dimension('Amplitude')
 
         ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=0, default_ind=0)
@@ -455,26 +476,28 @@ class CATS_CWTResult(BaseModel):
             SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
 
         time = self.time(time_interval_sec)
-        nscales = np.arange(len(self.scales))
+
+        scales_or_freqs = self.frequencies if show_frequency else self.scales
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
-        fig1 = hv.Image((time, nscales, PSD), kdims=[t_dim, f_dim],
-                        label='1. Amplitude spectrogram: $|X(t,f)|$').opts(clim=PSD_clims, clabel='Amplitude')
-        fig2 = hv.Image((time, nscales, SNR), kdims=[t_dim, f_dim],
-                        label=f'2. Trimmed {label_trimmed}').opts(clim=SNR_clims)
-        fig3 = hv.Image((time, nscales, C), kdims=[t_dim, f_dim],
-                        label=f'3. Clustered {label_clustered}').opts(clim=SNR_clims)
+        fig1 = hv.QuadMesh((time, scales_or_freqs, PSD), kdims=[t_dim, f_dim],
+                           label='1. Amplitude spectrogram: $|X(t,f)|$').opts(clim=PSD_clims, clabel='Amplitude')
+        fig2 = hv.QuadMesh((time, scales_or_freqs, SNR), kdims=[t_dim, f_dim],
+                           label=f'2. Trimmed {label_trimmed}').opts(clim=SNR_clims)
+        fig3 = hv.QuadMesh((time, scales_or_freqs, C), kdims=[t_dim, f_dim],
+                           label=f'3. Clustered {label_clustered}').opts(clim=SNR_clims)
 
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250
         cmap = 'viridis'
         xlim = time_interval_sec
         ylim = (None, None)
+
         layout_title = str(self.stats[ind].starttime) if (self.stats is not None) else ''
-        spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True, logy=False, invert_yaxis=True,
-                                    logz=True, xlim=xlim, ylim=ylim,
-                                    xlabel='', clabel='', aspect=5, fig_size=figsize, fontsize=fontsize)
+        spectr_opts = hv.opts.QuadMesh(cmap=cmap, colorbar=True, logy=True, invert_yaxis=not show_frequency,
+                                       xlim=xlim, ylim=ylim, norm='log',
+                                       xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      title=layout_title, aspect_weight=0, sublabel_format='')
@@ -486,12 +509,14 @@ class CATS_CWTResult(BaseModel):
              ind: Tuple[int] = None,
              time_interval_sec: Tuple[float] = None,
              SNR_spectrograms: bool = False,
+             show_frequency=True,
              weighted_coefficients: bool = False,
              intervals: bool = False,
              picks: bool = False,
              ):
 
-        fig, opts, inds_slices, time_interval_sec = self._plot(ind, time_interval_sec, SNR_spectrograms)
+        fig, opts, inds_slices, time_interval_sec = self._plot(ind, time_interval_sec,
+                                                               SNR_spectrograms, show_frequency)
         ref_kw_opts = opts[-1].kwargs
         t1, t2 = ref_kw_opts['xlim']
 
@@ -509,9 +534,9 @@ class CATS_CWTResult(BaseModel):
             weights = np.where(C > 0, 1.0, self.main_params['background_weight'])
             WPSD = fig[1].data['z'] * weights
             psd_opts = psd_fig.opts.get().options
-            fig31 = hv.Image((psd_fig.data[t_dim.name], psd_fig.data[f_dim.name], WPSD),
-                             kdims=[t_dim, f_dim],
-                             label='3.1. Weighted amplitude spectrogram: $|X(t,f) \cdot W(t,f)|$').opts(**psd_opts)
+            fig31 = hv.QuadMesh((psd_fig.data[t_dim.name], psd_fig.data[f_dim.name], WPSD),
+                                kdims=[t_dim, f_dim],
+                                label='3.1. Weighted amplitude spectrogram: $|X(t,f) \cdot W(t,f)|$').opts(**psd_opts)
             fig = fig + fig31
 
         # Denoised signal
@@ -598,7 +623,8 @@ class CATS_CWTResult(BaseModel):
                         "noise_std",
                         "spectrogram_SNR_trimmed",
                         "spectrogram_SNR_clustered",
-                        "spectrogram_cluster_ID"]
+                        "spectrogram_cluster_ID",
+                        "signal_denoised"]
 
         # update cluster id
         attr = "spectrogram_cluster_ID"
