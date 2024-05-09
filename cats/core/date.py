@@ -16,31 +16,43 @@ def _Nmin(N, Q):
     return Nmin
 
 
-@nb.njit(["f8(f8[:], f8, f8, f8, b1)",
-          "f4(f4[:], f8, f8, f8, b1)"], cache=True)
-def _DATE(Y, xi, lamb, Q, original_mode):
+@nb.njit("f8(i8, f8)", cache=True)
+def _Q_from_percentile(N, percentile):
+    """Reciprocal to _Nmin. `percentile` = Nmin / N"""
+    return 1 - 1 / (N * (1 - 2 * percentile)**2)
+
+
+@nb.njit(["f8(f8[:], f8, f8, i8, b1)",
+          "f4(f4[:], f8, f8, i8, b1)"], cache=True)
+def _DATE(Y, xi, lamb, Nmin, original_mode):
     N = len(Y)
-    Nmin = _Nmin(N, Q)
 
     Y_sort = np.sort(Y)
-    M = M0 = sum(Y_sort[:Nmin - 1])
-    std = std0 = (M0 + Y_sort[Nmin - 1]) / Nmin / lamb
+    M = 0.0
     found = False
-    for ni in range(Nmin - 1, N - 1):
+    std_found = std_ref = std = 0.0
+    for ni in range(0, N - 1):  # iterate over elements
         M += Y_sort[ni]
-        M_s = M / (ni + 1)
-        std = M_s / lamb  # threshold height (std * xi)
-        found = (Y_sort[ni] <= std * xi < Y_sort[ni + 1])
-        if found:
-            break
-    if original_mode:
-        std = std if found else std0  # if not found in the loop, then minimum
+        if ni >= Nmin:
+            std = M / (ni + 1) / lamb  # current estimate
+            thr = std * xi  # threshold height (std * xi)
+            found = (Y_sort[ni] <= thr < Y_sort[ni + 1])  # criterion
+            if found:
+                std_found = std
+                break
+            if ni == Nmin:  # will be used as a reference if estimate is not found
+                std_ref = std
+    if found:
+        std = std_found
+    else:
+        std = std_ref if original_mode else std  # ref estimate for original mode
+
     return std
 
 
-@nb.njit(["f8[:, :, :](f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], f8, b1)",
-          "f4[:, :, :](f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], f8, b1)"], parallel=True, cache=True)
-def _BEDATE(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
+@nb.njit(["f8[:, :, :](f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)",
+          "f4[:, :, :](f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)"], parallel=True, cache=True)
+def _BEDATE(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mode):
     K = PSD.shape[0]
     m, n = len(freq_groups), len(time_frames)
     Sgm = np.zeros((K, m, n), dtype=PSD.dtype)
@@ -53,13 +65,13 @@ def _BEDATE(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
             for j in nb.prange(n):  # iter over time frames
                 j1, j2 = time_frames[j]
                 psd = psdl[i1: i2 + 1, j1: j2 + 1].ravel()
-                Sgm[k, i, j] = _DATE(psd, xi_i, lamb_i, Q, original_mode)
+                Sgm[k, i, j] = _DATE(psd, xi_i, lamb_i, Nmin, original_mode)
     return Sgm
 
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
-def _BEDATE_API(PSD, /, time_frames, freq_groups, xi_lamb, Q, original_mode):
-    return _BEDATE(PSD, time_frames, freq_groups, xi_lamb, Q, original_mode)
+def _BEDATE_API(PSD, /, time_frames, freq_groups, xi_lamb, Nmin, original_mode):
+    return _BEDATE(PSD, time_frames, freq_groups, xi_lamb, Nmin, original_mode)
 
 
 def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
@@ -105,9 +117,10 @@ def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
 
     Lambda = _Lambda(freq_dimensions)
     Xi = _Xi(freq_dimensions, rho, d_unique=[1, 2])
+    Nmin = _Nmin(time_frames[0, 1] + 1, Q)
 
     # The B-E-DATE
-    Sgm = _BEDATE_API(PSD, time_frames, freq_groups, Xi, Lambda, Q, original_mode)
+    Sgm = _BEDATE_API(PSD, time_frames, freq_groups, Xi, Lambda, Nmin, original_mode)
 
     return Sgm
 
@@ -115,10 +128,10 @@ def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
 ########################################################################################
 
 
-@nb.njit(["UniTuple(f8[:, :, :], 2)(f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], f8, b1)",
-          "UniTuple(f4[:, :, :], 2)(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], f8, b1)"],
+@nb.njit(["UniTuple(f8[:, :, :], 2)(f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)",
+          "UniTuple(f4[:, :, :], 2)(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)"],
          parallel=True, cache=True)
-def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
+def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mode):
     K = PSD.shape[0]
     m, n = len(freq_groups), len(time_frames)
     Sgm = np.zeros((K, m, n), dtype=PSD.dtype)
@@ -133,7 +146,7 @@ def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
                 j1, j2 = time_frames[j]
 
                 psd = psdl[i1: i2 + 1, j1: j2 + 1]
-                Sgm[k, i, j] = sgm = _DATE(psd.ravel(), xi_i, lamb_i, Q, original_mode)
+                Sgm[k, i, j] = sgm = _DATE(psd.ravel(), xi_i, lamb_i, Nmin, original_mode)
 
                 snr = (psd > sgm * xi_i) * psd / (sgm + 1e-8)
                 SNR[k, i1: i2 + 1, j1: j2 + 1] = snr
@@ -142,21 +155,24 @@ def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
 def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_slice, bandpass_slice,
-                    time_frames, minSNR, time_edge, Q=0.95, original_mode=False, fft_bounds=True):
+                    time_frames, minSNR, time_edge, Q=None, Nmin_percentile=None,
+                    original_mode=False, fft_base=True, dim=2):
 
     m, n = len(frequency_groups_index), len(time_frames)
     groups_slice = bandpassed_frequency_groups_slice
 
     # constants for B-E-DATE
-    freq_dimensions = np.full(m, 2)
-    if fft_bounds:
+    freq_dimensions = np.full(m, dim)
+    if fft_base:
         f_min, f_max = frequency_groups_index[0, 1], frequency_groups_index[-1, 0]
         if f_min == 0:  # zero frequency is 1-dim (real number)
             freq_dimensions[0] = 1
         if f_max == PSD.shape[-2] - 1:  # Nyquist's frequency is 1-dim (real number)
             freq_dimensions[-1] = 1
     Lambda = _Lambda(freq_dimensions)
-    Xi = _Xi(freq_dimensions, minSNR, d_unique=[1, 2])
+    Xi = _Xi(freq_dimensions, minSNR)
+    frame_len = time_frames[0, 1] + 1
+    Nmin = int(frame_len * Nmin_percentile) if Nmin_percentile else _Nmin(frame_len, Q)
 
     # The B-E-DATE trimming
     bedate_slice = (..., groups_slice, slice(None))
@@ -165,7 +181,7 @@ def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_
                                                                         frequency_groups_index[groups_slice],
                                                                         Xi[groups_slice],
                                                                         Lambda[groups_slice],
-                                                                        Q, original_mode)
+                                                                        Nmin, original_mode)
 
     # Removing everything out of the bandpass range
     spectrogram_SNR_trimmed[..., :bandpass_slice.start, :] = 0.0
@@ -176,6 +192,23 @@ def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_
     spectrogram_SNR_trimmed[..., -time_edge - 1:] = 0.0
 
     return spectrogram_SNR_trimmed, noise_std, Xi
+
+
+########################################################################################
+
+def _SWEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
+    """
+        TBD
+    """
+    pass
+
+
+def SWEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_slice, bandpass_slice,
+                    time_frames, minSNR, time_edge, Q=0.95, original_mode=False, fft_bounds=True):
+    """
+        TBD
+    """
+    pass
 
 
 # ------------------------ CONSTANTS ------------------------ #
@@ -193,21 +226,38 @@ def lambda_func(d):
 
 
 def _xi_loss(xi, d, rho):
-    return (special.hyp0f1(d / 2, rho**2 * xi**2 / 4) - np.exp(rho**2 / 2))**2
+    """
+        Loss function for positive solution of `xi` of the equation:
+        0_F_1(d / 2; rho^2 * xi^2 / 4) = exp(rho^2 / 2)
+
+        simplified to the form:
+        L(xi) = abs[ Log( 0_F_1(d / 2; rho^2 * xi^2 / 4) ) - rho^2 / 2 ]
+
+        *Note, exponent is omitted by `Log` to avoid overflow as `exp(rho^2 / 2)` rapidly grows
+    """
+    u = rho**2 * xi**2 / 4
+    u = min(u, 1e5)  # to avoid overflow in `special.hyp0f1`
+    hyp0f1 = special.hyp0f1(d / 2, u)
+    eps = 1e-10
+    if hyp0f1 < eps:  # to avoid `0` and `neg` in Logarithm
+        hyp0f1 += eps
+    return abs(np.log(hyp0f1) - rho**2 / 2)
 
 
 def _xi(d, rho):
-    if d == 1:
-        return np.arccosh(np.exp(rho**2 / 2)) / rho
-    else:
-        return abs(optimize.minimize_scalar(_xi_loss, args=(d, rho)).x)
+    """
+        Xi value from optimization of `_xi_loss`.
+        When `d=1`, analytical form exists `xi = np.arccosh(np.exp(rho**2 / 2)) / rho`
+        but it is omitted to avoid overflow of `exp(rho^2 / 2)`
+    """
+    return abs(optimize.minimize_scalar(_xi_loss, args=(d, rho)).x)
 
 
 def _Xi(d, rho, d_unique=None):
     if np.isscalar(d):
         return _xi(d, rho)
     else:
-        d_unique = d_unique if d_unique else np.unique(d).ravel()
+        d_unique = d_unique if (d_unique is not None) else np.unique(d).ravel()
         xsi_kw = {di: _xi(di, rho) for di in d_unique}
         
         xsi = np.empty_like(d, dtype=float)
