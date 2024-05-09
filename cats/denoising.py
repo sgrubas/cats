@@ -26,8 +26,11 @@ from .core.clustering import concatenate_arrays_of_cluster_catalogs
 from .core.plottingutils import plot_traces
 from .io import read_data, convert_dict_to_stream
 
+# TODO:
+#   - denoise to/on files: support `obspy.Stream`
 
 # ------------------ CATS DENOISER API ------------------ #
+
 
 class CATSDenoiser(CATSBase):
     """
@@ -377,7 +380,7 @@ class CATSDenoisingResult(CATSResult):
         # update cluster id
         attr = "spectrogram_cluster_ID"
         if ((self_attr := getattr(self, attr, None)) is not None) and \
-                ((other_attr := getattr(other, attr, None)) is not None):
+            ((other_attr := getattr(other, attr, None)) is not None):
             shape = other_attr.shape[:-2]
             for ind in np.ndindex(shape):
                 other_attr[ind][other_attr[ind] > 0] += self_attr[ind].max()
