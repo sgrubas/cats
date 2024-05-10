@@ -35,8 +35,7 @@ The package was tested on Python 3.9. See other dependencies in [requirements.tx
 <img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDetection_CATS.png" width="500"/>
 
 ## Signal denoising with CATSDenoiser and CATSDenoiser_CWT
-<img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS.png" width="500"/>
-<img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS_CWT.png" width="500"/>
+<img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS.png" width="400"/><img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS_CWT.png" width="400"/>
 
 # Citation
 If you find CATS useful for your research, please cite our paper:
