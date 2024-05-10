@@ -19,7 +19,7 @@ from cats.core.utils import intervals_intersection, give_rectangles
 from cats.io import convert_stream_to_dict, convert_dict_to_stream
 
 
-class CATSDenoiser_CWT(BaseModel, extra=Extra.allow):
+class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
     """
         CATS denoising operator. Implements 4 main steps:
             1) CWT transform
@@ -63,7 +63,7 @@ class CATSDenoiser_CWT(BaseModel, extra=Extra.allow):
     cluster_distance_trace: int = Field(1, ge=1)
 
     # Misc
-    name: str = "CATSDenoiser_CWT"
+    name: str = "CATSDenoiserCWT"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -229,14 +229,14 @@ class CATSDenoiser_CWT(BaseModel, extra=Extra.allow):
 
         from_full_info = {kw: result.get(kw, None) for kw in full_info}
 
-        return CATS_CWTResult(dt_sec=self.dt_sec,
-                              npts=x.shape[-1],
-                              time_frames=result['time_frames'] * self.dt_sec,
-                              minSNR=self.minSNR,
-                              history=history,
-                              cluster_catalogs=result['cluster_catalogs'],
-                              main_params=self.export_main_params(),
-                              **from_full_info)
+        return CATSDenoiserCWTResult(dt_sec=self.dt_sec,
+                                     npts=x.shape[-1],
+                                     time_frames=result['time_frames'] * self.dt_sec,
+                                     minSNR=self.minSNR,
+                                     history=history,
+                                     cluster_catalogs=result['cluster_catalogs'],
+                                     main_params=self.export_main_params(),
+                                     **from_full_info)
 
     def denoise(self, x: np.ndarray,
                 /,
@@ -252,7 +252,7 @@ class CATSDenoiser_CWT(BaseModel, extra=Extra.allow):
         for dc in tqdm(data_chunks, desc='Data chunks', display=single_chunk):
             results.append(self._denoise(dc, verbose=verbose, full_info=full_info))
 
-        result = CATS_CWTResult.concatenate(*results)
+        result = CATSDenoiserCWTResult.concatenate(*results)
         setattr(result, "stats", stats)
         return result
 
@@ -411,7 +411,7 @@ class CATSDenoiser_CWT(BaseModel, extra=Extra.allow):
         return self.memory_chunks(self.memory_usage_estimate(x, full_info=full_info), to_file)
 
 
-class CATS_CWTResult(BaseModel):
+class CATSDenoiserCWTResult(BaseModel):
     signal: Any = None
     coefficients: Any = None
     spectrogram: Any = None
@@ -443,7 +443,7 @@ class CATS_CWTResult(BaseModel):
             return t0 + np.arange(time_slice.start, time_slice.stop) * dt_sec
 
     def time(self, time_interval_sec=None):
-        return CATS_CWTResult.base_time_func(self.npts, self.dt_sec, 0, time_interval_sec)
+        return CATSDenoiserCWTResult.base_time_func(self.npts, self.dt_sec, 0, time_interval_sec)
 
     def _plot(self, ind=None, time_interval_sec=None, SNR_spectrograms=True, show_frequency=True):
         t_dim = hv.Dimension('Time', unit='s')
