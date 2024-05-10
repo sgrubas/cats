@@ -148,7 +148,7 @@ def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mod
                 psd = psdl[i1: i2 + 1, j1: j2 + 1]
                 Sgm[k, i, j] = sgm = _DATE(psd.ravel(), xi_i, lamb_i, Nmin, original_mode)
 
-                snr = (psd > sgm * xi_i) * psd / (sgm + 1e-8)
+                snr = (psd > sgm * xi_i) * psd / (sgm + 1e-8)  # the fastest way so far
                 SNR[k, i1: i2 + 1, j1: j2 + 1] = snr
     return SNR, Sgm
 
