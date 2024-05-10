@@ -4,7 +4,7 @@ import pickle
 import zipfile
 from typing import Literal
 from cats import CATSDenoiser, CATSDetector
-from cats.misc import CATS_CWT
+from cats import CATSDenoiser_CWT
 
 
 def import_sample_data():
@@ -35,7 +35,7 @@ def load_pretuned_CATS(mode: Literal["detector", "denoiser"] = "denoiser",
     file = pkg_resources.resource_stream(__name__, f"pretuned/{filename}.pickle").name
 
     if mode == 'denoiser':
-        cats_model = CATSDenoiser.load(file) if not cwt else CATS_CWT.load(file)
+        cats_model = CATSDenoiser.load(file) if not cwt else CATSDenoiser_CWT.load(file)
     else:
         if cwt:
             raise ValueError("CWT modification is available only for `denoiser` mode")
