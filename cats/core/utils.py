@@ -189,14 +189,17 @@ def format_interval_by_limits(interval, limits):
         t1, t2 = limits
     else:
         t1, t2 = interval
-    interval = tuple(np.clip((t1, t2), *limits))
+
+    interval = tuple(map(lambda x: np.clip(x, *limits) if x is not None else x, (t1, t2)))
+    # interval = tuple(np.clip((t1, t2), *limits))
     return interval
 
 
 def give_index_slice_by_limits(interval, dt, t0=0):
     t1, t2 = interval
-    ind_slice = slice(round((t1 - t0) / dt), round((t2 - t0) / dt) + 1)
-    return ind_slice
+    start = t1 if t1 is None else round((t1 - t0) / dt)
+    end = t2 if t2 is None else round((t2 - t0) / dt) + 1
+    return slice(start, end)
 
 
 def cast_to_bool_dict(iterable: Union[bool, List[str], Tuple[str], Set[str], Dict[str, bool]],
