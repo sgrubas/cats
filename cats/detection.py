@@ -310,6 +310,7 @@ class CATSDetectionResult(CATSResult):
 
         stft_time = self.stft_time(time_interval_sec)
 
+        opts[-1].kwargs['ylim'] = (None, None)
         ref_kw_opts = opts[-1].kwargs
         t1, t2 = ref_kw_opts['xlim']
         likelihood = np.nan_to_num(self.likelihood[inds_stft],
