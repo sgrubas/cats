@@ -184,8 +184,10 @@ def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_
                                                                         Nmin, original_mode)
 
     # Removing everything out of the bandpass range
-    spectrogram_SNR_trimmed[..., :bandpass_slice.start, :] = 0.0
-    spectrogram_SNR_trimmed[..., bandpass_slice.stop:, :] = 0.0
+    b1 = bandpass_slice.start or 0
+    b2 = bandpass_slice.stop or -1
+    spectrogram_SNR_trimmed[..., :b1, :] = 0.0
+    spectrogram_SNR_trimmed[..., b2:, :] = 0.0
 
     # Removing spiky high-energy edges (edge effects)
     spectrogram_SNR_trimmed[..., :time_edge] = 0.0
@@ -195,6 +197,7 @@ def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_
 
 
 ########################################################################################
+
 
 def _SWEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Q, original_mode):
     """
