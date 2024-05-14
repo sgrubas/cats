@@ -19,14 +19,17 @@ from cats.core.utils import intervals_intersection, give_rectangles
 from cats.io import convert_stream_to_dict, convert_dict_to_stream
 
 
+# TODO:
+#   - simplify freq and scale grouping for BEDATE (transfer all misc operations to `.apply_BEDATE`)
+
+
 class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
     """
-        CATS denoising operator. Implements 4 main steps:
+        CATS denoising operator which implements:
             1) CWT transform
-            2) Noise estimation via B-E-DATE
-            3) Trimming spectrogram based minSNR
-            4) Clustering trimmed spectrogram
-            5) Inverse CWT transform (if `denoise` mode is chosen)
+            2) Noise estimation via B-E-DATE and spectrogram trimming
+            3) Clustering trimmed spectrogram
+            4) Inverse CWT transform
         """
     # main TF params
     dt_sec: float
@@ -34,7 +37,7 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
     scales_type: Union[Literal['log', 'log-piecewise', 'linear', 'log:maximal'],
                        tuple[float],
                        list[float]] = 'log'
-    nvoices: int = 16  # >= 16
+    nvoices: int = 16
     cwt_kwargs: dict = None
 
     # main B-E-DATE params
@@ -42,22 +45,22 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
     stationary_frame_sec: float = None
     # main Clustering params
     cluster_size_t_sec: float = 0.2
-    cluster_size_scales: int = Field(5, ge=1)
+    cluster_size_scale_octaves: float = 2.0
     cluster_distance_t_sec: float = None
-    cluster_distance_scales: int = Field(1, ge=1)
+    cluster_distance_scale_octaves: float = None
 
     # Extra CWT params
-    bandpass_scales: Union[tuple[int, int], Any] = None
+    bandpass_scale_octaves: Union[tuple[float, float], Any] = None
 
     # Extra B-E-DATE params
-    bedate_scales_grouping: int = 1
-    date_Q: float = 0.95
+    bedate_scale_grouping_octaves: float = None
+    date_Q: float = Field(0.95, gt=0.0, lt=1.0)
     date_Nmin_percentile: float = Field(0.25, gt=0.0, lt=0.5)
     date_original_mode: bool = False
 
     # Extra clustering params
     background_weight: float = 0.0
-    cluster_catalogs: bool = True
+    cluster_catalogs: bool = False
     clustering_multitrace: bool = False
     cluster_size_trace: int = Field(1, ge=1)
     cluster_distance_trace: int = Field(1, ge=1)
@@ -66,6 +69,31 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
     name: str = "CATSDenoiserCWT"
 
     def __init__(self, **kwargs):
+        """
+            Arguments:
+                dt_sec: int : data sampling rate in seconds
+                wavelet_type: str | tuple[str, dict] : mother wavelet
+                scales_type: str : type of scales distribution. 'Log' uses pow of `2`
+                nvoices: int : number of wavelet per octave, step `2**(1 / nv)`
+                cwt_kwargs: dict : additional kwargs for `ssqueezepy.cwt`
+                minSNR: float : minimum expected SNR of signal
+                stationary_frame_sec: float : length of stationary window in seconds where noise is stationary
+                cluster_size_t_sec: float : minimum size of clusters in time, seconds
+                cluster_size_scale_octaves: float : minimum size of clusters in scales, in octaves
+                cluster_distance_t_sec: float : minimum distance between clusters in time, seconds
+                cluster_distance_scale_octaves: float : minimum distance between clusters in scales, in octaves
+                bandpass_scales: tuple[float, float] : bandpass of scales (log2(scale_1), log2(scale_2))
+                bedate_scales_grouping: float : grouping multiple scales step, log2(scale)
+                date_Q: float : see `cats.CATSDenoiser`
+                date_Nmin_percentile: float : see `cats.CATSDenoiser`
+                date_original_mode: bool : see `cats.CATSDenoiser`
+                background_weight: float : weight for the removed background noise to include back.
+                cluster_catalogs: bool :  see `cats.CATSDenoiser`
+                clustering_multitrace: bool : see `cats.CATSDenoiser`
+                cluster_size_trace: int :  see `cats.CATSDenoiser`
+                cluster_distance_trace: int : see `cats.CATSDenoiser`
+                name: int : name of the denoiser
+        """
         super().__init__(**kwargs)
         self._set_params()
 
@@ -81,12 +109,23 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         self.stationary_frame_len = max(round(self.stationary_frame_sec / self.dt_sec), get_min_bedate_block_size())
         self.stationary_frame_sec = self.stationary_frame_len * self.dt_sec
 
+        # Bandpass by zeroing
+        self.bandpass_scale_octaves = format_interval_by_limits(self.bandpass_scale_octaves, (0, None))
+        if (self.bandpass_scale_octaves[0] is not None) and (self.bandpass_scale_octaves[1] is not None):
+            bandwidth = self.bandpass_scale_octaves[1] - self.bandpass_scale_octaves[0]
+            assert bandwidth > (css := self.cluster_size_scale_octaves), \
+                f"Scale bandwidth `{bandwidth}` must be bigger than min scale cluster size `{css}`"
+        self.bandpass_scale_slice = give_index_slice_by_limits(self.bandpass_scale_octaves, 1 / self.nvoices)
+
         # Clustering params
         self.cluster_size_t_len = max(round(self.cluster_size_t_sec / self.dt_sec), 1)
+        self.cluster_size_scale_len = max(round(self.cluster_size_scale_octaves * self.nvoices), 1)
         self.cluster_size_trace_len = self.cluster_size_trace
 
-        self.cluster_distance_t_sec = v if (v := self.cluster_distance_t_sec) is not None else self.dt_sec
+        self.cluster_distance_t_sec = self.cluster_distance_t_sec or self.dt_sec
         self.cluster_distance_t_len = max(round(self.cluster_distance_t_sec / self.dt_sec), 1)
+        self.cluster_distance_scale_octaves = self.cluster_distance_scale_octaves or 1 / self.nvoices
+        self.cluster_distance_scale_len = max(round(self.cluster_distance_scale_octaves * self.nvoices), 1)
         self.cluster_distance_trace_len = self.cluster_distance_trace
 
         self.time_edge = 2
@@ -96,8 +135,9 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         self.min_duration_sec = self.min_duration_len * self.dt_sec
         self.min_separation_sec = self.min_separation_len * self.dt_sec
 
-        self.bandpass_scales = self.bandpass_scales or (None, None)
-        self.bandpass_scales_slice = slice(*self.bandpass_scales)
+        # Grouping scales for BEDATE
+        self.bedate_scale_grouping_octaves = self.bedate_scale_grouping_octaves or 1 / self.nvoices
+        self.bedate_scale_grouping_len = max(round(self.bedate_scale_grouping_octaves * self.nvoices), 1)
 
     def export_main_params(self):
         return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
@@ -107,8 +147,8 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         return self.export_main_params()
 
     @classmethod
-    def from_result(cls, CATS_CWTResult):
-        return cls(**CATS_CWTResult.main_params)
+    def from_result(cls, CATSDenoiserCWTResult):
+        return cls(**CATSDenoiserCWTResult.main_params)
 
     def reset_params(self, **params):
         """
@@ -127,18 +167,19 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
 
     def apply_BEDATE(self, result_container, /):
 
-        scales_idx = np.arange(len(result_container['scales']))
-        bandpass_scales_slice = slice(self.bandpass_scales_slice.start or 0,
-                                      self.bandpass_scales_slice.stop or (scales_idx[-1] + 1))
-        scales_groups_index, scales_groups = group_frequency(scales_idx, self.bedate_scales_grouping, False)
-        bandpassed_scales_groups_slice = bandpass_frequency_groups(scales_groups_index, bandpass_scales_slice)
+        # grouping scales
+        scales_groups_index, scales_groups = group_frequency(result_container['scales'],
+                                                             self.bedate_scale_grouping_octaves,
+                                                             log_step=False)
+        bandpassed_scales_groups_slice = bandpass_frequency_groups(scales_groups_index, self.bandpass_scale_slice)
+        result_container["scale_groups"] = scales_groups
 
-        result_container["scales_groups"] = scales_groups
+        # BEDATE
         result_container['time_frames'] = get_interval_division(N=result_container['spectrogram'].shape[-1],
                                                                 L=self.stationary_frame_len)
         dim = 1 + np.iscomplexobj(result_container["coefficients"])  # checks if coefs are complex for dims
         T, STD, THR = BEDATE_trimming(result_container['spectrogram'], scales_groups_index,
-                                      bandpassed_scales_groups_slice, bandpass_scales_slice,
+                                      bandpassed_scales_groups_slice, self.bandpass_scale_slice,
                                       result_container['time_frames'], self.minSNR, self.time_edge,
                                       Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
                                       original_mode=self.date_original_mode, fft_base=False, dim=dim)
@@ -149,13 +190,13 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
 
     def apply_Clustering(self, result_container, /):
         mc = self.clustering_multitrace
-        q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_scales, self.cluster_distance_t_len)
-        s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_scales, self.cluster_size_t_len)
+        q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_scale_len, self.cluster_distance_t_len)
+        s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_scale_len, self.cluster_size_t_len)
         log_freq_cluster = (0.0, 0.0)
 
         result_container['spectrogram_SNR_clustered'] = np.zeros_like(result_container['spectrogram_SNR_trimmed'])
         result_container['spectrogram_cluster_ID'] = np.zeros(result_container['spectrogram_SNR_trimmed'].shape,
-                                                              dtype=np.uint32)
+                                                              dtype=np.int32)
 
         result_container['spectrogram_SNR_clustered'], result_container['spectrogram_cluster_ID'] = \
             Clustering(result_container['spectrogram_SNR_trimmed'], q=q, s=s, log_freq_cluster=log_freq_cluster)
@@ -314,7 +355,7 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         ft_shape = x.shape[:-1] + (scale_len, time_len)
         ft_size = np.prod(ft_shape)
 
-        bedate_shape = x.shape[:-1] + (scale_len // self.bedate_scales_grouping,
+        bedate_shape = x.shape[:-1] + (scale_len // self.bedate_scale_grouping_octaves,
                                        len(get_interval_division(N=time_len, L=self.stationary_frame_len)))
         bedate_size = np.prod(bedate_shape)
 
@@ -480,7 +521,7 @@ class CATSDenoiserCWTResult(BaseModel):
         scales_or_freqs = self.frequencies if show_frequency else self.scales
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=1)
         fig1 = hv.QuadMesh((time, scales_or_freqs, PSD), kdims=[t_dim, f_dim],
                            label='1. Amplitude spectrogram: $|X(t,f)|$').opts(clim=PSD_clims, clabel='Amplitude')
         fig2 = hv.QuadMesh((time, scales_or_freqs, SNR), kdims=[t_dim, f_dim],
@@ -498,7 +539,8 @@ class CATSDenoiserCWTResult(BaseModel):
         spectr_opts = hv.opts.QuadMesh(cmap=cmap, colorbar=True, logy=True, invert_yaxis=not show_frequency,
                                        xlim=xlim, ylim=ylim, norm='log',
                                        xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
-        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)
+        cylim = (1.1 * np.min(fig0.data[a_dim.name]), 1.1 * np.max(fig0.data[a_dim.name]))
+        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, ylim=cylim)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      title=layout_title, aspect_weight=0, sublabel_format='')
         inds_slices = (ind, i_time, i_time)
