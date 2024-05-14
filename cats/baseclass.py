@@ -132,7 +132,9 @@ Increase accuracy for multiple arrays of receivers on regular grid. Performs cro
                 date_Q : float : probability that sorted elements after certain `Nmin` have amplitude higher \
 than standard deviation. Used in Bienaymé–Chebyshev inequality to get `Nmin` to minimize cost of DATE. Default `0.95`
 
-                date_detection_mode : bool : `True` means NOT to use original implementation of DATE algorithm. \
+                date_Nmin_percentile : float : percentile of data to use as `Nmin` (see above `Q`), supersedes `date_Q`
+
+                date_original_mode : bool : `True` means NOT to use original implementation of DATE algorithm. \
 Original implementation assumes that if no outliers are found then standard deviation is estimated from `Nmin` \
 to not overestimate the noise. `True` implies that noise can be overestimated. It is beneficial if no outliers \
 are found, then no outliers will be present in the trimmed spectrogram.
@@ -172,7 +174,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                         get_min_bedate_block_size())
         self.stationary_frame_sec = self.stationary_frame_len * self.stft_hop_sec
 
-        # Clustering params
+        # Bandpass by zeroing
         self.freq_bandpass_Hz = format_interval_by_limits(self.freq_bandpass_Hz,
                                                           (self.stft_frequency[0], self.stft_frequency[-1]))
         self.freq_bandpass_Hz = (min(self.freq_bandpass_Hz), max(self.freq_bandpass_Hz))
@@ -180,6 +182,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
         assert (fbw := self.freq_bandwidth_Hz) > (csf := self.cluster_size_f_Hz), \
             f"Frequency bandpass width `{fbw}` must be bigger than min frequency cluster size `{csf}`"
         self.freq_bandpass_slice = give_index_slice_by_limits(self.freq_bandpass_Hz, self.STFT.df)
+
+        # Clustering params
         self.cluster_size_t_len = max(round(self.cluster_size_t_sec / self.stft_hop_sec), 1)
         self.cluster_size_f_len = max(round(self.cluster_size_f_Hz / self.STFT.df), 1)
         self.cluster_size_trace_len = self.cluster_size_trace
@@ -200,6 +204,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.min_duration_sec = self.min_duration_len * self.stft_hop_sec
         self.min_separation_sec = self.min_separation_len * self.stft_hop_sec
 
+        # BEDATE grouping
         self.bedate_freq_grouping_Hz = self.bedate_freq_grouping_Hz or self.stft_df
         self.bedate_log_freq_grouping = self.bedate_log_freq_grouping or 0.0
 
@@ -255,7 +260,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         result_container['spectrogram_SNR_clustered'] = np.zeros_like(result_container['spectrogram_SNR_trimmed'])
         result_container['spectrogram_cluster_ID'] = np.zeros(result_container['spectrogram_SNR_trimmed'].shape,
-                                                              dtype=np.uint32)
+                                                              dtype=np.int32)
 
         result_container['spectrogram_SNR_clustered'], result_container['spectrogram_cluster_ID'] = \
             Clustering(result_container['spectrogram_SNR_trimmed'], q=q, s=s, log_freq_cluster=log_freq_cluster)
@@ -451,7 +456,7 @@ class CATSResult(BaseModel):
         stft_time = self.stft_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
+                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=1)
         fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
                         label='1. Amplitude spectrogram: $|X(t,f)|$').opts(clim=PSD_clims, clabel='Amplitude')
         fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
@@ -467,7 +472,8 @@ class CATSResult(BaseModel):
         layout_title = str(self.stats[ind].starttime)if (self.stats is not None) else ''
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
-        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim)
+        cylim = (1.1 * np.min(fig0.data[a_dim.name]), 1.1 * np.max(fig0.data[a_dim.name]))
+        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, ylim=cylim)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      title=layout_title, aspect_weight=0, sublabel_format='')
         inds_slices = (ind, i_time, i_stft)
