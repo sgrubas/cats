@@ -24,7 +24,7 @@ def _Q_from_percentile(N, percentile):
 
 @nb.njit(["f8(f8[:], f8, f8, i8, b1)",
           "f4(f4[:], f8, f8, i8, b1)"], cache=True)
-def _DATE(Y, xi, lamb, Nmin, original_mode):
+def DATE(Y, xi, lamb, Nmin, original_mode):
     N = len(Y)
 
     Y_sort = np.sort(Y)
@@ -65,7 +65,7 @@ def _BEDATE(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mode):
             for j in nb.prange(n):  # iter over time frames
                 j1, j2 = time_frames[j]
                 psd = psdl[i1: i2 + 1, j1: j2 + 1].ravel()
-                Sgm[k, i, j] = _DATE(psd, xi_i, lamb_i, Nmin, original_mode)
+                Sgm[k, i, j] = DATE(psd, xi_i, lamb_i, Nmin, original_mode)
     return Sgm
 
 
@@ -146,7 +146,7 @@ def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mod
                 j1, j2 = time_frames[j]
 
                 psd = psdl[i1: i2 + 1, j1: j2 + 1]
-                Sgm[k, i, j] = sgm = _DATE(psd.ravel(), xi_i, lamb_i, Nmin, original_mode)
+                Sgm[k, i, j] = sgm = DATE(psd.ravel(), xi_i, lamb_i, Nmin, original_mode)
 
                 snr = (psd > sgm * xi_i) * psd / (sgm + 1e-8)  # the fastest way so far
                 SNR[k, i1: i2 + 1, j1: j2 + 1] = snr
@@ -154,17 +154,17 @@ def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mod
 
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
-def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_slice, bandpass_slice,
+def BEDATE_trimming(PSD, /, frequency_groups_indexes, bandpass_slice,
                     time_frames, minSNR, time_edge, Q=None, Nmin_percentile=None,
                     original_mode=False, fft_base=True, dim=2):
 
-    m, n = len(frequency_groups_index), len(time_frames)
-    groups_slice = bandpassed_frequency_groups_slice
+    groups_slice = bandpass_frequency_groups(frequency_groups_indexes, bandpass_slice)
+    m, n = len(frequency_groups_indexes), len(time_frames)
 
     # constants for B-E-DATE
     freq_dimensions = np.full(m, dim)
     if fft_base:
-        f_min, f_max = frequency_groups_index[0, 1], frequency_groups_index[-1, 0]
+        f_min, f_max = frequency_groups_indexes[0, 1], frequency_groups_indexes[-1, 0]
         if f_min == 0:  # zero frequency is 1-dim (real number)
             freq_dimensions[0] = 1
         if f_max == PSD.shape[-2] - 1:  # Nyquist's frequency is 1-dim (real number)
@@ -175,13 +175,13 @@ def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_
     Nmin = int(frame_len * Nmin_percentile) if Nmin_percentile else _Nmin(frame_len, Q)
 
     # The B-E-DATE trimming
-    bedate_slice = (..., groups_slice, slice(None))
+    bedate_ind = (..., groups_slice, slice(None))
     noise_std = np.zeros(PSD.shape[:-2] + (m, n), dtype=PSD.dtype)
-    spectrogram_SNR_trimmed, noise_std[bedate_slice] = _BEDATE_trimming(PSD, time_frames,
-                                                                        frequency_groups_index[groups_slice],
-                                                                        Xi[groups_slice],
-                                                                        Lambda[groups_slice],
-                                                                        Nmin, original_mode)
+    spectrogram_SNR_trimmed, noise_std[bedate_ind] = _BEDATE_trimming(PSD, time_frames,
+                                                                      frequency_groups_indexes[groups_slice],
+                                                                      Xi[groups_slice],
+                                                                      Lambda[groups_slice],
+                                                                      Nmin, original_mode)
 
     # Removing everything out of the bandpass range
     b1 = bandpass_slice.start or 0
@@ -189,7 +189,7 @@ def BEDATE_trimming(PSD, /, frequency_groups_index, bandpassed_frequency_groups_
     spectrogram_SNR_trimmed[..., :b1, :] = 0.0
     spectrogram_SNR_trimmed[..., b2:, :] = 0.0
 
-    # Removing spiky high-energy edges (edge effects)
+    # Removing edge effects
     spectrogram_SNR_trimmed[..., :time_edge] = 0.0
     spectrogram_SNR_trimmed[..., -time_edge - 1:] = 0.0
 
@@ -307,24 +307,47 @@ def EtaToSigma(eta, rho):
 
 # UTILS #
 
-def group_frequency(frequency, freq_step, log_step=False):
+
+def divide_into_groups(num_freqs, group_step, is_octaves_step=False, fft_base=True):
+
+    if is_octaves_step:
+        grouped_index = get_logarithmic_interval_division(num_freqs, group_step, log_base=2)
+    else:
+        grouped_index = get_interval_division(num_freqs, group_step)
+
+    if fft_base:
+        # Zero frequency is separated due to dimensionality (it is real, others are complex)
+        if (not is_octaves_step) and (grouped_index[0, 1] != 0):
+            grouped_index[0, 0] = 1
+            grouped_index = np.r_[[[0, 0]], grouped_index]
+
+        # Nyquist's frequency is separated due to dimensionality (it is real, others are complex)
+        if grouped_index[-1, 0] != num_freqs - 1:
+            grouped_index[-1, 1] = num_freqs - 2
+            grouped_index = np.r_[grouped_index, [[num_freqs - 1, num_freqs - 1]]]
+
+    return grouped_index
+
+
+def group_frequency(frequency, freq_step, log_step=False, fft_base=True):
     Nf = len(frequency)
     df = frequency[1] - frequency[0]
     if log_step:
-        grouped_index = get_logarithmic_interval_division(Nf, freq_step, 10)
+        grouped_index = get_logarithmic_interval_division(Nf, freq_step, 2)
     else:
         Ndf = max(round(freq_step / df), 1)
         grouped_index = get_interval_division(Nf, Ndf)
 
-    # Zero frequency is separated due to dimensionality
-    if (not log_step) and (grouped_index[0, 1] != 0):
-        grouped_index[0, 0] = 1
-        grouped_index = np.r_[[[0, 0]], grouped_index]
+    if fft_base:
+        # Zero frequency is separated due to dimensionality (it is real, others are complex)
+        if (not log_step) and (grouped_index[0, 1] != 0):
+            grouped_index[0, 0] = 1
+            grouped_index = np.r_[[[0, 0]], grouped_index]
 
-    # Nyquist's frequency is separated due to dimensionality
-    if grouped_index[-1, 0] != Nf - 1:
-        grouped_index[-1, 1] = Nf - 2
-        grouped_index = np.r_[grouped_index, [[Nf - 1, Nf - 1]]]
+        # Nyquist's frequency is separated due to dimensionality (it is real, others are complex)
+        if grouped_index[-1, 0] != Nf - 1:
+            grouped_index[-1, 1] = Nf - 2
+            grouped_index = np.r_[grouped_index, [[Nf - 1, Nf - 1]]]
 
     grouped_frequency = frequency[grouped_index]
     return grouped_index, grouped_frequency
