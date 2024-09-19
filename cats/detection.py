@@ -5,7 +5,7 @@
         CATSDetectionResult : keeps all the results and can plot sample trace with step-by-step visualization
 """
 
-from typing import Callable, Union, Tuple, List, Any
+from typing import Union, Tuple, List, Any
 
 import holoviews as hv
 import numpy as np
@@ -15,13 +15,11 @@ import obspy
 import datetime
 
 from .baseclass import CATSBase, CATSResult
-from .core.association import PickDetectedPeaks
-from .core.projection import FilterIntervalsFromClusterLabels
-from .core.clustering import concatenate_arrays_of_cluster_catalogs
-from .core.utils import cast_to_bool_dict, del_vals_by_keys, give_rectangles, to2d_array_with_num_columns
-from .core.utils import format_index_by_dimensions, give_index_slice_by_limits, intervals_intersection, StatusKeeper
-from .core.utils import aggregate_array_by_axis_and_func, format_interval_by_limits, make_default_index_on_axis
-from .core.plottingutils import plot_traces
+# from .core.association import PickDetectedPeaks
+from .core.projection import IntervalsFeaturesFromCatalogs
+from .core.utils import del_vals_by_keys, give_rectangles, to2d_array_with_num_columns, make_default_index_if_outrange
+from .core.utils import give_index_slice_by_limits, intervals_intersection, StatusKeeper
+from .core.clustering import index_cluster_catalog
 from .io import read_data
 
 
@@ -34,36 +32,30 @@ class CATSDetector(CATSBase):
     """
         Detector of events based on Cluster Analysis of Trimmed Spectrograms
     """
-    aggregate_axis_for_likelihood: Union[int, Tuple[int]] = None
-    aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
 
-    def apply_Likelihood(self, result_container, /, bandpass_slice, full_info):
-        # Aggregation
-        counts = np.count_nonzero(result_container['spectrogram_SNR_clustered'][bandpass_slice], axis=-2)
-        counts = np.where(counts == 0, 1, counts).astype(result_container['spectrogram_SNR_clustered'].dtype)
+    def apply_Projection(self, result_container, /, bandpass_slice, full_info):
+        if full_info.get("likelihood", False):
+            # Project SNR on time axis
+            SNR, CID = (result_container['spectrogram_SNR_trimmed_aggr'][bandpass_slice],
+                        result_container['spectrogram_cluster_ID'][bandpass_slice])
+            # counts = np.count_nonzero(clustered, axis=-2)
+            # counts[counts == 0] = 1  # normalization by number of nonzero elements, not by all frequencies
+            result_container['likelihood'] = (SNR * (CID > 0)).sum(axis=-2)  # removed the normalization, for simplicity
 
-        result_container['likelihood'] = \
-            result_container['spectrogram_SNR_clustered'][bandpass_slice].sum(axis=-2) / counts
+        # Extracts intervals of events
+        shape = result_container['spectrogram_cluster_ID'].shape
+        shape = shape[:-2] + shape[-1:]
+        intervals, features = IntervalsFeaturesFromCatalogs(full_shape=shape,
+                                                            cluster_catalogs=result_container['cluster_catalogs'],
+                                                            dt_sec=self.stft_hop_sec)
 
-        del counts
-        del_vals_by_keys(result_container, full_info, ['spectrogram_SNR_clustered'])
+        result_container['detected_intervals'] = intervals
+        result_container['picked_features'] = features
 
-        result_container['likelihood'] = aggregate_array_by_axis_and_func(result_container['likelihood'],
-                                                                          self.aggregate_axis_for_likelihood,
-                                                                          self.aggregate_func_for_likelihood,
-                                                                          min_last_dims=1)
-
-    def apply_Intervals(self, result_container, /, full_info, t0):
-        result_container['detection'], result_container['detected_intervals'] = \
-            FilterIntervalsFromClusterLabels(result_container['spectrogram_cluster_ID'].max(axis=-2))
-
-        del_vals_by_keys(result_container, full_info, ['spectrogram_cluster_ID'])
-
-        result_container['picked_features'] = PickDetectedPeaks(result_container['likelihood'],
-                                                                result_container['detected_intervals'],
-                                                                dt=self.stft_hop_sec, t0=t0)
-
-        result_container['detected_intervals'] = result_container['detected_intervals'] * self.stft_hop_sec + t0
+        # result_container['picked_features'] = PickDetectedPeaks(result_container['likelihood'],
+        #                                                         result_container['detected_intervals'],
+        #                                                         dt=self.stft_hop_sec, t0=t0)
+        # result_container['detected_intervals'] = result_container['detected_intervals'] * self.stft_hop_sec + t0
 
     def _detect(self, x, /, verbose=False, full_info=False):
         full_info = self.parse_info_dict(full_info)
@@ -83,41 +75,44 @@ class CATSDetector(CATSBase):
         # B-E-DATE
         self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
                         process_name='B-E-DATE trimming')
-        del_vals_by_keys(result, full_info, ['spectrogram', 'noise_std', 'noise_threshold_conversion'])
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed',
+                                             'noise_std', 'noise_threshold_conversion'])
 
         # Clustering
         self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
                         process_name='Clustering')
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed'])
 
-        # Likelihood projection
-        self.apply_func(func_name='apply_Likelihood', result_container=result, status_keeper=history,
-                        process_name='Likelihood', bandpass_slice=bandpass_slice, full_info=full_info)
+        # Cluster catalog
+        self.cluster_catalogs_opts.setdefault('update_cluster_ID', False)
+        self.apply_func(func_name='apply_ClusterCatalogs', result_container=result,
+                        tf_time=stft_time, frequencies=self.stft_frequency, status_keeper=history,
+                        process_name='Cluster catalog')
+        del_vals_by_keys(result, full_info, ['spectrogram'])
 
-        # Detecting intervals
-        self.apply_func(func_name='apply_Intervals', result_container=result, status_keeper=history,
-                        process_name='Detecting intervals', full_info=full_info, t0=stft_time[0])
-
-        del_vals_by_keys(result, full_info, ['likelihood', 'detection', 'detected_intervals', 'picked_features'])
+        # Projecting intervals
+        self.apply_func(func_name='apply_Projection', result_container=result, status_keeper=history,
+                        process_name='Projecting intervals', bandpass_slice=bandpass_slice, full_info=full_info)
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed_aggr', 'spectrogram_cluster_ID',
+                                             'likelihood', 'detection', 'cluster_catalogs'])
 
         history.print_total_time()
 
         from_full_info = {kw: result.get(kw, None) for kw in full_info}
 
-        return CATSDetectionResult(dt_sec=self.dt_sec,
-                                   stft_dt_sec=self.stft_hop_sec,
-                                   stft_t0_sec=stft_time[0],
-                                   npts=x.shape[-1],
-                                   stft_npts=len(stft_time),
-                                   stft_frequency=self.stft_frequency,
-                                   time_frames=result['time_frames'] * self.stft_hop_sec + stft_time[0],
-                                   minSNR=self.minSNR,
-                                   history=history,
-                                   aggregate_axis_for_likelihood=self.aggregate_axis_for_likelihood,
-                                   cluster_catalogs=result['cluster_catalogs'],
-                                   frequency_groups=self.frequency_groups,
-                                   main_params=self.export_main_params(),
-                                   **from_full_info)
+        result = CATSDetectionResult(dt_sec=self.dt_sec,
+                                     tf_dt_sec=self.stft_hop_sec,
+                                     tf_t0_sec=stft_time[0],
+                                     time_npts=x.shape[-1],
+                                     tf_time_npts=len(stft_time),
+                                     frequencies=self.stft_frequency,
+                                     time_frames=result['time_frames'] * self.stft_hop_sec + stft_time[0],
+                                     minSNR=self.minSNR,
+                                     history=history,
+                                     frequency_groups_indexes=self.frequency_groups_indexes,
+                                     main_params=self.main_params(),
+                                     **from_full_info)
+
+        return result
 
     def detect(self, x: np.ndarray,
                /,
@@ -131,7 +126,8 @@ class CATSDetector(CATSBase):
                 x : np.ndarray (..., N) : input data with any number of dimensions, but the last axis `N` must be Time.
                 verbose : bool : whether to print status and timing
                 full_info : bool / str / List[str] : whether to save workflow stages for further quality control.
-                        If `True`, then all stages are saved, if `False` then only the `detection` is saved.
+                        If `True`, then all stages are saved, if `False` then only the `detected_intervals' &
+                        'picked_features` are saved.
                         If string "plot" or "plt" is given, then only stages needed for plotting are saved.
                         Available workflow stages, if any is listed then saved to result:
                             - "signal" - input signal
@@ -140,10 +136,8 @@ class CATSDetector(CATSBase):
                             - "noise_std" - noise level, standard deviation
                             - "noise_threshold_conversion" - conversion to threshold from `noise_std`
                             - "spectrogram_SNR_trimmed" - `spectrogram / noise_std` trimmed by `noise_threshold`
-                            - "spectrogram_SNR_clustered" - clustered `spectrogram_SNR_trimmed`
                             - "spectrogram_cluster_ID" - cluster indexes on `spectrogram_SNR_clustered`
                             - "likelihood" - projected `spectrogram_SNR_clustered`
-                            - "detection" - binary classification [noise / signal]
                             - "detected_intervals" - detected intervals (start, end) in seconds (always returned)
                             - "picked_features" - features in intervals [onset, peak likelihood] (always returned)
         """
@@ -160,35 +154,27 @@ class CATSDetector(CATSBase):
         setattr(result, "stats", stats)
         return result
 
-    def __mul__(self, x):
-        return self.detect(x, verbose=False, full_info=False)
+    def apply(self, x: Union[np.ndarray, obspy.Stream],
+              /,
+              verbose: bool = False,
+              full_info: Union[bool, str, List[str]] = False):
+        """ Alias of `.detect`. For compatibility with CATSBase """
+        return self.detect(x, verbose=verbose, full_info=full_info)
 
-    def __pow__(self, x):
-        return self.detect(x, verbose=True, full_info='qc')
+    @classmethod
+    def get_all_keys(cls):
+        return super(cls, cls).get_all_keys() + ["likelihood", "detection", "detected_intervals", "picked_features"]
 
-    def __matmul__(self, x):
-        return self.detect(x, verbose=True, full_info=True)
+    @classmethod
+    def get_qc_keys(cls):
+        return super(cls, cls).get_qc_keys() + ["likelihood", "detected_intervals", "picked_features"]
 
-    @staticmethod
-    def get_qc_keys():
-        return ["signal", "spectrogram", "spectrogram_SNR_trimmed", "spectrogram_SNR_clustered",
-                "likelihood", "detected_intervals", "picked_features"]
-
-    def parse_info_dict(self, full_info):
-        info_keys = self._info_keys()
-        info_keys.extend(["likelihood", "detection", "detected_intervals", "picked_features"])
-        if isinstance(full_info, str) and \
-           (full_info in ['plot', 'plotting', 'plt', 'qc', 'main']):  # only those needed for plotting step-by-step
-            full_info = self.get_qc_keys()
-
-        full_info = cast_to_bool_dict(full_info, info_keys)
-
-        full_info["detected_intervals"] = True  # default saved result
-        full_info["picked_features"] = True     # default saved result
-
-        return full_info
+    @classmethod
+    def get_default_keys(cls):
+        return super(cls, cls).get_default_keys() + ['cluster_catalogs', 'detected_intervals', 'picked_features']
 
     def memory_usage_estimate(self, x, /, full_info=False):
+        # TODO: review changes related to cluster catalogs
         memory_usage_bytes, used_together = self._memory_usage(x)
         full_info = self.parse_info_dict(full_info)
 
@@ -196,12 +182,11 @@ class CATSDetector(CATSBase):
         stft_time_len = len(self.STFT.forward_time_axis(x.shape[-1]))
 
         likelihood_shape = x.shape[:-1] + (stft_time_len,)
-        likelihood_size = np.prod(likelihood_shape)
+        likelihood_size = np.prod(np.float64(likelihood_shape))
 
-        aggregated_axis_len = x.shape[ax] if (ax := self.aggregate_axis_for_likelihood) is not None else 1
         n, mod = divmod(stft_time_len, self.min_duration_len + self.min_separation_len)
         num_intervals = n + mod // self.min_duration_len  # upper bound estimate
-        intervals_size = 2 * np.prod(x.shape[:-1]) / aggregated_axis_len * num_intervals
+        intervals_size = 2 * np.prod(np.float64(x.shape[:-1])) * num_intervals
 
         memory_usage_bytes_new = {
             "likelihood":         1. * precision_order * likelihood_size,   # float
@@ -211,9 +196,9 @@ class CATSDetector(CATSBase):
         }
         memory_usage_bytes.update(memory_usage_bytes_new)
 
-        used_together.append(('spectrogram_SNR_clustered', 'spectrogram_cluster_ID', 'likelihood'))
+        used_together.append(('spectrogram_cluster_ID', 'likelihood'))
         used_together.append(("likelihood", "detection", "picked_features", "detected_intervals"))
-        base_info = ["signal", "stft_frequency", "time_frames"]
+        base_info = ["signal", "frequencies", "time_frames"]
 
         return self.memory_info(memory_usage_bytes, used_together, base_info, full_info)
 
@@ -292,53 +277,91 @@ class CATSDetectionResult(CATSResult):
     detection: Any = None
     detected_intervals: Any = None
     picked_features: Any = None
-    aggregate_axis_for_likelihood: int = None
+
+    @classmethod
+    def get_qc_keys(cls):
+        return CATSDetector.get_qc_keys()
 
     def plot(self,
              ind: Tuple[int] = None,
              time_interval_sec: Tuple[float] = None,
-             SNR_spectrograms: bool = True):
+             SNR_spectrograms: bool = False,
+             interactive: bool = False,
+             **kwargs):
 
-        fig, opts, inds_slices, time_interval_sec = super().plot(ind, time_interval_sec, SNR_spectrograms)
-        t_dim = hv.Dimension('Time', unit='s')
+        fig, opts, inds_slices, time_interval_sec = super().plot(ind=ind,
+                                                                 time_interval_sec=time_interval_sec,
+                                                                 SNR_spectrograms=SNR_spectrograms,
+                                                                 interactive=interactive,
+                                                                 frequencies=self.frequencies)
+
+        t_dim, a_dim = fig[0].dimensions()  # get dim params (no matter what fig index)
         L_dim = hv.Dimension('Likelihood')
+        t1, t2 = time_interval_sec
 
-        ind = inds_slices[0]
-        if (ax := self.aggregate_axis_for_likelihood) is not None:
-            ind = make_default_index_on_axis(ind, ax, 0)
-        inds_stft = ind + (inds_slices[2],)
+        aggr_ind = make_default_index_if_outrange(inds_slices[0], self.likelihood.shape[:-1], default_ind_value=0)
+        inds_stft = aggr_ind + (inds_slices[2],)
 
-        stft_time = self.stft_time(time_interval_sec)
+        stft_time = self.tf_time(time_interval_sec)
 
-        opts[-1].kwargs['ylim'] = (None, None)
-        ref_kw_opts = opts[-1].kwargs
-        t1, t2 = ref_kw_opts['xlim']
-        likelihood = np.nan_to_num(self.likelihood[inds_stft],
-                                   posinf=1e8, neginf=-1e8)  # POSSIBLE `NAN` AND `INF` VALUES!
-        likelihood_fig = hv.Curve((stft_time, likelihood),
-                                  kdims=[t_dim], vdims=L_dim)
+        likelihood = np.nan_to_num(self.likelihood[inds_stft], posinf=1e8, neginf=-1e8)  # POSSIBLE `NAN` AND `INF`
 
-        P = self.picked_features[ind]
-        P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
-        peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
-        peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim).opts(marker='D', color='r')
+        # Likelihood curve
+        likelihood_fig = hv.Curve((stft_time, likelihood), kdims=[t_dim], vdims=L_dim)
 
-        intervals = intervals_intersection(self.detected_intervals[ind], (t1, t2))
+        # Arrivals
+        cluster_catalogs = getattr(self, 'cluster_catalogs', None)
+        catalog = index_cluster_catalog(cluster_catalogs, aggr_ind) if (cluster_catalogs is not None) else None
+        arrivals_figs = []
+        if catalog is not None:
+            vals = catalog.get(['Time_first_arrival_sec', 'Time_strong_arrival_sec'], None)
+            vals = catalog.get('Time_peak_sec', None) if vals is None else vals
+
+            mpl_vlines_opts = hv.opts.VLine(color='black', linewidth=2, backend='matplotlib')
+            bkh_vlines_opts = hv.opts.VLine(color='black', line_width=2, backend='bokeh')
+            vlines_opts = (mpl_vlines_opts, bkh_vlines_opts)
+            if vals is not None:
+                A = vals.values.flatten()
+                A = A[(t1 <= A) & (A <= t2)]
+                arrivals_figs += [hv.VLine(ai, kdims=[t_dim, L_dim]).opts(*vlines_opts)
+                                  for ai in A]
+
+        # Picks stems
+        # P = self.picked_features[aggr_ind]
+        # P = P[(t1 <= P[..., 0]) & (P[..., 0] <= t2)]
+        # peaks_fig = hv.Spikes(P, kdims=t_dim, vdims=L_dim)
+        # peaks_fig = peaks_fig * hv.Scatter(P, kdims=t_dim, vdims=L_dim)
+        #
+        # mpl_scatter_opts = hv.opts.Scatter(marker='D', color='red', s=20, backend='matplotlib')
+        # bkh_scatter_opts = hv.opts.Scatter(marker='diamond', color='red', size=6, backend='bokeh')
+        # peaks_fig = peaks_fig.opts(mpl_scatter_opts, bkh_scatter_opts)
+
+        # Interval boxes
+        intervals = intervals_intersection(self.detected_intervals[aggr_ind], (t1, t2))
 
         interv_height = (np.max(likelihood) / 2) * 1.1
         rectangles = give_rectangles([intervals], [interv_height], interv_height)
-        intervals_fig = hv.Rectangles(rectangles,
-                                      kdims=[t_dim, L_dim, 't2', 'l2']).opts(color='blue',
-                                                                             linewidth=0,
-                                                                             alpha=0.2)
-        snr_level_fig = hv.HLine(self.minSNR, kdims=[t_dim, L_dim]).opts(color='k', linestyle='--', alpha=0.7)
+        intervals_fig = hv.Rectangles(rectangles, kdims=[t_dim, L_dim, 't2', 'l2'])
 
-        last_figs = [intervals_fig, snr_level_fig, likelihood_fig, peaks_fig]
+        intv_tooltips = [("Start", "@Time"), ("End", "@t2")]
+        mpl_rects_opts = hv.opts.Rectangles(alpha=0.2, color='blue', linewidth=0, backend='matplotlib')
+        bkh_rects_opts = hv.opts.Rectangles(alpha=0.2, color='blue', line_width=0, hover_tooltips=intv_tooltips,
+                                            tools=['hover'], backend='bokeh')
+        intervals_fig = intervals_fig.opts(mpl_rects_opts, bkh_rects_opts)
 
-        fig4 = hv.Overlay(last_figs, label='4. Likelihood and Detection: '
-                                           '$\mathcal{L}(t)$ and $\mathcal{D}(t)$').opts(**ref_kw_opts)
+        # Final fig with likelihood, picks and boxes
+        last_figs = [likelihood_fig, intervals_fig] + arrivals_figs
+        fig4 = hv.Overlay(last_figs, label=r'4. Likelihood and Detection: $\mathcal{L}(t)$ and $\tilde{\alpha}(t)$')
+        lmax = 1.1 * np.max(likelihood)
+        cylim = (-0.02 * lmax, lmax)
+        overlay_opts = (hv.opts.Overlay(ylim=cylim, backend='matplotlib'),
+                        hv.opts.Overlay(ylim=cylim, height=int(opts[1].kwargs['height'] * 1.15), backend='bokeh'))
+        fig4 = fig4.opts(*opts[:2]).opts(*overlay_opts)
 
-        return (fig + fig4).opts(*opts).cols(1)
+        # Output
+        fig = (fig + fig4).opts(*opts).cols(1)
+        # fig = (fig + fig4).opts(*opts[-2:]).cols(1)  # apply layout opts
+        return fig
 
     def plot_traces(self,
                     ind: Tuple[int] = None,
@@ -350,82 +373,52 @@ class CATSDetectionResult(CATSResult):
                     clip: bool = False,
                     each_trace: int = 1,
                     amplitude_scale: float = None,
+                    interactive: bool = False,
+                    allow_picking: bool = False,
                     **kwargs):
 
-        ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=1, default_ind=0)
-        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
-        i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
-        traces = self.signal[ind + (i_time,)]
-
-        if (ax := self.aggregate_axis_for_likelihood) is not None:
-            if ax < len(ind):
-                ind = make_default_index_on_axis(ind, ax, 0)
-
-        detected_intervals = getattr(self, 'detected_intervals', None) if intervals else None
-        if detected_intervals is not None:
-            detected_intervals = detected_intervals[ind]
-
-        picked_features = getattr(self, 'picked_features', None) if picks else None
-        if picked_features is not None:
-            pf = picked_features[ind]
-            picked_onsets = np.empty(pf.shape, dtype=object)
-            for i, pi in np.ndenumerate(pf):
-                picked_onsets[i] = pi[..., 0]
-        else:
-            picked_onsets = None
-
-        fig = plot_traces(traces, self.time(time_interval_sec),
-                          intervals=detected_intervals, picks=picked_onsets, associated_picks=None,
-                          trace_loc=trace_loc, time_interval_sec=time_interval_sec, gain=gain, clip=clip,
-                          each_trace=each_trace, amplitude_scale=amplitude_scale, **kwargs)
-
-        ind_ref = (0,) * len(traces.shape[:-1])
-        layout_title = str(self.stats[ind_ref].starttime) if (self.stats is not None) else ''
-        fig = fig.opts(aspect=2, title=layout_title)
+        fig = super().plot_traces(signal=self.signal,
+                                  ind=ind,
+                                  time_interval_sec=time_interval_sec,
+                                  intervals=intervals,
+                                  picks=picks,
+                                  trace_loc=trace_loc,
+                                  gain=gain,
+                                  clip=clip,
+                                  each_trace=each_trace,
+                                  amplitude_scale=amplitude_scale,
+                                  interactive=interactive,
+                                  allow_picking=allow_picking,
+                                  **kwargs)
         return fig
 
-    def append(self, other):
-        concat_attrs = ["signal",
-                        "coefficients",
-                        "spectrogram",
-                        "noise_std",
-                        "spectrogram_SNR_trimmed",
-                        "spectrogram_SNR_clustered",
-                        "spectrogram_cluster_ID",
-                        "likelihood",
-                        "detection"]
+    def filter_and_update_result(self, cluster_catalogs_filter):
+        super().filter_and_update_result(cluster_catalogs_filter)
+        # TODO:
+        #   - update intervals
 
-        # update cluster id
-        attr = "spectrogram_cluster_ID"
-        if ((self_attr := getattr(self, attr, None)) is not None) and \
-                ((other_attr := getattr(other, attr, None)) is not None):
-            shape = other_attr.shape[:-2]
-            for ind in np.ndindex(shape):
-                other_attr[ind][other_attr[ind] > 0] += self_attr[ind].max()
-            setattr(other, attr, other_attr)
+    @property
+    def _concat_attr_list(self):
+        return super()._concat_attr_list + ["likelihood", "detection", "detected_intervals", "picked_features"]
 
-        for name in concat_attrs:
-            self._concat(other, name, -1)
+    @property
+    def _update_funcs_before_concat(self):
+        return super()._update_funcs_before_concat + [self._update_intervals_and_features]
 
-        t0 = self.time_frames[-1, -1] + self.stft_dt_sec
+    def _update_intervals_and_features(self, other):
+        attrs = ["detected_intervals", "picked_features"]
+        t0 = self.get_t0_for_append()
 
-        self._concat(other, "time_frames", 0, t0)
-        self._concat(other, "detected_intervals", -2, t0)
-        self._concat(other, "picked_features", -2, t0, (..., 0))
-
-        self.cluster_catalogs = concatenate_arrays_of_cluster_catalogs(self.cluster_catalogs,
-                                                                       other.cluster_catalogs, t0)
-
-        self.npts += other.npts
-        self.stft_npts += other.stft_npts
-
-        self.history.merge(other.history)
-
-        assert self.minSNR == other.minSNR
-        assert self.dt_sec == other.dt_sec
-        assert self.stft_dt_sec == other.stft_dt_sec
-        assert np.all(self.stft_frequency == other.stft_frequency)
-        assert np.all(self.noise_threshold_conversion == other.noise_threshold_conversion)
+        for attr in attrs:
+            self_attr = getattr(self, attr, None)
+            other_attr = getattr(other, attr, None)
+            if (self_attr is not None) and (other_attr is not None):
+                if attr == 'detected_intervals':
+                    other_attr += t0
+                else:
+                    shape = other_attr.shape
+                    for ind in np.ndindex(shape):
+                        other_attr[ind][..., 0] += t0  # onset time increment
 
     @staticmethod
     def convert_dict_to_attributes(mdict):
@@ -456,20 +449,21 @@ class CATSDetectionResult(CATSResult):
             post_time_sec = d_intv if auto_post else post_time_sec
             ext_intv[:, 0] -= pre_time_sec
             ext_intv[:, 1] += post_time_sec
-            extended_intervals[ind] = np.clip(ext_intv, 0.0, (self.npts - 1) * self.dt_sec)
+            extended_intervals[ind] = np.clip(ext_intv, 0.0, (self.time_npts - 1) * self.dt_sec)
         return extended_intervals
 
     def slice_input_traces(self, reference_traces=None, pre_time_sec=None, post_time_sec=None):
+        signal = self.signal if reference_traces is None else reference_traces
         extended_intervals = self.extend_detected_intervals(pre_time_sec, post_time_sec)
-        shape = extended_intervals.shape
+        shape = signal.shape[:-1]
         start_time_sec = np.empty(shape, dtype=object)
         sliced_traces = np.empty(shape, dtype=object)
-        signal = self.signal if reference_traces is None else reference_traces
         convert_ind = lambda intv: give_index_slice_by_limits(intv, self.dt_sec)
         for ind in np.ndindex(shape):
+            intv_ind = make_default_index_if_outrange(ind, extended_intervals.shape, default_ind_value=0)
             sliced_traces[ind] = np.array([signal[ind][convert_ind(intv)]
-                                           for intv in extended_intervals[ind]], dtype=object)
-            start_time_sec[ind] = extended_intervals[ind][:, 0]
+                                           for intv in extended_intervals[intv_ind]], dtype=object)
+            start_time_sec[ind] = extended_intervals[intv_ind][:, 0]
         return sliced_traces, start_time_sec
 
     def write_sliced_traces(self, sliced_traces, start_time_sec, folder=None, prefix_name=None,
