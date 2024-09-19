@@ -10,8 +10,8 @@ from tqdm.notebook import tqdm
 import numpy as np
 import numba as nb
 from scipy.signal import find_peaks
-from scipy.spatial import KDTree
-import networkx as nx
+# from scipy.spatial import KDTree
+# import networkx as nx
 from .utils import ReshapeArraysDecorator
 
 
@@ -100,19 +100,20 @@ def NonlinearPairAssignment(vec1, vec2, threshold, order):
 
 
 def MinWeightPairs(sequence1, sequence2, max_dist, p):
-    kd_tree1 = KDTree(sequence1)
-    kd_tree2 = KDTree(sequence2)
-    n1 = len(sequence1)
-
-    D = kd_tree1.sparse_distance_matrix(kd_tree2, max_dist, p=p, output_type='coo_matrix')
-    G = nx.bipartite.from_biadjacency_matrix(D)
-    min_edges = nx.min_weight_matching(G)
-    del D, G
-    pairs = []
-    for p in min_edges:
-        i, j = sorted(p)
-        pairs.append((i, j - n1))
-    return pairs
+    raise NotImplementedError("This function has not been fully implemented")
+    # kd_tree1 = KDTree(sequence1)
+    # kd_tree2 = KDTree(sequence2)
+    # n1 = len(sequence1)
+    #
+    # D = kd_tree1.sparse_distance_matrix(kd_tree2, max_dist, p=p, output_type='coo_matrix')
+    # G = nx.bipartite.from_biadjacency_matrix(D)
+    # min_edges = nx.min_weight_matching(G)
+    # del D, G
+    # pairs = []
+    # for p in min_edges:
+    #     i, j = sorted(p)
+    #     pairs.append((i, j - n1))
+    # return pairs
 
 
 def MinWeightBipartiteMatching(sequence1, sequence2, max_dist, order, method='manual'):
@@ -244,8 +245,10 @@ def PickFeatures(likelihood, /, *features, time, min_likelihood, min_width_sec, 
     return feature_sequences
 
 
-@nb.njit(["f8[:, :](f8[:], i8[:, :], f8, f8)", "f4[:, :](f4[:], i8[:, :], f8, f8)",
-          "f8[:, :](f8[:], i4[:, :], f8, f8)", "f4[:, :](f4[:], i4[:, :], f8, f8)"],
+@nb.njit(["f8[:, :](f8[:], i8[:, :], f8, f8)",
+          "f4[:, :](f4[:], i8[:, :], f8, f8)",
+          "f8[:, :](f8[:], i4[:, :], f8, f8)",
+          "f4[:, :](f4[:], i4[:, :], f8, f8)"],
          parallel=True, cache=True)
 def pick_detected_peaks(likelihood, intervals, dt, t0):
     features = np.zeros(intervals.shape, dtype=likelihood.dtype)
