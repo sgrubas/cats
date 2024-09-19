@@ -15,16 +15,16 @@ from cats.core.association import PickDetectedPeaks
 from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, give_rectangles
 from cats.core.utils import give_nonzero_limits, complex_abs_square, intervals_intersection
-from cats.core.utils import StatusKeeper, make_default_index_on_axis, save_pickle, load_pickle
+from cats.core.utils import StatusKeeper, make_default_index_if_outrange
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
-from cats.denoising import CATSDenoiser
-from cats.io import read_data
+from cats.denoising import CATSDenoiser, CATSDenoisingResult
+from cats.io.utils import read_data, save_pickle, load_pickle
 
 
 # --------------- PSD DETECTOR API --------------- #
 
-class PSDDetector(BaseModel, extra=Extra.allow):
+class PSDDetector(BaseModel, extra="allow"):
     # STFT params
     dt_sec: float
     min_duration_sec: float
@@ -37,11 +37,11 @@ class PSDDetector(BaseModel, extra=Extra.allow):
     stft_backend: str = 'ssqueezepy'
     stft_kwargs: dict = {}
     stft_nfft: int = -1
-    freq_bandpass_Hz: Tuple[float, float] = None
+    freq_bandpass_Hz: Union[Tuple[float, float], Any, None] = None
     characteristic: str = 'abs'
 
-    aggregate_axis_for_likelihood: Union[int, Tuple[int]] = None
-    aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
+    aggregate_axis_for_likelihood: Union[int, Tuple[int], None] = None
+    aggregate_func_for_likelihood: Union[str, Callable, None] = None
 
     psd_noise_mean: Any = None
     psd_noise_std: Any = None
@@ -80,8 +80,10 @@ class PSDDetector(BaseModel, extra=Extra.allow):
 
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
-    def export_main_params(self):
-        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+    @property
+    def main_params(self):
+        return {kw: val for kw in self.model_fields.keys()
+                if (val := getattr(self, kw, None)) is not None}
 
     @classmethod
     def from_result(cls, PSDResult):
@@ -91,7 +93,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         """
             Updates the instance with changed parameters.
         """
-        kwargs = self.export_main_params()
+        kwargs = self.main_params
         kwargs.update(params)
         self.__init__(**kwargs)
 
@@ -174,11 +176,11 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                   "noise_mean": self.psd_noise_mean,
                   "noise_std": self.psd_noise_std,
                   "dt_sec": self.dt_sec,
-                  "stft_dt_sec": self.stft_hop_sec,
-                  "stft_t0_sec": stft_time[0],
-                  "npts": x.shape[-1],
-                  "stft_npts": len(stft_time),
-                  "stft_frequency": self.stft_frequency,
+                  "tf_dt_sec": self.stft_hop_sec,
+                  "tf_t0_sec": stft_time[0],
+                  "time_npts": x.shape[-1],
+                  "tf_time_npts": len(stft_time),
+                  "frequencies": self.stft_frequency,
                   "threshold": self.threshold,
                   "history": history,
                   "aggregate_axis_for_likelihood": self.aggregate_axis_for_likelihood}
@@ -274,7 +276,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
         intervals_size = 2 * np.prod(x.shape[:-1]) / aggregated_axis_len * num_intervals
 
         memory_usage_bytes = {
-            "stft_frequency":           8. * stft_shape[-2],                     # float64 always
+            "frequencies":           8. * stft_shape[-2],                     # float64 always
             "signal":                   1. * x_bytes,                            # float / int
             "coefficients":             2. * precision_order * stft_size,        # complex
             "spectrogram":              1. * precision_order * stft_size,        # float
@@ -291,7 +293,7 @@ class PSDDetector(BaseModel, extra=Extra.allow):
                          ('spectrogram', 'spectrogram_SNR_trimmed'),
                          ('spectrogram_SNR_trimmed', 'likelihood'),
                          ('likelihood', 'detection', 'detected_intervals', 'picked_features')]
-        base_info = ["signal", "stft_frequency", "noise_mean", "noise_std"]
+        base_info = ["signal", "frequencies", "noise_mean", "noise_std"]
         full_info = self.parse_info_dict(full_info)
 
         return CATSBase.memory_info(memory_usage_bytes, used_together, base_info, full_info)
@@ -321,21 +323,26 @@ class PSDDetector(BaseModel, extra=Extra.allow):
             del x
 
     def save(self, filename):
-        save_pickle(self.export_main_params(), filename)
+        save_pickle(self.main_params, filename)
 
     @classmethod
     def load(cls, filename):
         loaded = load_pickle(filename)
         if isinstance(loaded, cls):
-            loaded = loaded.export_main_params()
+            loaded = loaded.main_params
         return cls(**loaded)
 
 
 class PSDDetectionResult(CATSDetectionResult):
     noise_mean: Any = None
+    threshold: float = None
 
-    def plot(self, ind=None, time_interval_sec=None,
-             SNR_spectrograms: bool = True):
+    def plot(self,
+             ind=None,
+             time_interval_sec=None,
+             SNR_spectrograms: bool = True,
+             **kwargs):
+
         if ind is None:
             ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')
@@ -344,11 +351,11 @@ class PSDDetectionResult(CATSDetectionResult):
         L_dim = hv.Dimension('Likelihood')
 
         ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=0, default_ind=0)
-        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
+        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.time_npts - 1) * self.dt_sec))
         t1, t2 = time_interval_sec
 
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
-        i_stft = give_index_slice_by_limits(time_interval_sec, self.stft_dt_sec)
+        i_stft = give_index_slice_by_limits(time_interval_sec, self.tf_dt_sec)
 
         inds_time = ind + (i_time,)
         inds_stft = ind + (i_stft,)
@@ -361,18 +368,17 @@ class PSDDetectionResult(CATSDetectionResult):
         SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
 
         time = self.time(time_interval_sec)
-        stft_time = self.stft_time(time_interval_sec)
+        stft_time = self.tf_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
-        fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
+        fig1 = hv.Image((stft_time, self.frequencies, PSD), kdims=[t_dim, f_dim],
                         label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
-        fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
+        fig2 = hv.Image((stft_time, self.frequencies, SNR), kdims=[t_dim, f_dim],
                         label='2. Trimmed SNR spectrogram: $T(t,f)$').opts(clim=SNR_clims)
 
-        if (ax := self.aggregate_axis_for_likelihood) is not None:
-            ind = make_default_index_on_axis(ind, ax, 0)
-            inds_stft = ind + (i_stft,)
+        ind = make_default_index_if_outrange(ind, self.likelihood.shape[:-1], default_ind_value=0)
+        inds_stft = ind + (i_stft,)
 
         likelihood = np.nan_to_num(self.likelihood[inds_stft],
                                    posinf=1e8, neginf=-1e8)  # POSSIBLE `NAN` AND `INF` VALUES!
@@ -403,7 +409,7 @@ class PSDDetectionResult(CATSDetectionResult):
         figsize = 250
         cmap = 'viridis'
         xlim = time_interval_sec
-        ylim = (max(1e-1, self.stft_frequency[1]), None)
+        ylim = (max(1e-1, self.frequencies[1]), None)
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, show_legend=False)
@@ -425,20 +431,20 @@ class PSDDetectionResult(CATSDetectionResult):
         for name in concat_attrs:
             self._concat(other, name, -1)
 
-        stft_t0 = self.stft_dt_sec * (self.stft_npts - 1)
+        stft_t0 = self.tf_dt_sec * (self.tf_time_npts - 1)
 
         self._concat(other, "detected_intervals", -2, stft_t0)
         self._concat(other, "picked_features", -2, stft_t0, (..., 0))
 
-        self.npts += other.npts
-        self.stft_npts += other.stft_npts
+        self.time_npts += other.time_npts
+        self.tf_time_npts += other.tf_time_npts
 
         self.history.merge(other.history)
 
         assert self.threshold == other.threshold
         assert self.dt_sec == other.dt_sec
-        assert self.stft_dt_sec == other.stft_dt_sec
-        assert np.all(self.stft_frequency == other.stft_frequency)
+        assert self.tf_dt_sec == other.tf_dt_sec
+        assert np.all(self.frequencies == other.frequencies)
         assert np.all(self.noise_mean == other.noise_mean)
         assert np.all(self.noise_std == other.noise_std)
 
@@ -523,11 +529,11 @@ class PSDDenoiser(PSDDetector):
                   "noise_mean": self.psd_noise_mean,
                   "noise_std": self.psd_noise_std,
                   "dt_sec": self.dt_sec,
-                  "stft_dt_sec": self.stft_hop_sec,
-                  "stft_t0_sec": stft_time[0],
-                  "npts": x.shape[-1],
-                  "stft_npts": len(stft_time),
-                  "stft_frequency": self.stft_frequency,
+                  "tf_dt_sec": self.stft_hop_sec,
+                  "tf_t0_sec": stft_time[0],
+                  "time_npts": x.shape[-1],
+                  "tf_time_npts": len(stft_time),
+                  "frequencies": self.stft_frequency,
                   "threshold": self.threshold,
                   "history": history,
                   "aggregate_axis_for_likelihood": self.aggregate_axis_for_likelihood}
@@ -601,7 +607,7 @@ class PSDDenoiser(PSDDetector):
         intervals_size = 2 * np.prod(x.shape[:-1]) / aggregated_axis_len * num_intervals
 
         memory_usage_bytes = {
-            "stft_frequency": 8. * stft_shape[-2],  # float64 always
+            "frequencies": 8. * stft_shape[-2],  # float64 always
             "signal": 1. * x_bytes,  # float / int
             "coefficients": 2. * precision_order * stft_size,  # complex
             "spectrogram": 1. * precision_order * stft_size,  # float
@@ -622,7 +628,7 @@ class PSDDenoiser(PSDDetector):
                           'detected_intervals', 'picked_features'),
                          ('coefficients', 'spectrogram_SNR_trimmed', 'signal_denoised')
                          ]
-        base_info = ["signal", "stft_frequency", "noise_mean", "noise_std"]
+        base_info = ["signal", "frequencies", "noise_mean", "noise_std"]
         full_info = self.parse_info_dict(full_info)
 
         return CATSBase.memory_info(memory_usage_bytes, used_together, base_info, full_info)
@@ -648,9 +654,10 @@ class PSDDenoiser(PSDDetector):
             del x
 
 
-class PSDDenoisingResult(CATSDetectionResult):
+class PSDDenoisingResult(CATSDenoisingResult):
     noise_mean: Any = None
     signal_denoised: Any = None
+    threshold: float = None
 
     def plot(self,
              ind=None,
@@ -658,7 +665,8 @@ class PSDDenoisingResult(CATSDetectionResult):
              SNR_spectrograms: bool = False,
              weighted_coefficients: bool = False,
              intervals=False,
-             picks=False):
+             picks=False,
+             interactive=False):
 
         if ind is None:
             ind = (0,) * (self.signal.ndim - 1)
@@ -668,11 +676,11 @@ class PSDDenoisingResult(CATSDetectionResult):
         L_dim = hv.Dimension('Likelihood')
 
         ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=0, default_ind=0)
-        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
+        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.time_npts - 1) * self.dt_sec))
         t1, t2 = time_interval_sec
 
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
-        i_stft = give_index_slice_by_limits(time_interval_sec, self.stft_dt_sec)
+        i_stft = give_index_slice_by_limits(time_interval_sec, self.tf_dt_sec)
 
         inds_time = ind + (i_time,)
         inds_Stft = ind + (slice(None), i_stft)
@@ -691,13 +699,13 @@ class PSDDenoisingResult(CATSDetectionResult):
             SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
 
         time = self.time(time_interval_sec)
-        stft_time = self.stft_time(time_interval_sec)
+        stft_time = self.tf_time(time_interval_sec)
 
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
-        fig1 = hv.Image((stft_time, self.stft_frequency, PSD), kdims=[t_dim, f_dim],
+        fig1 = hv.Image((stft_time, self.frequencies, PSD), kdims=[t_dim, f_dim],
                         label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
-        fig2 = hv.Image((stft_time, self.stft_frequency, SNR), kdims=[t_dim, f_dim],
+        fig2 = hv.Image((stft_time, self.frequencies, SNR), kdims=[t_dim, f_dim],
                         label=f'2. Trimmed {label_trimmed}').opts(clim=SNR_clims)
 
         figs = [fig0, fig1, fig2]
@@ -717,7 +725,7 @@ class PSDDenoisingResult(CATSDetectionResult):
             figs.append(fig21)
 
         if (ax := self.aggregate_axis_for_likelihood) is not None:
-            ind = make_default_index_on_axis(ind, ax, 0)
+            ind = make_default_index_if_outrange(ind, ax, 0)
 
         fig3 = hv.Curve((time, self.signal_denoised[inds_time]),
                         kdims=[t_dim], vdims=A_dim).opts(linewidth=0.5)
@@ -749,7 +757,7 @@ class PSDDenoisingResult(CATSDetectionResult):
         figsize = 250
         cmap = 'viridis'
         xlim = time_interval_sec
-        ylim = (max(1e-1, self.stft_frequency[1]), None)
+        ylim = (max(1e-1, self.frequencies[1]), None)
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
                                     xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
         curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, show_legend=False)
@@ -772,20 +780,20 @@ class PSDDenoisingResult(CATSDetectionResult):
         for name in concat_attrs:
             self._concat(other, name, -1)
 
-        stft_t0 = self.stft_dt_sec * (self.stft_npts - 1)
+        stft_t0 = self.tf_dt_sec * (self.tf_time_npts - 1)
 
         self._concat(other, "detected_intervals", -2, stft_t0)
         self._concat(other, "picked_features", -2, stft_t0, (..., 0))
 
-        self.npts += other.npts
-        self.stft_npts += other.stft_npts
+        self.time_npts += other.time_npts
+        self.tf_time_npts += other.tf_time_npts
 
         self.history.merge(other.history)
 
         assert self.threshold == other.threshold
         assert self.dt_sec == other.dt_sec
-        assert self.stft_dt_sec == other.stft_dt_sec
-        assert np.all(self.stft_frequency == other.stft_frequency)
+        assert self.tf_dt_sec == other.tf_dt_sec
+        assert np.all(self.frequencies == other.frequencies)
         assert np.all(self.noise_mean == other.noise_mean)
         assert np.all(self.noise_std == other.noise_std)
 
