@@ -1,29 +1,24 @@
 import numpy as np
-import pandas as pd
-from scipy.io import loadmat, savemat
-import holoviews as hv
-from typing import Any, Union, Literal, List, Tuple
+from typing import Any, Union, Literal, List, Tuple, Callable
 from pydantic import BaseModel, Field, Extra
 from tqdm.notebook import tqdm
 import obspy
+import holoviews as hv
 
-from cats.core.plottingutils import plot_traces
+from cats.baseclass import CATSResult
+from cats.denoising import CATSDenoisingResult
 from cats.core.timefrequency import CWTOperator
-from cats.core.clustering import Clustering, ClusterCatalogs, concatenate_arrays_of_cluster_catalogs
-from cats.core.date import BEDATE_trimming, group_frequency, bandpass_frequency_groups
+from cats.core.clustering import Clustering, bbox_peaks
+from cats.core.date import BEDATE_trimming, divide_into_groups
 from cats.core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
-from cats.core.utils import get_interval_division, format_index_by_dimensions, cast_to_bool_dict, StatusKeeper
-from cats.core.utils import format_interval_by_limits, give_index_slice_by_limits, save_pickle, load_pickle
-from cats.core.utils import give_nonzero_limits, mat_structure_to_tight_dataframe_dict, del_vals_by_keys
-from cats.core.utils import intervals_intersection, give_rectangles
-from cats.io import convert_stream_to_dict, convert_dict_to_stream
+from cats.core.utils import (get_interval_division, cast_to_bool_dict, del_vals_by_keys, StatusKeeper,
+                             aggregate_array_by_axis_and_func)
+from cats.core.utils import format_interval_by_limits, give_index_slice_by_limits
+from cats.io.utils import load_pickle, save_pickle
+from cats.io import convert_stream_to_dict
 
 
-# TODO:
-#   - simplify freq and scale grouping for BEDATE (transfer all misc operations to `.apply_BEDATE`)
-
-
-class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
+class CATSDenoiserCWT(BaseModel, extra='allow'):
     """
         CATS denoising operator which implements:
             1) CWT transform
@@ -60,10 +55,15 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
 
     # Extra clustering params
     background_weight: float = 0.0
-    cluster_catalogs: bool = False
+    cluster_catalogs_funcs: Union[List[Callable], None] = None
+    cluster_catalogs_filter: Union[Callable, None] = None
+    cluster_catalogs_opts: Union[dict, None] = None
     clustering_multitrace: bool = False
     cluster_size_trace: int = Field(1, ge=1)
     cluster_distance_trace: int = Field(1, ge=1)
+
+    aggr_clustering_axis: Union[int, Tuple[int], None] = None
+    aggr_clustering_func: Union[str, None] = None
 
     # Misc
     name: str = "CATSDenoiserCWT"
@@ -135,16 +135,18 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         self.min_duration_sec = self.min_duration_len * self.dt_sec
         self.min_separation_sec = self.min_separation_len * self.dt_sec
 
+        # Catalog params
+        self.cluster_catalogs_opts = self.cluster_catalogs_opts or {}
+
         # Grouping scales for BEDATE
         self.bedate_scale_grouping_octaves = self.bedate_scale_grouping_octaves or 1 / self.nvoices
         self.bedate_scale_grouping_len = max(round(self.bedate_scale_grouping_octaves * self.nvoices), 1)
 
-    def export_main_params(self):
-        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
-
     @property
     def main_params(self):
-        return self.export_main_params()
+        # extract only params in __init__
+        return {kw: val for kw in self.model_fields.keys()
+                if (val := getattr(self, kw, None)) is not None}
 
     @classmethod
     def from_result(cls, CATSDenoiserCWTResult):
@@ -154,7 +156,7 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         """
             Updates the instance with changed parameters.
         """
-        kwargs = self.export_main_params()
+        kwargs = self.main_params
         kwargs.update(params)
         self.__init__(**kwargs)
 
@@ -168,18 +170,17 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
     def apply_BEDATE(self, result_container, /):
 
         # grouping scales
-        scales_groups_index, scales_groups = group_frequency(result_container['scales'],
-                                                             self.bedate_scale_grouping_octaves,
-                                                             log_step=False)
-        bandpassed_scales_groups_slice = bandpass_frequency_groups(scales_groups_index, self.bandpass_scale_slice)
-        result_container["scale_groups"] = scales_groups
+        scales_groups_indexes = divide_into_groups(num_freqs=len(result_container['scales']),
+                                                   group_step=self.bedate_scale_grouping_len,
+                                                   is_octaves_step=False, fft_base=False)
+        result_container["scales_groups_indexes"] = scales_groups_indexes
 
         # BEDATE
         result_container['time_frames'] = get_interval_division(N=result_container['spectrogram'].shape[-1],
                                                                 L=self.stationary_frame_len)
         dim = 1 + np.iscomplexobj(result_container["coefficients"])  # checks if coefs are complex for dims
-        T, STD, THR = BEDATE_trimming(result_container['spectrogram'], scales_groups_index,
-                                      bandpassed_scales_groups_slice, self.bandpass_scale_slice,
+        T, STD, THR = BEDATE_trimming(result_container['spectrogram'],
+                                      scales_groups_indexes, self.bandpass_scale_slice,
                                       result_container['time_frames'], self.minSNR, self.time_edge,
                                       Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
                                       original_mode=self.date_original_mode, fft_base=False, dim=dim)
@@ -188,43 +189,60 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         result_container['noise_std'] = STD
         result_container['noise_threshold_conversion'] = THR
 
+        # Aggregate trimmed spectrogram over `aggr_clustering_axis` by `aggr_clustering_func`
+        # Maybe useful if multi-component data are used (3-C or receiver groups)
+        result_container['spectrogram_SNR_trimmed_aggr'] = aggregate_array_by_axis_and_func(T,
+                                                                                            self.aggr_clustering_axis,
+                                                                                            self.aggr_clustering_func,
+                                                                                            min_last_dims=2)
+
     def apply_Clustering(self, result_container, /):
         mc = self.clustering_multitrace
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_scale_len, self.cluster_distance_t_len)
         s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_scale_len, self.cluster_size_t_len)
         log_freq_cluster = (0.0, 0.0)
 
-        result_container['spectrogram_SNR_clustered'] = np.zeros_like(result_container['spectrogram_SNR_trimmed'])
-        result_container['spectrogram_cluster_ID'] = np.zeros(result_container['spectrogram_SNR_trimmed'].shape,
-                                                              dtype=np.int32)
+        result_container['spectrogram_cluster_ID'] = Clustering(result_container['spectrogram_SNR_trimmed_aggr'],
+                                                                q=q, s=s, freq_octaves=log_freq_cluster)
 
-        result_container['spectrogram_SNR_clustered'], result_container['spectrogram_cluster_ID'] = \
-            Clustering(result_container['spectrogram_SNR_trimmed'], q=q, s=s, log_freq_cluster=log_freq_cluster)
+    def apply_ClusterCatalogs(self, result_container, /):
+        opts = self.cluster_catalogs_opts or {}
 
-        if self.cluster_catalogs:
-            catalog = ClusterCatalogs(result_container['spectrogram_SNR_clustered'],
-                                      result_container['spectrogram_cluster_ID'],
-                                      df=1.0,
-                                      dt=self.dt_sec)
+        feature_funcs = self.cluster_catalogs_funcs or [bbox_peaks]
 
-            # ---- Convert scale index into Frequencies (Hz)
-            freqs_cols = ['Frequency_start_Hz', 'Frequency_end_Hz', 'Frequency_center_of_mass_Hz']
-            freqs = result_container['frequencies']
-            freq_index = np.arange(len(freqs))
-            for ind, cat in np.ndenumerate(catalog):
-                for col in freqs_cols:
-                    catalog[ind][col] = np.interp(cat[col].values, freq_index, freqs)
-                catalog[ind].rename(columns={'Frequency_start_Hz': 'Frequency_end_Hz',
-                                             "Frequency_end_Hz": "Frequency_start_Hz"},
-                                    inplace=True)
+        opts.setdefault("frequency_octaves", False)
+        opts.setdefault("feature_funcs", feature_funcs)
+        opts.setdefault("log10_spectrogram", False)
+        opts.setdefault("trace_dim_names", None)
+        opts.setdefault("aggr_clustering_axis", self.aggr_clustering_axis)
+        opts.setdefault("aggr_clustering_func", self.aggr_clustering_func)
+        use_SNR = opts.pop('use_SNR', False)
+        opts.setdefault('energy_unit', "SNR" if use_SNR else "")
 
-            result_container['cluster_catalogs'] = catalog
+        update_cluster_ID = opts.pop('update_cluster_ID', True)
 
+        cluster_ID = result_container.get('spectrogram_cluster_ID', None)
+        TFR = result_container.get('spectrogram', None) if not use_SNR \
+            else result_container('spectrogram_SNR_trimmed_aggr', None)
+
+        if (cluster_ID is not None) and (TFR is not None):
+            tf_time = np.arange(cluster_ID.shape[-1]) * self.dt_sec
+            frequencies = result_container['frequencies']
+
+            catalog = CATSResult.calculate_cluster_catalogs(cluster_ID=cluster_ID, TFR=TFR,
+                                                            tf_time=tf_time, frequencies=frequencies,
+                                                            **opts)
+
+            catalog = CATSResult.filter_cluster_catalogs(catalog,
+                                                         self.cluster_catalogs_filter,
+                                                         cluster_ID if update_cluster_ID else None)
         else:
-            result_container['cluster_catalogs'] = None
+            catalog = None
+
+        result_container['cluster_catalogs'] = catalog
 
     def apply_ICWT(self, result_container, /):
-        weights = result_container['spectrogram_SNR_clustered'] > 0
+        weights = result_container['spectrogram_cluster_ID'] > 0
         if self.background_weight:
             weights = np.where(weights, 1.0, self.background_weight)
 
@@ -253,31 +271,38 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         # B-E-DATE
         self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
                         process_name='B-E-DATE trimming')
-        del_vals_by_keys(result, full_info, ['spectrogram', 'noise_std', 'noise_threshold_conversion'])
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed', 'noise_std', 'noise_threshold_conversion'])
 
         # Clustering
         self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
                         process_name='Clustering')
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed', 'spectrogram_cluster_ID'])
+
+        # Cluster catalog
+        self.cluster_catalogs_opts.setdefault('update_cluster_ID', True)
+        self.apply_func(func_name='apply_ClusterCatalogs', result_container=result, status_keeper=history,
+                        process_name='Cluster catalog')
+
+        del_vals_by_keys(result, full_info, ['spectrogram', 'spectrogram_SNR_trimmed_aggr'])
 
         # Inverse STFT
         self.apply_func(func_name='apply_ICWT', result_container=result, status_keeper=history,
                         process_name='Inverse CWT')
 
-        del_vals_by_keys(result, full_info, ['coefficients', 'spectrogram_SNR_clustered'])
+        del_vals_by_keys(result, full_info, ['coefficients', 'spectrogram_cluster_ID'])
 
         history.print_total_time()
 
         from_full_info = {kw: result.get(kw, None) for kw in full_info}
 
-        return CATSDenoiserCWTResult(dt_sec=self.dt_sec,
-                                     npts=x.shape[-1],
-                                     time_frames=result['time_frames'] * self.dt_sec,
-                                     minSNR=self.minSNR,
-                                     history=history,
-                                     cluster_catalogs=result['cluster_catalogs'],
-                                     main_params=self.export_main_params(),
-                                     **from_full_info)
+        result = CATSDenoisingCWTResult(dt_sec=self.dt_sec,
+                                        time_npts=x.shape[-1],
+                                        time_frames=result['time_frames'] * self.dt_sec,
+                                        minSNR=self.minSNR,
+                                        history=history,
+                                        main_params=self.main_params,
+                                        **from_full_info)
+
+        return result
 
     def denoise(self, x: np.ndarray,
                 /,
@@ -293,18 +318,25 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         for dc in tqdm(data_chunks, desc='Data chunks', display=single_chunk):
             results.append(self._denoise(dc, verbose=verbose, full_info=full_info))
 
-        result = CATSDenoiserCWTResult.concatenate(*results)
+        result = CATSDenoisingCWTResult.concatenate(*results)
         setattr(result, "stats", stats)
         return result
 
+    def apply(self, x: Union[np.ndarray, obspy.Stream],
+              /,
+              verbose: bool = False,
+              full_info: Union[bool, str, List[str]] = False):
+        """ Alias of `.denoise`. For compatibility with CATSBase """
+        return self.denoise(x, verbose=verbose, full_info=full_info)
+
     def __mul__(self, x):
-        return self.denoise(x, verbose=False, full_info=False)
+        return self.apply(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
-        return self.denoise(x, verbose=True, full_info='qc')
+        return self.apply(x, verbose=True, full_info='qc')
 
     def __matmul__(self, x):
-        return self.denoise(x, verbose=True, full_info=True)
+        return self.apply(x, verbose=True, full_info=True)
 
     def convert_input_data(self, x):
         if isinstance(x, obspy.Stream):
@@ -318,34 +350,56 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         return data, stats
 
     @staticmethod
-    def _info_keys():
+    def get_all_keys():
         return ["signal",
                 "coefficients",
                 "spectrogram",
                 "noise_std",
                 "noise_threshold_conversion",
                 "spectrogram_SNR_trimmed",
-                "spectrogram_SNR_clustered",
+                "spectrogram_SNR_trimmed_aggr",
                 "spectrogram_cluster_ID",
+                "cluster_catalogs",
                 "scales",
                 "frequencies",
-                "scales_groups",
+                "scales_groups_indexes",
                 "signal_denoised"]
 
-    @staticmethod
-    def get_qc_keys():
-        return ["signal", "spectrogram", "spectrogram_SNR_trimmed",
-                "spectrogram_SNR_clustered", "signal_denoised", "scales", "frequencies"]
+    @classmethod
+    def get_default_keys(cls):
+        return ["noise_std", "noise_threshold_conversion", 'signal_denoised', "cluster_catalogs",]
+
+    @classmethod
+    def get_qc_keys(cls):
+        return ["signal", "spectrogram", "spectrogram_SNR_trimmed", "spectrogram_cluster_ID",
+                "noise_std", "noise_threshold_conversion", "cluster_catalogs",
+                "signal_denoised", "scales", "frequencies"]
+
+    @classmethod
+    def get_cluster_catalog_keys(cls):
+        return ["spectrogram", "spectrogram_cluster_ID"]
 
     def parse_info_dict(self, full_info):
-        info_keys = self._info_keys()
-        if isinstance(full_info, str) and \
-           (full_info in ['plot', 'plotting', 'plt', 'qc', 'main']):  # only those needed for plotting step-by-step
-            full_info = self.get_qc_keys()
 
-        full_info = cast_to_bool_dict(full_info, info_keys)
+        if isinstance(full_info, str):
+            if full_info in ['plot', 'plotting', 'plt', 'qc', 'main']:  # only those needed for plotting step-by-step
+                full_info = self.get_qc_keys()
+            elif full_info in ['cluster', 'cluster_catalog', 'cc', 'features']:
+                full_info = self.get_cluster_catalog_keys()
+            else:
+                raise KeyError(f"Unknown {full_info = } code")
+        elif isinstance(full_info, bool):
+            full_info = self.get_all_keys() * full_info
+        elif isinstance(full_info, list):
+            pass
+        else:
+            raise ValueError(f"Invalid {type(full_info) = }")
 
-        full_info["signal_denoised"] = True     # default saved result
+        # add necessary, repetitions will be deleted
+        full_info += self.get_default_keys()  # defaults
+
+        # Parse
+        full_info = cast_to_bool_dict(full_info, self.get_all_keys())
 
         return full_info
 
@@ -353,33 +407,37 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         time_len = x.shape[-1]
         scale_len = len(self.CWT.get_scales(time_len))
         ft_shape = x.shape[:-1] + (scale_len, time_len)
-        ft_size = np.prod(ft_shape)
+        ft_size = np.prod(np.float64(ft_shape))
 
-        bedate_shape = x.shape[:-1] + (scale_len // self.bedate_scale_grouping_octaves,
-                                       len(get_interval_division(N=time_len, L=self.stationary_frame_len)))
-        bedate_size = np.prod(bedate_shape)
+        scale_groups_len = len(divide_into_groups(num_freqs=scale_len, group_step=self.bedate_scale_grouping_len,
+                                                  is_octaves_step=False, fft_base=False))
+        time_frames_len = len(get_interval_division(N=time_len, L=self.stationary_frame_len))
+        bedate_shape = x.shape[:-1] + (scale_groups_len, time_frames_len)
+        bedate_size = np.prod(np.float64(bedate_shape))
 
         cluster_sc = 2.0  # clustering requires < 2 copies of spectrogram (max estimate)
+        if self.aggr_clustering_axis is not None:
+            cluster_sc /= x.shape[self.aggr_clustering_axis]  # reduced by aggregation (if applied)
 
         x_bytes = x.nbytes
         precision_order = x_bytes / x.size
 
         memory_usage_bytes = {
-            "scales":                      8. * scale_len,                               # scale
-            "frequencies":                 8. * scale_len,                               # freqs
-            "time_frames":                 8. * bedate_shape[-1],                        # float64 always
-            "signal":                      1. * x_bytes,                                 # float / int
-            "coefficients":                2. * precision_order * ft_size,               # complex
-            "spectrogram":                 1. * precision_order * ft_size,               # float
-            "noise_threshold_conversion":  8. * bedate_shape[-2],                        # float
-            "noise_std":                   1. * precision_order * bedate_size,           # float
-            "spectrogram_SNR_trimmed":     1. * precision_order * ft_size * cluster_sc,  # float
-            "spectrogram_SNR_clustered":   1. * precision_order * ft_size,               # float
-            "spectrogram_cluster_ID":      4. * ft_size,                                 # uint32 always
+            "scales":                       8. * scale_len,                               # scale
+            "frequencies":                  8. * scale_len,                               # freqs
+            "time_frames":                  8. * bedate_shape[-1],                        # float64 always
+            "signal":                       1. * x_bytes,                                 # float / int
+            "coefficients":                 2. * precision_order * ft_size,               # complex
+            "spectrogram":                  1. * precision_order * ft_size,               # float
+            "noise_threshold_conversion":   8. * bedate_shape[-2],                        # float
+            "noise_std":                    1. * precision_order * bedate_size,           # float
+            "spectrogram_SNR_trimmed":      1. * precision_order * ft_size,               # float
+            "spectrogram_SNR_trimmed_aggr": 1. * precision_order * ft_size * cluster_sc,  # float
+            "spectrogram_cluster_ID":       4. * ft_size,                                 # uint32 always
         }
         used_together = [('coefficients', 'spectrogram'),
                          ('spectrogram', 'noise_threshold_conversion', 'noise_std', 'spectrogram_SNR_trimmed'),
-                         ('spectrogram_SNR_trimmed', 'spectrogram_SNR_clustered', 'spectrogram_cluster_ID')]
+                         ('spectrogram_SNR_trimmed_aggr', 'spectrogram_cluster_ID')]
 
         return memory_usage_bytes, used_together
 
@@ -419,13 +477,13 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         return n_chunks
 
     def save(self, filename):
-        save_pickle(self.export_main_params(), filename)
+        save_pickle(self.main_params, filename)
 
     @classmethod
     def load(cls, filename):
         loaded = load_pickle(filename)
         if isinstance(loaded, cls):
-            loaded = loaded.export_main_params()
+            loaded = loaded.main_params
         return cls(**loaded)
 
     def memory_usage_estimate(self, x, /, full_info=False):
@@ -440,8 +498,7 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         used_together = [('coefficients', 'spectrogram'),
                          ('coefficients', 'spectrogram', 'noise_threshold_conversion',
                           'noise_std', 'spectrogram_SNR_trimmed'),
-                         ('coefficients', 'spectrogram_SNR_trimmed', 'spectrogram_SNR_clustered',
-                          'spectrogram_cluster_ID'),
+                         ('coefficients', 'spectrogram_SNR_trimmed_aggr', 'spectrogram_cluster_ID'),
                          ('coefficients', 'signal_denoised')]
 
         base_info = ["signal", "frequencies", "scales", "time_frames"]
@@ -452,100 +509,14 @@ class CATSDenoiserCWT(BaseModel, extra=Extra.allow):
         return self.memory_chunks(self.memory_usage_estimate(x, full_info=full_info), to_file)
 
 
-class CATSDenoiserCWTResult(BaseModel):
-    signal: Any = None
-    coefficients: Any = None
-    spectrogram: Any = None
-    noise_threshold_conversion: Any = None
-    noise_std: Any = None
-    spectrogram_SNR_trimmed: Any = None
-    spectrogram_SNR_clustered: Any = None
-    spectrogram_cluster_ID: Any = None
-    signal_denoised: Any = None
+class CATSDenoisingCWTResult(CATSDenoisingResult):
     scales: Any = None
-    frequencies: Any = None
-    scales_groups: Any = None
-    cluster_catalogs: Any = None
-    dt_sec: float = None
-    npts: int = None
-    time_frames: Any = None
-    minSNR: float = None
-    history: Any = None
-    main_params: dict = None
-    stats: Any = None
+    scales_groups_indexes: Any = None
 
-    @staticmethod
-    def base_time_func(npts, dt_sec, t0, time_interval_sec):
-        if time_interval_sec is None:
-            return t0 + np.arange(npts) * dt_sec
-        else:
-            time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (npts - 1) * dt_sec))
-            time_slice = give_index_slice_by_limits(time_interval_sec, dt_sec)
-            return t0 + np.arange(time_slice.start, time_slice.stop) * dt_sec
-
-    def time(self, time_interval_sec=None):
-        return CATSDenoiserCWTResult.base_time_func(self.npts, self.dt_sec, 0, time_interval_sec)
-
-    def _plot(self, ind=None, time_interval_sec=None, SNR_spectrograms=True, show_frequency=True):
-        t_dim = hv.Dimension('Time', unit='s')
-        f_dim = hv.Dimension("Frequency (Hz)" if show_frequency else 'Scale')
-        a_dim = hv.Dimension('Amplitude')
-
-        ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=0, default_ind=0)
-
-        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
-
-        i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
-        inds_time = ind + (i_time,)
-        inds_stft = ind + (slice(None), i_time)
-
-        PSD = self.spectrogram[inds_stft]
-        SNR = self.spectrogram_SNR_trimmed[inds_stft]
-        C = self.spectrogram_SNR_clustered[inds_stft]
-
-        PSD_clims = give_nonzero_limits(PSD, initials=(1e-1, 1e1))
-
-        if not SNR_spectrograms:
-            SNR = PSD * (SNR > 0)
-            C = PSD * (C > 0)
-            label_trimmed = 'spectrogram: $|X(t,f)| \cdot (T(t,f) > 0)$'
-            label_clustered = 'spectrogram: $|X(t,f)| \cdot (\mathcal{L}(t,f) > 0)$'
-            SNR_clims = PSD_clims
-        else:
-            label_trimmed = 'SNR spectrogram: $T(t,f)$'
-            label_clustered = 'SNR spectrogram: $\mathcal{L}(t,f)$'
-            SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
-
-        time = self.time(time_interval_sec)
-
-        scales_or_freqs = self.frequencies if show_frequency else self.scales
-
-        fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=1)
-        fig1 = hv.QuadMesh((time, scales_or_freqs, PSD), kdims=[t_dim, f_dim],
-                           label='1. Amplitude spectrogram: $|X(t,f)|$').opts(clim=PSD_clims, clabel='Amplitude')
-        fig2 = hv.QuadMesh((time, scales_or_freqs, SNR), kdims=[t_dim, f_dim],
-                           label=f'2. Trimmed {label_trimmed}').opts(clim=SNR_clims)
-        fig3 = hv.QuadMesh((time, scales_or_freqs, C), kdims=[t_dim, f_dim],
-                           label=f'3. Clustered {label_clustered}').opts(clim=SNR_clims)
-
-        fontsize = dict(labels=15, title=16, ticks=14)
-        figsize = 250
-        cmap = 'viridis'
-        xlim = time_interval_sec
-        ylim = (None, None)
-
-        layout_title = str(self.stats[ind].starttime) if (self.stats is not None) else ''
-        spectr_opts = hv.opts.QuadMesh(cmap=cmap, colorbar=True, logy=True, invert_yaxis=not show_frequency,
-                                       xlim=xlim, ylim=ylim, norm='log',
-                                       xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
-        cylim = (1.1 * np.min(fig0.data[a_dim.name]), 1.1 * np.max(fig0.data[a_dim.name]))
-        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, ylim=cylim)
-        layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
-                                     title=layout_title, aspect_weight=0, sublabel_format='')
-        inds_slices = (ind, i_time, i_time)
-        figs = (fig0 + fig1 + fig2 + fig3)
-        return figs, (layout_opts, spectr_opts, curve_opts), inds_slices, time_interval_sec
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.tf_dt_sec = self.tf_dt_sec or self.dt_sec
+        self.tf_time_npts = self.tf_time_npts or self.time_npts
 
     def plot(self,
              ind: Tuple[int] = None,
@@ -555,221 +526,26 @@ class CATSDenoiserCWTResult(BaseModel):
              weighted_coefficients: bool = False,
              intervals: bool = False,
              picks: bool = False,
+             interactive: bool = False,
              ):
+        freqs = self.frequencies if show_frequency else self.scales
+        plot_output = super(CATSDenoisingResult, self).plot(ind=ind,
+                                                            time_interval_sec=time_interval_sec,
+                                                            SNR_spectrograms=SNR_spectrograms,
+                                                            interactive=interactive,
+                                                            frequencies=freqs)
+        fig, opts, inds_slices, time_interval_sec = plot_output
 
-        fig, opts, inds_slices, time_interval_sec = self._plot(ind, time_interval_sec,
-                                                               SNR_spectrograms, show_frequency)
-        ref_kw_opts = opts[-1].kwargs
-        t1, t2 = ref_kw_opts['xlim']
+        fig = self._plot(weighted_coefficients=weighted_coefficients,
+                         intervals=intervals,
+                         picks=picks,
+                         fig=fig,
+                         opts=opts,
+                         inds_slices=inds_slices,
+                         time_interval_sec=time_interval_sec)
 
-        t_dim, a_dim = fig[0].dimensions()
-
-        ind, i_time, i_stft = inds_slices
-        trace_slice = ind + (i_time,)
-
-        # Weighted coefficients
-        if weighted_coefficients:
-            psd_fig = fig[1]
-            f_dim = psd_fig.dimensions()[1]
-
-            C = fig[-1].data['z']
-            weights = np.where(C > 0, 1.0, self.main_params['background_weight'])
-            WPSD = fig[1].data['z'] * weights
-            psd_opts = psd_fig.opts.get().options
-            fig31 = hv.QuadMesh((psd_fig.data[t_dim.name], psd_fig.data[f_dim.name], WPSD),
-                                kdims=[t_dim, f_dim],
-                                label='3.1. Weighted amplitude spectrogram: $|X(t,f) \cdot W(t,f)|$').opts(**psd_opts)
-            fig = fig + fig31
-
-        # Denoised signal
-        fig4 = hv.Curve((fig[0].data[t_dim.name], self.signal_denoised[trace_slice]),
-                        kdims=[t_dim], vdims=a_dim).opts(linewidth=1)
-
-        last_fig = [fig4]
-
-        cluster_catalogs = getattr(self, 'cluster_catalogs', None) if (intervals or picks) else None
-        catalog = cluster_catalogs[ind] if cluster_catalogs is not None else None
-
-        if (catalog is not None) and intervals:
-            detected_intervals = catalog[['Time_start_sec', 'Time_end_sec']].values
-            intervals = intervals_intersection(detected_intervals, (t1, t2))
-            interv_height = np.max(abs(self.signal_denoised[trace_slice])) * 1.1
-            rectangles = give_rectangles([intervals], [0.0], interv_height)
-            intervals_fig = hv.Rectangles(rectangles,
-                                          kdims=[t_dim, a_dim, 't2', 'l2']).opts(color='blue',
-                                                                                 linewidth=0,
-                                                                                 alpha=0.2)
-            last_fig.append(intervals_fig)
-
-        if (catalog is not None) and picks:
-            P = catalog['Time_center_of_mass_sec'].values
-            P = P[(t1 <= P) & (P <= t2)]
-            picks_fig = [hv.VLine(pi, kdims=[t_dim, a_dim]) for pi in P]
-            picks_fig = hv.Overlay(picks_fig).opts(hv.opts.VLine(color='r'))
-            last_fig.append(picks_fig)
-
-        fig4 = hv.Overlay(last_fig, label='4. Denoised data: $\\tilde{s}(t)$').opts(**ref_kw_opts)
-
-        return (fig + fig4).opts(*opts).cols(1)
-
-    def plot_traces(self,
-                    ind: Tuple[int] = None,
-                    time_interval_sec: Tuple[float] = None,
-                    intervals: bool = False,
-                    picks: bool = False,
-                    show_denoised: bool = True,
-                    trace_loc: np.ndarray = None,
-                    gain: int = 1,
-                    clip: bool = False,
-                    each_trace: int = 1,
-                    amplitude_scale: float = None,
-                    **kwargs):
-        signal = self.signal_denoised if show_denoised else self.signal
-        ind = format_index_by_dimensions(ind=ind, shape=signal.shape[:-1], slice_dims=1, default_ind=0)
-        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
-        i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
-        traces = signal[ind + (i_time,)]
-
-        cluster_catalogs = getattr(self, 'cluster_catalogs', None) if (intervals or picks) else None
-        catalog = cluster_catalogs[ind] if cluster_catalogs is not None else None
-
-        if (catalog is not None) and intervals:
-            detected_intervals = np.empty(catalog.shape, dtype=object)
-            for i, cati in np.ndenumerate(catalog):
-                detected_intervals[i] = cati[['Time_start_sec', 'Time_end_sec']].values
-        else:
-            detected_intervals = None
-
-        if (catalog is not None) and picks:
-            picked_onsets = np.empty(catalog.shape, dtype=object)
-            for i, cati in np.ndenumerate(catalog):
-                picked_onsets[i] = cati['Time_center_of_mass_sec'].values
-        else:
-            picked_onsets = None
-
-        fig = plot_traces(traces, self.time(time_interval_sec),
-                          intervals=detected_intervals, picks=picked_onsets, associated_picks=None,
-                          trace_loc=trace_loc, time_interval_sec=time_interval_sec, gain=gain, clip=clip,
-                          each_trace=each_trace, amplitude_scale=amplitude_scale, **kwargs)
-
-        ind_ref = (0,) * len(signal.shape[:-1])
-        layout_title = str(self.stats[ind_ref].starttime) if (self.stats is not None) else ''
-        fig = fig.opts(title=layout_title)
+        if not show_frequency:
+            mpl_opts_spects = hv.opts.QuadMesh(invert_yaxis=True, backend='matplotlib')  # for scales
+            bkh_opts_spects = hv.opts.QuadMesh(invert_yaxis=True, backend='bokeh')  # for scales
+            fig = fig.opts(mpl_opts_spects, bkh_opts_spects).redim(Frequency=hv.Dimension("Scale"))
         return fig
-
-    def append(self, other):
-
-        concat_attrs = ["signal",
-                        "coefficients",
-                        "spectrogram",
-                        "noise_std",
-                        "spectrogram_SNR_trimmed",
-                        "spectrogram_SNR_clustered",
-                        "spectrogram_cluster_ID",
-                        "signal_denoised"]
-
-        # update cluster id
-        attr = "spectrogram_cluster_ID"
-        if ((self_attr := getattr(self, attr, None)) is not None) and \
-           ((other_attr := getattr(other, attr, None)) is not None):
-            shape = other_attr.shape[:-2]
-            for ind in np.ndindex(shape):
-                other_attr[ind][other_attr[ind] > 0] += self_attr[ind].max()
-            setattr(other, attr, other_attr)
-
-        # concatenation
-        for name in concat_attrs:
-            self._concat(other, name, -1)
-
-        t0 = self.time_frames[-1, -1] + self.dt_sec
-
-        self._concat(other, "time_frames", 0, t0)
-        self.cluster_catalogs = concatenate_arrays_of_cluster_catalogs(self.cluster_catalogs,
-                                                                       other.cluster_catalogs, t0)
-
-        self.npts += other.npts
-
-        self.history.merge(other.history)
-
-        assert self.minSNR == other.minSNR
-        assert self.dt_sec == other.dt_sec
-        assert np.all(self.scales == other.scales)
-        assert np.all(self.noise_threshold_conversion == other.noise_threshold_conversion)
-
-    def _concat(self, other, attr, axis, increment=None, increment_ind=None):
-        if ((self_attr := getattr(self, attr, None)) is not None) and \
-                ((other_attr := getattr(other, attr, None)) is not None):
-            if increment is not None:
-                if increment_ind is not None:
-                    if other_attr.dtype.name == 'object':
-                        for ind, _ in np.ndenumerate(other_attr):
-                            other_attr[ind][increment_ind] += increment
-                    else:
-                        other_attr[increment_ind] += increment
-                else:
-                    other_attr += increment
-
-            delattr(self, attr)
-            delattr(other, attr)
-            if (other_attr.dtype.name == 'object') and (self_attr.dtype.name == 'object'):
-                concatenated = np.empty_like(other_attr, dtype=object)
-                for ind, i_other in np.ndenumerate(other_attr):
-                    concatenated[ind] = np.concatenate((self_attr[ind], i_other), axis=axis)
-            else:
-                concatenated = np.concatenate((self_attr, other_attr), axis=axis)
-            del self_attr, other_attr
-            setattr(self, attr, concatenated)
-        else:
-            pass
-
-    @staticmethod
-    def concatenate(*objects):
-        obj0 = objects[0]
-        for obj in objects[1:]:
-            obj0.append(obj)
-            del obj
-        return obj0
-
-    def filter_convert_attributes_to_dict(self):
-        # Remove `None`
-        mdict = {name: attr for name, attr in self.dict().items() if (attr is not None)}
-
-        # Convert DataFrame to dict for `mat` format
-        if (catalog := mdict.get('cluster_catalogs', None)) is not None:
-            for ind, cat_ind in np.ndenumerate(catalog):
-                catalog[ind] = cat_ind.to_dict(orient='tight')
-            mdict['cluster_catalogs'] = catalog
-        return mdict
-
-    @staticmethod
-    def convert_dict_to_attributes(mdict):
-        # Convert dict to DataFrame
-        if (catalog := mdict.get('cluster_catalogs', None)) is not None:
-            for ind, cat_ind in np.ndenumerate(catalog):
-                cat_dict = mat_structure_to_tight_dataframe_dict(cat_ind)
-                catalog[ind] = pd.DataFrame.from_dict(cat_dict, orient='tight')
-
-        return mdict
-
-    def save(self, filepath, compress=False, header_info=None):
-        self.header_info = header_info
-        mdict = self.filter_convert_attributes_to_dict()
-        savemat(filepath, mdict, do_compression=compress)
-        del mdict
-
-    @classmethod
-    def load(cls, filepath):
-        mdict = loadmat(filepath, simplify_cells=True)
-        mdict = cls.convert_dict_to_attributes(mdict)
-        return cls(**mdict)
-
-    def get_denoised_obspy_stream(self):
-        return convert_dict_to_stream({"data": self.signal_denoised,
-                                       "stats": self.stats})
-
-    def save_denoised_obspy_stream(self, filename, format):
-        """
-            Saves via `obspy.Stream.write`
-        """
-        stream = self.get_denoised_obspy_stream()
-        stream.write(filename=filename, format=format)
