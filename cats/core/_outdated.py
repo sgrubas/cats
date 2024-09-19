@@ -141,3 +141,26 @@
 #         for j1, j2 in buffer:
 #             filtered[i, j1: j2 + 1] = True
 #     return filtered
+
+
+# ------------------ Experimental ------------------ #
+
+
+# def _optimalNeighborhoodDistance(p, pmin, qmax, maxN):
+#     qi = qmax  # in case the cycle is empty
+#     for qi in range(1, qmax + 1):
+#         Q = (qi * 2 + 1)**2  # clustering kernel is square
+#         cdf = stats.binom.cdf(maxN, Q, p)  # probability that maximum `maxN` elements in kernel `Q` are nonzero
+#         if cdf < pmin:  # choose `qi` which provides probability of noisy nonzero elements not to be present in `Q`
+#             break
+#     return max(1, qi - 1)
+#
+#
+# def OptimalNeighborhoodDistance(minSNR, d=2, pmin=0.95, qmax=10, maxN=1):
+#
+#     # thresholding function value from DATE, defined for `noise variance = 1`
+#     xi = _xi(d=d, rho=minSNR)
+#     # percentage of chi-distributed noise elements to be > `xi` (`d` degrees of freedom)
+#     p = special.gammaincc(d / 2, xi**2 / 2)
+#     q_opt = _optimalNeighborhoodDistance(p, pmin=pmin, qmax=qmax, maxN=maxN)
+#     return q_opt
