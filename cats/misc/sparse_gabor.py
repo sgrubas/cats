@@ -14,12 +14,12 @@ from pydantic import BaseModel, Field, Extra
 from typing import Any
 import holoviews as hv
 from cats.core.utils import (format_index_by_dimensions, format_interval_by_limits, StatusKeeper,
-                             give_index_slice_by_limits, give_nonzero_limits, complex_abs_square,
-                             save_pickle, load_pickle)
+                             give_index_slice_by_limits, give_nonzero_limits, complex_abs_square)
 from cats.baseclass import CATSResult
+from cats.io.utils import save_pickle, load_pickle
 
 
-class SparseGaborDenoiser(BaseModel, extra=Extra.allow):
+class SparseGaborDenoiser(BaseModel, extra="allow"):
     dt_sec: float
     shape: Any
 
@@ -57,12 +57,15 @@ class SparseGaborDenoiser(BaseModel, extra=Extra.allow):
         self.time_edge = int(len(self.window) // 2 / self.operator.hop)
 
     def reset_params(self, **params):
-        kwargs = self.export_main_params()
+        kwargs = self.main_params
         kwargs.update(params)
         self.__init__(**kwargs)
 
-    def export_main_params(self):
-        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+    @property
+    def main_params(self):
+        # extract only params in __init__
+        return {kw: val for kw in self.model_fields.keys()
+                if (val := getattr(self, kw, None)) is not None}
 
     def denoise(self, x, verbose=False):
         history = StatusKeeper(verbose=verbose)
@@ -87,13 +90,13 @@ class SparseGaborDenoiser(BaseModel, extra=Extra.allow):
 
         kwargs = {**result,
                   "dt_sec": self.dt_sec,
-                  "stft_dt_sec": self.operator.hop * self.dt_sec,
-                  "stft_t0_sec": self.operator.t[0],
-                  "npts": x.shape[-1],
-                  "stft_npts": self.operator.tshape,
-                  "stft_frequency": self.operator.f,
+                  "tf_dt_sec": self.operator.hop * self.dt_sec,
+                  "tf_t0_sec": self.operator.t[0],
+                  "time_npts": x.shape[-1],
+                  "tf_time_npts": self.operator.tshape,
+                  "frequencies": self.operator.f,
                   "history": history,
-                  "main_params": self.export_main_params()}
+                  "main_params": self.main_params}
 
         return SparseGaborDenoisingResult(**kwargs)
 
@@ -107,17 +110,17 @@ class SparseGaborDenoiser(BaseModel, extra=Extra.allow):
         return self.denoise(x, verbose=True)
 
     def save(self, filename):
-        save_pickle(self.export_main_params(), filename)
+        save_pickle(self.main_params, filename)
 
     @classmethod
     def load(cls, filename):
         loaded = load_pickle(filename)
         if isinstance(loaded, cls):
-            loaded = loaded.export_main_params()
+            loaded = loaded.main_params
         return cls(**loaded)
 
 
-class SparseGaborDenoisingResult(BaseModel, extra=Extra.allow):
+class SparseGaborDenoisingResult(BaseModel, extra="allow"):
     signal: Any = None
     coefficients: Any = None
     coefficients_sparse: Any = None

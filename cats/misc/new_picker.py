@@ -1,17 +1,19 @@
+"""
+    Experimental module, used primarily for preliminary estimates, not intended for further use
+"""
+
 from typing import Callable, Any
 from pydantic import BaseModel, Extra
 from cats.core.date import xi_func, lambda_func, get_interval_division, _BEDATE_trimming
-from cats.core.utils import ReshapeArraysDecorator, StatusKeeper, save_pickle, load_pickle
+from cats.core.utils import ReshapeArraysDecorator, StatusKeeper
+from cats.io.utils import save_pickle, load_pickle
 import numpy as np
 import numba as nb
 from scipy.signal import hilbert, find_peaks
 from scipy.linalg import LinAlgError
 
-# TODO:
-#   - S picks from estimated instantaneous period of the strongest and most prominent phase?
 
-
-class NewPicker(BaseModel, extra=Extra.allow):
+class NewPicker(BaseModel, extra="allow"):
     dt_sec: float
 
     # DATE
@@ -152,26 +154,29 @@ class NewPicker(BaseModel, extra=Extra.allow):
     def __matmul__(self, x):
         return self.pick(x, verbose=True)
 
-    def export_main_params(self):
-        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+    @property
+    def main_params(self):
+        # extract only params in __init__
+        return {kw: val for kw in self.model_fields.keys()
+                if (val := getattr(self, kw, None)) is not None}
 
     def reset_params(self, **params):
-        kwargs = self.export_main_params()
+        kwargs = self.main_params
         kwargs.update(params)
         self.__init__(**kwargs)
 
     def save(self, filename):
-        save_pickle(self.export_main_params(), filename)
+        save_pickle(self.main_params, filename)
 
     @classmethod
     def load(cls, filename):
         loaded = load_pickle(filename)
         if isinstance(loaded, cls):
-            loaded = loaded.export_main_params()
+            loaded = loaded.main_params
         return cls(**loaded)
 
 
-class PickingResult(BaseModel, extra=Extra.allow):
+class PickingResult(BaseModel, extra="allow"):
     envelope: Any = None
     trimmed_envelope: Any = None
     picks: Any = None
