@@ -1,22 +1,29 @@
 import numpy as np
 import holoviews as hv
+from holoviews.plotting.links import DataLink
 from typing import Union
 from .utils import format_interval_by_limits, give_index_slice_by_limits, give_rectangles, intervals_intersection
-hv.extension('matplotlib')
+hv.extension('matplotlib', 'bokeh')
 
 
-def plot_traces(data: np.ndarray[:, :],
+def plot_traces(data: np.ndarray,
                 time: Union[float, np.ndarray] = None,
-                intervals: np.ndarray[:] = None,
-                picks: np.ndarray[:] = None,
-                associated_picks: np.ndarray[:] = None,
+                intervals: np.ndarray = None,
+                picks: np.ndarray = None,
                 trace_loc: Union[float, np.ndarray] = None,
                 time_interval_sec: tuple[float, float] = None,
                 gain: float = 1,
                 amplitude_scale: float = None,
                 clip: bool = False,
                 each_trace: int = 1,
+                interactive=False,
+                allow_picking=False,
+                component_labels=None,
                 **kwargs):
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+
+    assert (data.ndim == 2) or (data.ndim == 3)
 
     if not isinstance(time, np.ndarray):
         dt = 1 if time is None else time
@@ -24,21 +31,16 @@ def plot_traces(data: np.ndarray[:, :],
 
     if not isinstance(trace_loc, np.ndarray):
         dx = 1 if trace_loc is None else trace_loc
-        trace_loc = np.arange(data.shape[0], dtype=float) * dx
+        trace_loc = np.arange(data.shape[-2], dtype=float) * dx
 
     t1, t2 = time_interval_sec = format_interval_by_limits(time_interval_sec, (time.min(), time.max()))
     i_t = give_index_slice_by_limits(time_interval_sec, dt=time[1] - time[0], t0=time[0])
     i_trace = slice(None, None, each_trace)
-    ind_slice = (i_trace, i_t)
 
+    ind_slice = (..., i_trace, i_t)
     data_slice = data[ind_slice]
-    loc_slice = trace_loc[ind_slice[0]]
-
-    kwargs.setdefault('color', 'black')
-    kwargs.setdefault('linewidth', 0.5)
-    kwargs.setdefault('fig_size', 400)
-
-    assert (data_slice.ndim == 2)
+    loc_slice = trace_loc[i_trace]
+    time_slice = time[i_t]
 
     trace_dim = hv.Dimension("Trace")
     t_dim = hv.Dimension("Time", unit='s')
@@ -48,58 +50,135 @@ def plot_traces(data: np.ndarray[:, :],
     scale = gain * dloc
     amax = amplitude_scale or np.nanmedian(np.nanmax(abs(data_slice), axis=-1))
     amax = amax or 1.0
-    dc = (data_slice / amax * scale)
+    data_slice = (data_slice / amax * scale)
     if clip:
         level = dloc / 2.1
-        dc[-level > dc] = -level
-        dc[level < dc] = level
-    dc = dc + np.expand_dims(loc_slice, -1)
+        data_slice[-level > data_slice] = -level
+        data_slice[level < data_slice] = level
 
-    #  Data
-    traces = hv.Overlay([hv.Curve((time[i_t], xi), kdims=[t_dim], vdims=[trace_dim]) for xi in dc])
-    traces = traces.opts(hv.opts.Curve(color=kwargs['color'], linewidth=kwargs['linewidth']))
+    num_traces = data_slice.shape[-2]
+    num_comp = data_slice.shape[0] if data.ndim == 3 else 1
+
+    if component_labels is None:
+        component_labels = ["E", "N", "Z"] + list(range(3, 6 - num_comp))
+
+    #  Data traces
+    traces = []
+    for i in range(num_traces):  # iter over traces
+        for cj in range(num_comp):  # iter over components
+            j_ind = cj if num_comp > 1 else Ellipsis  # ellipsis is for absent component axis
+            trace_curve = data_slice[j_ind, i, :] + loc_slice[i]
+            traces.append(hv.Curve((time_slice, trace_curve),
+                                   kdims=[t_dim], vdims=[trace_dim], label=component_labels[cj]))
+    traces = hv.Overlay(traces)
 
     #  Events intervals
     rects = []
     if intervals is not None:
-        sliced_intervals = np.empty(len(intervals), dtype=object)
-        for ind, intv in enumerate(intervals):
-            sliced_intervals[ind] = intervals_intersection(intv, (t1, t2))
+        sliced_intervals = []
+        intv_locy = []
+        for ind, intv_i in np.ndenumerate(intervals[..., i_trace]):
+            if intv_i is not None:
+                sliced_intervals.append(intervals_intersection(intv_i, reference_interval=(t1, t2)))
+                intv_locy.append(loc_slice[ind[-1]])
 
-        rectangles = give_rectangles(sliced_intervals, loc_slice, scale / gain / 2.2)
-        rects.append(hv.Rectangles(rectangles).opts(facecolor='blue', color='blue',
-                                                    alpha=kwargs.get('alpha', 0.3)))
+        rectangles = give_rectangles(sliced_intervals, intv_locy, scale / gain / 2.2)
+        rects.append(hv.Rectangles(rectangles, kdims=[t_dim, trace_dim, 'x2', 'y2'],
+                                   label="Intervals" * interactive))
     rects = hv.Overlay(rects)
 
     #  Not associated picks
-    onsets = []
+    onset_picks = np.zeros((0, 2))
     if picks is not None:
         onset_picks = []
-        for pi, locy in zip(picks, trace_loc):
-            p_i = pi[(t1 <= pi) & (pi <= t2)]
-            onset_picks.append(np.stack([p_i, np.full_like(p_i, locy)], axis=-1))
-        onset_picks = np.concatenate(onset_picks, axis=0)
-
-        onsets = [hv.Points(onset_picks,
-                            kdims=[t_dim, trace_dim]).opts(marker='|', facecolors='red',
-                                                           edgecolors=None, s=600)]
-    onsets = hv.Overlay(onsets)
+        for ind, pi in np.ndenumerate(picks[..., i_trace]):
+            if pi is not None:
+                locy = loc_slice[ind[-1]]
+                p_i = pi[(t1 <= pi) & (pi <= t2)]
+                onset_picks.append(np.stack([p_i, np.full_like(p_i, locy)], axis=-1))
+        onset_picks = np.concatenate(onset_picks, axis=0) if onset_picks else np.empty((0, 2))
+    original_onsets = hv.Points(onset_picks, kdims=[t_dim, trace_dim], label='Picks')
+    onsets = hv.Overlay([original_onsets])
 
     #  Associated Picks
-    curves = []
-    if associated_picks is not None:
-        min_times = np.nanmin(associated_picks, axis=0)
-        slice_ons = (t1 <= min_times) & (min_times <= t2)
-        ons_inds = (i_trace, slice_ons)
+    # curves = []
+    # if associated_picks is not None:
+    #     min_times = np.nanmin(associated_picks, axis=0)
+    #     slice_ons = (t1 <= min_times) & (min_times <= t2)
+    #     ons_inds = (i_trace, slice_ons)
+    #
+    #     curves = [hv.Curve((pi, loc_slice), label=f"Event {i}", kdims=[t_dim], vdims=[trace_dim])
+    #               for i, pi in enumerate(associated_picks[ons_inds].T)]
+    # curves = hv.Overlay(curves)
 
-        curves = [hv.Curve((pi, loc_slice), label=f"Event {i}",
-                           kdims=[t_dim], vdims=[trace_dim]).opts(marker='|', ms=25, linewidth=2)
-                  for i, pi in enumerate(associated_picks[ons_inds].T)]
-    curves = hv.Overlay(curves)
-
-    #  Summary of all
+    #  Parameters and options
     ylims = (np.nanmin(trace_loc) - dloc, np.nanmax(trace_loc) + dloc)
-    figure = hv.Overlay((traces, rects, onsets, curves))
-    figure = figure.opts(ylim=ylims, xlim=time_interval_sec, fig_size=kwargs['fig_size'],
-                         aspect=2, fontsize=dict(labels=15, ticks=14, title=18))
+    aspect = 2
+    trace_color = kwargs.get('color', 'black') if num_comp == 1 else hv.Cycle(['red', 'blue', 'green'])
+    linewidth = kwargs.get('linewidth', 1)
+    figsize = kwargs.get('fig_size', 400)
+    alpha = kwargs.get('alpha', 0.15)
+    fontsize = dict(labels=15, ticks=14, title=18, legend=12)
+    # bokeh params
+    width = int(figsize * aspect * 1.1)
+    height = int(figsize * 1.1)
+    hover_tooltips = ["$label", "@Time", "@Trace"]
+    intv_tooltips = ["$label", ("Start", "@Time"), ("End", "@x2")]
+    tools = ['hover']
+
+    # Matplotlib opts
+    backend = 'matplotlib'
+    mpl_traces_opts = hv.opts.Curve(color=trace_color, show_legend=True, linewidth=linewidth, backend=backend)
+    mpl_rect_opts = hv.opts.Rectangles(facecolor='blue', color='blue', show_legend=True, alpha=alpha, backend=backend)
+    mpl_points_opts = hv.opts.Points(marker='|', edgecolors=None, linewidth=4, show_legend=True, s=1250, backend=backend)
+    # mpl_picks_opts = hv.opts.Curve(marker='|', ms=25, linewidth=2, backend=backend)
+    mpl_overlay_opts = hv.opts.Overlay(ylim=ylims, xlim=time_interval_sec, fig_size=figsize, aspect=aspect,
+                                       fontsize=fontsize, legend_position='top_right', backend=backend)
+
+    # Bokeh opts (duplicate of Matplotlib but with Bokeh syntax)
+    backend = 'bokeh'
+    bkh_traces_opts = hv.opts.Curve(line_color=trace_color, line_width=linewidth, tools=tools,
+                                    show_legend=True, hover_tooltips=hover_tooltips, backend=backend)
+    bkh_rect_opts = hv.opts.Rectangles(fill_color='blue', line_color='blue', alpha=alpha, muted_alpha=0.025,
+                                       show_legend=True, tools=tools, hover_tooltips=intv_tooltips, backend=backend)
+    bkh_points_opts = hv.opts.Points(marker='dash', angle=90, size=40, line_width=4, legend_position='top_right',
+                                     show_legend=True, tools=tools, hover_tooltips=hover_tooltips, backend=backend)
+    # bkh_picks_opts = hv.opts.Curve(line_width=2, tools=tools, hover_tooltips=hover_tooltips, backend=backend)
+    bkh_overlay_opts = hv.opts.Overlay(ylim=ylims, xlim=time_interval_sec, fontsize=fontsize, width=width,
+                                       height=height, legend_opts={"click_policy": "hide"}, backend=backend)
+
+    # finalizing figure object
+    figure = hv.Overlay((traces.opts(mpl_traces_opts, bkh_traces_opts),
+                         rects.opts(mpl_rect_opts, bkh_rect_opts),
+                         onsets.opts(mpl_points_opts, bkh_points_opts)))
+    figure = figure.opts(mpl_overlay_opts, bkh_overlay_opts)
+
+    switch_plotting_backend(interactive, fig_mpl='png', fig_bokeh='auto')  # switch MPL or BKH
+
+    # Enabling interactive picking tool
+    if allow_picking:
+        assert interactive, "Picking is possible only when interactive plot is used"
+
+        point_stream = hv.streams.PointDraw(data=original_onsets.columns(), num_objects=None, source=original_onsets)
+        table = hv.Table(original_onsets, [t_dim, trace_dim])
+        DataLink(original_onsets, table)
+
+        bkh_table_opts = hv.opts.Table(title='', width=170, editable=True, backend=backend)
+        bkh_overlay_opts = hv.opts.Overlay(width=width, height=height, backend=backend)
+        bkh_layout_opts = hv.opts.Layout(merge_tools=True)
+
+        figure = (figure + table).opts(bkh_table_opts,
+                                       bkh_overlay_opts,
+                                       bkh_layout_opts)
+        figure = (figure, point_stream)  # point stream stores created points/picks
+
     return figure
+
+
+def switch_plotting_backend(interactive: bool, fig_mpl='png', fig_bokeh='auto'):
+    """
+    Switches between `matplotlib` (`interactive=False`) and `bokeh` (`interactive=True`)
+    """
+    backend = 'bokeh' if interactive else 'matplotlib'
+    static_format = fig_bokeh if interactive else fig_mpl
+    hv.output(backend=backend, fig=static_format)
