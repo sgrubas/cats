@@ -15,8 +15,8 @@ class BaseScoring(BaseModel):
     generator_x_and_y: Union[Callable, Any]
     metric_functions: Dict[str, Callable]
     fixed_params: dict = {}
-    param_parser: Callable = None
-    prepare_operator: Callable = None
+    param_parser: Union[Callable, None] = None
+    prepare_operator: Union[Callable, None] = None
 
     def export_main_params(self):
         return {kw: getattr(self, kw, None) for kw in type(self).__fields__.keys()}
