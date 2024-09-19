@@ -1,14 +1,28 @@
-numpy>=1.23.5
-numba>=0.56.4
-scipy>=1.10.1
-holoviews>=1.15.4
-ssqueezepy==0.6.4
-pydantic==1.10.7
-setuptools>=60.0.0
-networkx>=3.1
-psutil>=5.9.5
-tqdm>=4.65.0
+# Numerical
+numpy<2.0.0  # for working with array
+scipy>=1.13.0  # optimize and special funcs
+numba>=0.59.0  # JIT compilation of computational routines
+colorednoise==2.2.0  # random Gaussian colored noise
+ssqueezepy==0.6.4  # fast STFT, CWT
+pandas>=2.0.0  # for tabular data
+
+# Seismology (formats and data sources)
 obspy>=1.4.0
-ipywidgets>=8.0.6
-pandas>=1.5.3
-colorednoise==2.2.0
+
+# Visualization and interactive plots
+holoviews>=1.19.0  # High-level universal API for mpl, bokeh, plotly
+bokeh>=3.4.0  # interactive 2D plots
+matplotlib>=3.9.0  # static plots
+tqdm>=4.65.0  # progress bars
+ipywidgets>=8.0.6  # widgets
+
+# Hyperparameter optimization
+optuna>=3.6.1
+
+# Interactive working environment
+jupyter==1.0.0
+
+# Other
+pydantic>=2.7.0  # for data/arguments parsing
+setuptools>=70.0.0  # to setup the package
+psutil>=6.0.0  # memory tool
