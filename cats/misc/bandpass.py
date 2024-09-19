@@ -1,21 +1,22 @@
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
 from scipy.io import loadmat, savemat
-from pydantic import BaseModel, Field, Extra
+from pydantic import BaseModel, Field
 from cats.core.utils import (StatusKeeper, format_index_by_dimensions, format_interval_by_limits,
-                             give_index_slice_by_limits, save_pickle, load_pickle)
+                             give_index_slice_by_limits)
+from cats.io.utils import save_pickle, load_pickle
 from typing import Any
 from cats.baseclass import CATSResult
 import holoviews as hv
 
 
-class BandpassDenoiser(BaseModel, extra=Extra.allow):
+class BandpassDenoiser(BaseModel, extra="allow"):
     dt_sec: float = Field(1.0, ge=0.0)
     f1_Hz: float = Field(1.0, ge=0.0)
     f2_Hz: float = Field(25.0, ge=0.0)
     order: int = 5
 
-    name = 'Bandpass'
+    name: str = 'Bandpass'
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -26,14 +27,16 @@ class BandpassDenoiser(BaseModel, extra=Extra.allow):
         self.filter_sos = butter(self.order, [self.f1_Hz, self.f2_Hz],
                                  btype='bandpass', output='sos', fs=self.fs)
 
-    def export_main_params(self):
-        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+    @property
+    def main_params(self):
+        return {kw: val for kw in self.model_fields.keys()
+                if (val := getattr(self, kw, None)) is not None}
 
     def reset_params(self, **params):
         """
             Updates the instance with changed parameters.
         """
-        kwargs = self.export_main_params()
+        kwargs = self.main_params
         kwargs.update(params)
         self.__init__(**kwargs)
 
@@ -48,7 +51,7 @@ class BandpassDenoiser(BaseModel, extra=Extra.allow):
         return BandpassDenoisingResult(dt_sec=self.dt_sec,
                                        npts=x.shape[-1],
                                        history=history,
-                                       main_params=self.export_main_params(),
+                                       main_params=self.main_params,
                                        **result)
 
     def denoise(self, x, verbose=False):
@@ -64,13 +67,13 @@ class BandpassDenoiser(BaseModel, extra=Extra.allow):
         return self.__pow__(x)
 
     def save(self, filename):
-        save_pickle(self.export_main_params(), filename)
+        save_pickle(self.main_params, filename)
 
     @classmethod
     def load(cls, filename):
         loaded = load_pickle(filename)
         if isinstance(loaded, cls):
-            loaded = loaded.export_main_params()
+            loaded = loaded.main_params
         return cls(**loaded)
 
 
@@ -116,7 +119,7 @@ class BandpassDenoisingResult(BaseModel):
     def append(self, other):
         for name in ["signal", "signal_denoised"]:
             self._concat(other, name, -1)
-        self.npts += other.npts
+        self.npts += other.time_npts
         self.history.merge(other.history)
         assert self.dt_sec == other.dt_sec
 
