@@ -2,6 +2,7 @@ from .mat import read_mat
 import obspy
 import numpy as np
 from pathlib import Path
+import pickle
 
 
 def read_data(path, format=None, convert_obspy=True, **kwargs):
@@ -24,8 +25,15 @@ def read_data(path, format=None, convert_obspy=True, **kwargs):
 
     """
     path = Path(path)
-    if path.name[-4:] == '.mat':
+
+    path_split = path.name.split('.')
+    assert len(path_split) > 1, f"Data path must contain file format at the end, but it is {path.name}"
+    path_format = path_split[-1]
+
+    if path_format == 'mat':
         data = read_mat(path)
+    elif (path_format == 'pkl') or (path_format == 'pickle'):
+        data = load_pickle(path)
     else:
         data = read_by_obspy(path, format=format, **kwargs)
         if convert_obspy:
@@ -73,3 +81,14 @@ def convert_dict_to_stream(data_in_dict):
               for ind in np.ndindex(shape)]
     stream = obspy.Stream(traces)
     return stream
+
+
+def save_pickle(obj, filename):
+    with open(f'{filename}.pickle', 'wb') as handle:
+        pickle.dump(obj, handle)
+
+
+def load_pickle(filename):
+    with open(filename, 'rb') as handle:
+        obj = pickle.load(handle)
+    return obj
