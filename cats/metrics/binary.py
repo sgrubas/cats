@@ -21,16 +21,11 @@ _EPS = 1e-9
 num_pattern = r"-?\d+\.?\d*"
 
 
-@nb.njit("f8(i8[:], i8[:])")
-def _binary_crossentropy(y_true, y_pred):
-    bce = y_true * np.log(y_pred + _EPS)
-    bce += (1 - y_true) * np.log(1 - y_pred + _EPS)
-    return -bce.mean()
-
-
-@ReshapeArraysDecorator(dim=2, input_num=2)
-def binary_crossentropy(y_true, y_pred, /):
-    return _binary_crossentropy(y_true.astype(np.int64), y_pred.astype(np.int64))
+@ReshapeArraysDecorator(dim=2, input_num=2, output_num=0)
+def binary_crossentropy(y_true, y_pred, /, eps=1e-32):
+    bce = y_true * np.log(y_pred + eps) + (1.0 - y_true) * np.log(1.0 - y_pred + eps)
+    bce = -bce.mean(axis=-1)
+    return bce
 
 
 @nb.njit("f8(i8[:], i8[:], f8)")
@@ -67,8 +62,11 @@ def f_beta_on_picks(picks_true, picks_pred, max_time_dist=2.5, beta=0.5):
     return f_beta(Recall, Precision, beta)
 
 
-def recall_precision_picks(picks_true, picks_pred, max_time_dist=2.5):
-    shape = picks_pred.shape
+def true_false_missed_picks(picks_true, picks_pred, max_time_dist=2.5):
+    if picks_pred.dtype.name == 'object':
+        shape = picks_pred.shape
+    else:
+        shape = picks_pred.shape[:-1]
     TP, FP, FN = 0, 0, 0
     for ind in np.ndindex(*shape):
         onsets = np.array(picks_pred[ind], ndmin=1)
@@ -83,9 +81,35 @@ def recall_precision_picks(picks_true, picks_pred, max_time_dist=2.5):
         FP += fp
         FN += fn
 
+    return TP, FP, FN
+
+
+@nb.njit("UniTuple(i8, 3)(f8[:, :], f8[:])",
+         parallel=True, cache=True)
+def true_false_missed_intervals(pred_intervals, true_picks):
+    """ The metric is NOT for tuning, it focuses on recall only,
+        because the best result can be easily achieved by a single huge interval
+    """
+    interval_events = np.zeros(len(pred_intervals), dtype=np.int64)
+
+    for pi in true_picks:
+        for j, intv in enumerate(pred_intervals):
+            inside = (intv[0] <= pi) & (pi <= intv[1])
+            if inside:
+                interval_events[j] += 1
+                break  # only the first interval covering the event
+
+    TP = np.sum(interval_events)  # true detections
+    FP = np.sum(interval_events == 0)  # false detections
+    FN = len(true_picks) - TP  # missed events
+
+    return TP, FP, FN
+
+
+def recall_precision_picks(picks_true, picks_pred, max_time_dist=2.5):
+    TP, FP, FN = true_false_missed_picks(picks_true, picks_pred, max_time_dist)
     Precision = TP / (TP + FP + _EPS)
     Recall = TP / (TP + FN + _EPS)
-
     return Recall, Precision
 
 
@@ -97,20 +121,20 @@ def binary_metric_func(metric_name):
     Re_Pr = find_word_starting_with(metric_name, "recall", case_insensitive=True)
     Re_Pr = Re_Pr or find_word_starting_with(metric_name, "precision", case_insensitive=True)
 
-    if f_score:
+    if f_score:  # if F score is needed
         beta = float(re.findall(num_pattern, f_score[0])[0])
-        if picks:
+        if picks:  # if only picks are provided
             picks_proximity_sec = float(re.findall(num_pattern, picks[0])[0])
             err_func = partial(f_beta_on_picks, max_time_dist=picks_proximity_sec, beta=beta)
-        else:
+        else:  # If binary sequence is provided (True - event, False - noise)
             err_func = partial(f_beta_raw, beta=beta)
-    elif Re_Pr:
-        if picks:
+    elif Re_Pr:  # if Recall & Presision are needed
+        if picks:  # if only picks are provided
             picks_proximity_sec = float(re.findall(num_pattern, picks[0])[0])
             err_func = partial(recall_precision_picks, max_time_dist=picks_proximity_sec)
-        else:
+        else:  # If binary sequence is provided (True - event, False - noise)
             raise NotImplementedError("This metric hasn't been implemented yet")
-    elif crossentropy:
+    elif crossentropy:  # if crossentropy is needed, works if binary sequence is provided (True - event, False - noise)
         err_func = binary_crossentropy
     else:
         raise ValueError(f"Unknown metric given {metric_name}, only 'F', 'crossentropy', or 'picks F'")
