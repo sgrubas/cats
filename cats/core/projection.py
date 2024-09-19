@@ -5,6 +5,7 @@
 import numpy as np
 import numba as nb
 # from .utils import ReshapeArraysDecorator
+from .clustering import index_cluster_catalog
 
 
 # ------------------  TIME PROJECTION AND FILTERING  ------------------ #
@@ -28,17 +29,17 @@ def _giveIntervals(detection):
     j = 0
     for i in range(N):
         d_i = detection[i]
-        if d_i and (i < N - 1):
+        if d_i and (i < N - 1):  # True and not last
             if i1 < 0:
                 i1 = i
             else:
                 i2 = i
-        elif d_i and (i == N - 1) and (i1 >= 0):
+        elif d_i and (i == N - 1) and (i1 >= 0):  # True and last and ...
             intervals[j, 0] = i1
             intervals[j, 1] = i
             i1 = i2 = -1.0
             j += 1
-        elif (not d_i) and (i1 >= 0):
+        elif (not d_i) and (i1 >= 0):  # False and ...
             intervals[j, 0] = i1
             intervals[j, 1] = i1 if i2 < 0 else i2
             i1 = i2 = -1.0
@@ -98,12 +99,95 @@ def project_intervals(intervals, output_array):
 def FilterDetection(detection, min_separation, min_duration):
     filtered_intervals = np.empty(detection.shape[:-1], dtype=object)
     filtered_detection = np.full_like(detection, False, dtype=bool)
-    for ind, _ in np.ndenumerate(filtered_intervals):
-        interval_ind = _giveIntervals(detection[ind])
-        filtered_intervals[ind] = filter_intervals(interval_ind, min_separation, min_duration)
-        project_intervals(filtered_intervals[ind], filtered_detection[ind])
+    for ind in np.ndindex(filtered_intervals.shape):
+        interval_ind = _giveIntervals(detection[ind])  # get intervals first
+        filtered_intervals[ind] = filter_intervals(interval_ind, min_separation, min_duration)  # filter intervals
+        project_intervals(filtered_intervals[ind], filtered_detection[ind])  # project filtered intervals
 
     return filtered_detection, filtered_intervals
+
+
+@nb.njit(["UniTuple(f8[:, :], 2)(f8[:, :], f8[:, :], f8)"])
+def FilterIntervalsFeatures(detected_intervals, picked_features, dt_sec):
+    """
+        `detected_intervals` are assumed to be properly projected from cluster catalogs
+    """
+    if len(detected_intervals) > 1:  # no point to merge less than 2 intervals
+        N = round(detected_intervals.max() / dt_sec) + 2  # don't need to know full length
+        bool_detection = np.full(N, False, dtype=np.bool_)
+        for intv in detected_intervals:  # projecting first, easier
+            i1, i2 = intv / dt_sec
+            i1, i2 = round(i1 - dt_sec/2), round(i2 + dt_sec/2)  # extending, to avoid argmax of empty slices below
+            bool_detection[i1: i2 + 1] = True
+        merged_intervals = _giveIntervals(bool_detection) * dt_sec  # new, merged intervals from projection
+        onsets = picked_features[:, 0]
+        likelihood = picked_features[:, 1]
+        merged_features = np.full_like(merged_intervals, -1)  # default `-1` will pop up if empty slice below
+        for i, intv in enumerate(merged_intervals):
+            curr_inds = (intv[0] <= onsets) & (onsets <= intv[1])  # which ones are in the new merged interval
+            onsets_i = onsets[curr_inds]
+            likel_i = likelihood[curr_inds]
+            if len(likel_i) > 0:
+                ind_max = np.argmax(likel_i)  # choose only one with max energy
+                merged_features[i] = np.array([onsets_i[ind_max], likel_i[ind_max]])
+    else:
+        merged_intervals, merged_features = detected_intervals, picked_features
+
+    return merged_intervals, merged_features
+
+
+def get_associated_events_from_mCATS_catalog(full_shape, cluster_catalogs, dt_sec):
+
+    shape = full_shape[:-2]  # reduce dim in multitrace
+
+    detected_intervals = np.empty(shape, dtype=object)
+    picked_features = np.empty(shape, dtype=object)
+
+    for ind in np.ndindex(shape):
+        cat = index_cluster_catalog(cluster_catalogs, ind)
+
+        intervals, features = [], []
+        for i, df_grp in cat.groupby('Cluster_ID'):
+            intervals.append([df_grp.Time_start_sec.min(), df_grp.Time_end_sec.max()])
+            peak_id = df_grp.Energy_peak.values.argmax()
+            features.append([df_grp.Time_peak_sec.values[peak_id],
+                             df_grp.Energy_peak.values[peak_id]])
+
+        intervals_i = np.array(intervals)
+        features_i = np.array(features)
+
+        detected_intervals[ind], picked_features[ind] = FilterIntervalsFeatures(detected_intervals=intervals_i,
+                                                                                picked_features=features_i,
+                                                                                dt_sec=dt_sec)
+
+    return detected_intervals, picked_features
+
+
+def IntervalsFeaturesFromCatalogs(full_shape, cluster_catalogs, dt_sec):
+
+    shape = full_shape[:-1]
+
+    detected_intervals = np.empty(shape, dtype=object)
+    picked_features = np.empty(shape, dtype=object)
+
+    for ind in np.ndindex(shape):
+        if len(cluster_catalogs) > 0:  # empty if empty
+            cat = index_cluster_catalog(cluster_catalogs, ind)
+            intervals_i = cat[["Time_start_sec", "Time_end_sec"]].values
+            features_i = cat[["Time_peak_sec", "Energy_peak"]].values
+
+            if len(intervals_i) == 0:  # if shape = (0, ...) then it is `pyobject` array, and fails numba JIT below
+                intervals_i = intervals_i.astype(np.float64)
+                features_i = features_i.astype(np.float64)
+        else:
+            intervals_i = np.zeros((0, 2), dtype=float)
+            features_i = np.zeros((0, 2), dtype=float)
+
+        detected_intervals[ind], picked_features[ind] = FilterIntervalsFeatures(detected_intervals=intervals_i,
+                                                                                picked_features=features_i,
+                                                                                dt_sec=dt_sec)
+
+    return detected_intervals, picked_features
 
 
 def FilterIntervalsFromClusterLabels(detected_cluster_labels):
