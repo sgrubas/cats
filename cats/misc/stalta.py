@@ -2,8 +2,8 @@
     Implements similar detector API for STA/LTA
 """
 
-from pydantic import BaseModel, Extra
-from typing import Callable, Union, Tuple, List
+from pydantic import BaseModel
+from typing import Union, Tuple, List
 
 import numpy as np
 import holoviews as hv
@@ -13,11 +13,12 @@ from tqdm.notebook import tqdm
 from cats.core.utils import ReshapeArraysDecorator, give_rectangles, intervals_intersection
 from cats.core.utils import format_index_by_dimensions, format_interval_by_limits, give_index_slice_by_limits
 from cats.core.utils import aggregate_array_by_axis_and_func, cast_to_bool_dict, del_vals_by_keys, StatusKeeper
-from cats.core.utils import make_default_index_on_axis, save_pickle, load_pickle
+from cats.core.utils import make_default_index_if_outrange
 from cats.core.projection import FilterDetection
 from cats.core.association import PickDetectedPeaks
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
+from cats.io.utils import save_pickle, load_pickle
 
 
 # --------------- STA/LTA DETECTOR API --------------- #
@@ -28,7 +29,7 @@ def STA_LTA(x, long, short, step, overlap, padmode='reflect'):
     return cpu_STA_LTA_backend(X, long, short, step, overlap)
 
 
-class STALTADetector(BaseModel, extra=Extra.allow):
+class STALTADetector(BaseModel, extra='allow'):
     dt_sec: float
     long_window_sec: float
     short_window_sec: float
@@ -40,8 +41,8 @@ class STALTADetector(BaseModel, extra=Extra.allow):
     padmode: str = 'reflect'
     characteristic: str = 'square'
 
-    aggregate_axis_for_likelihood: Union[int, Tuple[int]] = None
-    aggregate_func_for_likelihood: Callable[[np.ndarray], np.ndarray] = np.max
+    aggregate_axis_for_likelihood: Union[int, Tuple[int], None] = None
+    aggregate_func_for_likelihood: Union[str, None] = None
 
     name: str = "STA/LTA"
 
@@ -63,8 +64,11 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         self.ch_functions = {'abs': np.abs, 'square': np.square}
         self.ch_func = self.ch_functions[self.characteristic]
 
-    def export_main_params(self):
-        return {kw: getattr(self, kw) for kw in type(self).__annotations__.keys()}
+    @property
+    def main_params(self):
+        # extract only params in __init__
+        return {kw: val for kw in self.model_fields.keys()
+                if (val := getattr(self, kw, None)) is not None}
 
     @classmethod
     def from_result(cls, STALTAResult):
@@ -74,7 +78,7 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         """
             Updates the instance with changed parameters.
         """
-        kwargs = self.export_main_params()
+        kwargs = self.main_params
         kwargs.update(params)
         self.__init__(**kwargs)
 
@@ -112,7 +116,7 @@ class STALTADetector(BaseModel, extra=Extra.allow):
         kwargs = {**from_full_info,
                   "dt_sec": self.dt_sec,
                   "stalta_dt_sec": self.step_sec,
-                  "npts": x.shape[-1],
+                  "time_npts": x.shape[-1],
                   "stalta_npts": len(stalta_time),
                   "threshold": self.threshold,
                   "history": history,
@@ -220,28 +224,33 @@ class STALTADetector(BaseModel, extra=Extra.allow):
                                               compress)
 
     def save(self, filename):
-        save_pickle(self.export_main_params(), filename)
+        save_pickle(self.main_params, filename)
 
     @classmethod
     def load(cls, filename):
         loaded = load_pickle(filename)
         if isinstance(loaded, cls):
-            loaded = loaded.export_main_params()
+            loaded = loaded.main_params
         return cls(**loaded)
+
 
 class STALTADetectionResult(CATSDetectionResult):
     stalta_dt_sec: float = None
     stalta_npts: int = None
+    threshold: float = None
 
-    def plot(self, ind=None, time_interval_sec=(None, None),
-             SNR_spectrograms=True):
+    def plot(self,
+             ind: Tuple[int] = None,
+             time_interval_sec: Tuple[float] = None,
+             **kwargs):
+
         if ind is None:
             ind = (0,) * (self.signal.ndim - 1)
         t_dim = hv.Dimension('Time', unit='s')
         L_dim = hv.Dimension('Likelihood')
 
         ind = format_index_by_dimensions(ind=ind, shape=self.signal.shape[:-1], slice_dims=0, default_ind=0)
-        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.npts - 1) * self.dt_sec))
+        time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.time_npts - 1) * self.dt_sec))
         t1, t2 = time_interval_sec
 
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
@@ -255,9 +264,8 @@ class STALTADetectionResult(CATSDetectionResult):
         fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims='Amplitude',
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
 
-        if (ax := self.aggregate_axis_for_likelihood) is not None:
-            ind = make_default_index_on_axis(ind, ax, 0)
-            inds_stalta = ind + (i_stalta,)
+        ind = make_default_index_if_outrange(ind, self.likelihood.shape[:-1], default_ind_value=0)
+        inds_stalta = ind + (i_stalta,)
 
         likelihood = np.nan_to_num(self.likelihood[inds_stalta],
                                    posinf=1e8, neginf=-1e8)  # POSSIBLE `NAN` AND `INF` VALUES!
@@ -310,7 +318,7 @@ class STALTADetectionResult(CATSDetectionResult):
         self._concat(other, "detected_intervals", -2, stalta_t0)
         self._concat(other, "picked_features", -2, stalta_t0, (..., 0))
 
-        self.npts += other.npts
+        self.time_npts += other.time_npts
         self.stalta_npts += other.stalta_npts
 
         self.history.merge(other.history)
