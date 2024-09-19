@@ -18,11 +18,13 @@ from typing import Union, Literal
 # --------------------- STFT transform --------------------- #
 
 
-class STFTOperator(BaseModel, extra=Extra.allow):
+class STFTOperator(BaseModel, extra="allow"):
     """
         STFT operator
     """
-    window_specs: Union[int, float, tuple[str, float]]
+    window_specs: Union[float,
+                        tuple[str, float],
+                        tuple[tuple[str, float], float]]
     overlap: float = Field(0.75, ge=0.0, lt=1.0)
     dt_sec: float = 1.0
     backend: Literal["scipy", "ssqueezepy", "ssqueezepy_gpu"] = "ssqueezepy"
@@ -50,13 +52,13 @@ class STFTOperator(BaseModel, extra=Extra.allow):
                                 Default 'reflect'
 
                 scipy_padded : bool : applied for Forward STFT. Default False.
-                             Used when `backend = 'scipy'` it can be (see `scipy.signal.stft`)
+                             Used when `backend = 'scipy'` (see `scipy.signal.stft`)
                 scipy_detrend : bool : applied for Forward STFT. Default False.
-                             Used when `backend = 'scipy'` it can be (see `scipy.signal.stft`)
+                             Used when `backend = 'scipy'` (see `scipy.signal.stft`)
                 ssqueezepy_modulated : bool : applied for Forward & Inverse STFT. Default False.
-                             Used when `backend = 'ssqueezepy'` it can be (see `ssqueezepy.stft` & `ssqueezepy.istft`)
+                             Used when `backend = 'ssqueezepy'` (see `ssqueezepy.stft` & `ssqueezepy.istft`)
                 ssqueezepy_win_exp : int : applied for Inverse STFT. Default `1`.
-                             Used when `backend = 'ssqueezepy'` it can be (see `ssqueezepy.stft` & `ssqueezepy.istft`)
+                             Used when `backend = 'ssqueezepy'` (see `ssqueezepy.stft` & `ssqueezepy.istft`)
 
         """
         super().__init__(**kwargs)
@@ -242,7 +244,7 @@ class STFTOperator(BaseModel, extra=Extra.allow):
         return self.inverse(C)
 
 
-class CWTOperator(BaseModel, extra=Extra.allow):
+class CWTOperator(BaseModel, extra="allow"):
     """
         CWT operator
     """
@@ -302,8 +304,8 @@ class CWTOperator(BaseModel, extra=Extra.allow):
                            "one_int": self.one_int,
                            "x_len": self.x_len,
                            "x_mean": self.x_mean,
-                           "padtype": self.rpadded,
-                           "rpadded": self.padtype,
+                           "padtype": self.padtype,
+                           "rpadded": self.rpadded,
                            "l1_norm": self.l1_norm}
 
     def export_main_params(self):
