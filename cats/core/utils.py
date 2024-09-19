@@ -127,6 +127,8 @@ def get_interval_division(N, L):
     """
     `J` will be adjusted so that `N % J --> min` where the last frame will have `J + N % J`
     """
+    assert L > 0
+
     if N < L: 
         return np.array([[0, N - 1]])
     else:
@@ -162,6 +164,17 @@ def count_slice_objects(tuple_sequence):
     return sum([1 for ii in tuple_sequence if isinstance(ii, slice)])
 
 
+def replace_int_by_list(ind):
+    if isinstance(ind, (list, tuple)):
+        return tuple(map(lambda i: [i] if isinstance(i, int) else i, ind))
+    elif isinstance(ind, int):
+        return [ind]
+    elif isinstance(ind, slice):
+        return ind
+    else:
+        raise ValueError(f"Invalid type of `ind` {type(ind) = }")
+
+
 def format_index_by_dimensions(ind, shape, slice_dims, default_ind=0):
     ndim = len(shape) - slice_dims
     if ind is None:
@@ -177,6 +190,25 @@ def format_index_by_dimensions(ind, shape, slice_dims, default_ind=0):
         assert len(ind) == len(shape)
     else:
         raise KeyError("Unknown ind type")
+
+    return ind
+
+
+def format_index_by_dimensions_new(ind, ndim, default_ind=0):
+    if ind is None:
+        ind = (default_ind,)
+
+    if isinstance(ind, (int, slice)):
+        ind = format_index_by_dimensions_new((ind,), ndim, default_ind)
+    elif isinstance(ind, (list, tuple)):
+        ind = tuple(ind)
+        slice_dims = ndim - len(ind)
+        ind = ind + (slice(None),) * slice_dims
+        assert len(ind) == ndim
+    elif isinstance(ind, type(...)):
+        ind = (ind,)
+    else:
+        raise KeyError(f"Unknown ind type {type(ind) = }")
 
     return ind
 
@@ -223,10 +255,19 @@ def del_vals_by_keys(dict_vals: dict,
             del dict_vals[kw]
 
 
+AGGREGATORS = {"min": np.min,
+               "mean": np.mean,
+               "max": np.max,
+               "median": np.median,
+               "sum": np.sum,
+               "prod": np.prod}
+
+
 def aggregate_array_by_axis_and_func(array, axis, func, min_last_dims):
-    if (array.ndim > min_last_dims) and (axis is not None):
-        max_axis = axis if isinstance(axis, int) else max(axis)
-        assert max_axis < array.ndim - min_last_dims
+    if (array.ndim > min_last_dims) and (axis is not None) and (func is not None):
+        max_axis = axis if isinstance(axis, int) else max(axis)  # max - to check if last needed axes are involved
+        assert max_axis < array.ndim - min_last_dims  # last axes must not be aggregated
+        func = func if callable(func) else AGGREGATORS[func]
         array = func(array, axis=axis, keepdims=True)
     return array
 
@@ -274,14 +315,19 @@ def complex_abs_square(x):
     return x.real ** 2 + x.imag ** 2
 
 
-def intervals_intersection(intervals_array, reference_interval):
+def intervals_intersection_inds(intervals_array, reference_interval):
     t1, t2 = reference_interval
+    interval_inside = (t1 <= intervals_array) & (intervals_array <= t2)
+    interval_inside = interval_inside[:, 0] | interval_inside[:, 1]
+    interval_outside = (intervals_array[:, 0] <= t1) & (t2 <= intervals_array[:, 1])  # wider than (t1, t2)
+    interval_inds = interval_inside | interval_outside
+    return interval_inds
+
+
+def intervals_intersection(intervals_array, reference_interval):
     if len(intervals_array) > 0:
-        interval_inside = (t1 <= intervals_array) & (intervals_array <= t2)
-        interval_inside = interval_inside[:, 0] | interval_inside[:, 1]
-        interval_outside = (intervals_array[:, 0] <= t1) & (t2 <= intervals_array[:, 1])
-        interval_inds = interval_inside | interval_outside
-        return intervals_array[interval_inds]
+        inds = intervals_intersection_inds(intervals_array, reference_interval)
+        return intervals_array[inds]
     else:
         return np.zeros((0, 2))
 
@@ -306,18 +352,16 @@ def mat_structure_to_tight_dataframe_dict(mat_struct):
     return adpt_mat
 
 
-def make_default_index_on_axis(tuple_ind, axis, default_ind_value):
-    tuple_ind = list(tuple_ind)
-    tuple_ind[axis] = default_ind_value
-    return tuple(tuple_ind)
+def make_default_index_if_outrange(tuple_ind, shape, default_ind_value=0):
+    fixed_ind = tuple(map(lambda x, y: default_ind_value if x >= y else x, tuple_ind, shape))
+    return fixed_ind
 
 
-def save_pickle(obj, filename):
-    with open(f'{filename}.pickle', 'wb') as handle:
-        pickle.dump(obj, handle)
-
-
-def load_pickle(filename):
-    with open(filename, 'rb') as handle:
-        obj = pickle.load(handle)
-    return obj
+def make_default_index_on_axis(tuple_ind, ax, default_ind_value=0):
+    if ax is not None:
+        ind = list(tuple_ind)
+        ind[ax] = default_ind_value
+        ind = tuple(ind)
+    else:
+        ind = tuple_ind
+    return ind
