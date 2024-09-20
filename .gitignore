@@ -11,6 +11,7 @@ cats.egg-info/
 /tutorials/.ipynb_checkpoints
 /testing
 /build
+.idea
 
 # Executables
 *.swf
