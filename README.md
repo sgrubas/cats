@@ -19,8 +19,8 @@ There are two ways to install the package:
 1. `pip install git+https://github.com/sgrubas/cats.git`
 
 2.   1. Clone repository: `git clone https://github.com/sgrubas/cats.git`
-     2. Open the `cats` directory with `setup.py` file
-     3. Install: `python setup.py install` or `python setup.py develop` (for the flexible development mode)
+     2. Open the `cats` directory
+     3. Install: `pip install .` or `pip develop -e .`
 
 ## Dependencies
 The package was tested on Python 3.9. See other dependencies in [requirements.txt](https://github.com/sgrubas/cats/blob/main/requirements.txt).

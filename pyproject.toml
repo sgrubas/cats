@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=70.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cats"
+description = "CATS: Cluster Analysis of Trimmed Spectrograms"
+version = "0.2.0"
+
+license = {file = "LICENSE.md"}
+readme = "README.md"
+dynamic = ["dependencies"]
+requires-python = ">= 3.9"
+
+authors = [
+    { name = "Serafim Grubas", email = "serafimgrubas@gmail.com" }
+]
+
+keywords = ["Signal processing", "Detection", "Denoising", "Noise estimation",
+            "Clustering", "Signal recognition", "Signal classification",
+            "Spectrogram", "Time-Frequency", "Sparse", "Earthquake", "Voice"]
+classifiers = [
+    "Development Status :: Beta",
+    "Intended Audience :: Geophysics",
+    "Programming Language :: Python",
+    "Topic :: Scientific/Engineering"
+]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[project.urls]
+Homepage = "https://github.com/sgrubas/cats"
+
+[tool.setuptools.packages.find]
+where = ["cats"]
+
+[tool.setuptools.package-data]
+"data" = ["*.zip", "pretuned/*.pickle"]

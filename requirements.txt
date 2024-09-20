@@ -10,7 +10,7 @@ pandas>=2.0.0  # for tabular data
 obspy>=1.4.0
 
 # Visualization and interactive plots
-holoviews>=1.19.0  # High-level universal API for mpl, bokeh, plotly
+holoviews>=1.19.0  # High-level universal API for matplotlib, bokeh, plotly
 bokeh>=3.4.0  # interactive 2D plots
 matplotlib>=3.9.0  # static plots
 tqdm>=4.65.0  # progress bars
@@ -20,7 +20,7 @@ ipywidgets>=8.0.6  # widgets
 optuna>=3.6.1
 
 # Interactive working environment
-jupyter==1.0.0
+jupyterlab==4.2.5
 
 # Other
 pydantic>=2.7.0  # for data/arguments parsing
