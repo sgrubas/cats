@@ -38,19 +38,15 @@ The package was tested on Python 3.9. See other dependencies in [requirements.tx
 <img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS.png" width="400"/><img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS_CWT.png" width="400"/>
 
 # Citation
-If you find CATS useful for your research, please cite our paper:
+If you find CATS useful for your research, please cite this repository (soon there will be links to our papers):
 ```
 @article{grubas2023cats,
-title = {Seismic event detection via cluster analysis of trimmed spectrograms},
-journal = {TBC},
-volume = {TBC},
-pages = {TBC},
-year = {2024},
-issn = {TBC},
-doi = {TBC},
-url = {TBC},
-author = {Serafim Grubas and Mirko van der Baan},
-keywords = {TBC}
+  title = {Cluster Analysis of Trimmed Spectrograms (CATS)},
+  author = {Serafim Grubas and Mirko van der Baan},
+  journal = {GitHub},
+  url = {https://github.com/sgrubas/cats},
+  year = {2023},
+  doi = {TBC},
 }
 ```
 
