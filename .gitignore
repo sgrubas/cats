@@ -10,6 +10,7 @@ bin-release/
 cats.egg-info/
 /tutorials/.ipynb_checkpoints
 /testing
+/build
 
 # Executables
 *.swf
