@@ -11,18 +11,18 @@ obspy>=1.4.0
 
 # Visualization and interactive plots
 holoviews>=1.19.0  # High-level universal API for matplotlib, bokeh, plotly
-bokeh>=3.4.0  # interactive 2D plots
-matplotlib>=3.9.0  # static plots
+bokeh>=3.0.0  # interactive 2D plots
+matplotlib>=3.0.0  # static plots
 tqdm>=4.65.0  # progress bars
-ipywidgets>=8.0.6  # widgets
+ipywidgets  # widgets
 
 # Hyperparameter optimization
 optuna>=3.6.1
 
 # Interactive working environment
-jupyterlab==4.2.5
+jupyterlab
 
 # Other
 pydantic>=2.7.0  # for data/arguments parsing
 setuptools>=70.0.0  # to setup the package
-psutil>=6.0.0  # memory tool
+psutil  # memory tool
