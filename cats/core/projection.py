@@ -123,7 +123,8 @@ def FilterIntervalsFeatures(detected_intervals, picked_features, dt_sec):
         merged_intervals = _giveIntervals(bool_detection) * dt_sec  # new, merged intervals from projection
         onsets = picked_features[:, 0]
         likelihood = picked_features[:, 1]
-        merged_features = np.full_like(merged_intervals, -1)  # default `-1` will pop up if empty slice below
+        merged_features = np.full((len(merged_intervals),
+                                   picked_features.shape[1]), -1.0)  # default `-1` will pop up if empty slice below
         for i, intv in enumerate(merged_intervals):
             curr_inds = (intv[0] <= onsets) & (onsets <= intv[1])  # which ones are in the new merged interval
             curr_feats = picked_features[curr_inds]
@@ -144,6 +145,11 @@ def get_associated_events_from_mCATS_catalog(full_shape, cluster_catalogs, dt_se
     detected_intervals = np.empty(shape, dtype=object)
     picked_features = np.empty(shape, dtype=object)
 
+    interval_cols = ["Time_start_sec", "Time_end_sec"]
+    feature_cols = ["Time_peak_sec", "Energy_peak"]  # STRICTLY THESE TWO FIRST, important for filtering
+    feature_cols = [col for col in cluster_catalogs.columns
+                    if col not in (interval_cols + feature_cols)]
+
     for ind in np.ndindex(shape):
         cat = index_cluster_catalog(cluster_catalogs, ind)
 
@@ -151,8 +157,7 @@ def get_associated_events_from_mCATS_catalog(full_shape, cluster_catalogs, dt_se
         for i, df_grp in cat.groupby('Cluster_ID'):
             intervals.append([df_grp.Time_start_sec.min(), df_grp.Time_end_sec.max()])
             peak_id = df_grp.Energy_peak.values.argmax()
-            features.append([df_grp.Time_peak_sec.values[peak_id],
-                             df_grp.Energy_peak.values[peak_id]])
+            features.append(df_grp[feature_cols].values[peak_id])
 
         intervals_i = np.array(intervals)
         features_i = np.array(features)
@@ -172,7 +177,7 @@ def IntervalsFeaturesFromCatalogs(full_shape, cluster_catalogs, dt_sec):
     picked_features = np.empty(shape, dtype=object)
 
     interval_cols = ["Time_start_sec", "Time_end_sec"]
-    features_cols = ["Time_peak_sec", "Energy_peak"]  # STRICTLY THESE TWO FIRST, importanr for filtering
+    features_cols = ["Time_peak_sec", "Energy_peak"]  # STRICTLY THESE TWO FIRST, important for filtering
     features_cols += [col for col in cluster_catalogs.columns
                       if col not in (interval_cols + features_cols)]
 
@@ -187,7 +192,7 @@ def IntervalsFeaturesFromCatalogs(full_shape, cluster_catalogs, dt_sec):
                 features_i = features_i.astype(np.float64)
         else:
             intervals_i = np.zeros((0, 2), dtype=float)
-            features_i = np.zeros((0, 2), dtype=float)
+            features_i = np.zeros((0, len(features_cols)), dtype=float)
 
         detected_intervals[ind], picked_features[ind] = FilterIntervalsFeatures(detected_intervals=intervals_i,
                                                                                 picked_features=features_i,
