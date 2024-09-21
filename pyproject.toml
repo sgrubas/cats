@@ -37,7 +37,8 @@ repository = "https://github.com/sgrubas/cats"
 include = ["cats*"]
 
 [tool.setuptools.package-data]
-"data" = ["*.zip", "pretuned/*.pickle"]
+"cats" = ["data/*.zip",
+          "data/pretuned/*.pickle"]
 
 [project.optional-dependencies]
 jup = ["jupyterlab==4.2.5"]
