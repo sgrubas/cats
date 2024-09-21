@@ -100,7 +100,7 @@ class CATSDenoiser(CATSBase):
                                      minSNR=self.minSNR,
                                      history=history,
                                      frequency_groups_indexes=self.frequency_groups_indexes,
-                                     main_params=self.main_params(),
+                                     main_params=self.main_params,
                                      **from_full_info)
 
         history.print_total_time()

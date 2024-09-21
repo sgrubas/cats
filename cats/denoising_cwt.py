@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Any, Union, Literal, List, Tuple, Callable
-from pydantic import BaseModel, Field, Extra
+from pydantic import BaseModel, Field
 from tqdm.notebook import tqdm
 import obspy
 import holoviews as hv
