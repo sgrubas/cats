@@ -34,7 +34,7 @@ homepage = "https://github.com/sgrubas/cats"
 repository = "https://github.com/sgrubas/cats"
 
 [tool.setuptools.packages.find]
-where = ["cats"]
+include = ["cats*"]
 
 [tool.setuptools.package-data]
 "data" = ["*.zip", "pretuned/*.pickle"]
