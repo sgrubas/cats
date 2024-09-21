@@ -119,17 +119,18 @@ def FilterIntervalsFeatures(detected_intervals, picked_features, dt_sec):
             i1, i2 = intv / dt_sec
             i1, i2 = round(i1 - dt_sec/2), round(i2 + dt_sec/2)  # extending, to avoid argmax of empty slices below
             bool_detection[i1: i2 + 1] = True
+
         merged_intervals = _giveIntervals(bool_detection) * dt_sec  # new, merged intervals from projection
         onsets = picked_features[:, 0]
         likelihood = picked_features[:, 1]
         merged_features = np.full_like(merged_intervals, -1)  # default `-1` will pop up if empty slice below
         for i, intv in enumerate(merged_intervals):
             curr_inds = (intv[0] <= onsets) & (onsets <= intv[1])  # which ones are in the new merged interval
-            onsets_i = onsets[curr_inds]
+            curr_feats = picked_features[curr_inds]
             likel_i = likelihood[curr_inds]
             if len(likel_i) > 0:
-                ind_max = np.argmax(likel_i)  # choose only one with max energy
-                merged_features[i] = np.array([onsets_i[ind_max], likel_i[ind_max]])
+                ind_max = np.argmax(likel_i)  # choose only ones with max energy
+                merged_features[i] = curr_feats[ind_max]
     else:
         merged_intervals, merged_features = detected_intervals, picked_features
 
@@ -170,11 +171,16 @@ def IntervalsFeaturesFromCatalogs(full_shape, cluster_catalogs, dt_sec):
     detected_intervals = np.empty(shape, dtype=object)
     picked_features = np.empty(shape, dtype=object)
 
+    interval_cols = ["Time_start_sec", "Time_end_sec"]
+    features_cols = ["Time_peak_sec", "Energy_peak"]  # STRICTLY THESE TWO FIRST, importanr for filtering
+    features_cols += [col for col in cluster_catalogs.columns
+                      if col not in (interval_cols + features_cols)]
+
     for ind in np.ndindex(shape):
         if len(cluster_catalogs) > 0:  # empty if empty
             cat = index_cluster_catalog(cluster_catalogs, ind)
-            intervals_i = cat[["Time_start_sec", "Time_end_sec"]].values
-            features_i = cat[["Time_peak_sec", "Energy_peak"]].values
+            intervals_i = cat[interval_cols].values
+            features_i = cat[features_cols].values
 
             if len(intervals_i) == 0:  # if shape = (0, ...) then it is `pyobject` array, and fails numba JIT below
                 intervals_i = intervals_i.astype(np.float64)
