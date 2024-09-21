@@ -5,12 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cats"
 description = "CATS: Cluster Analysis of Trimmed Spectrograms"
-version = "0.2.0"
 
 license = {file = "LICENSE.md"}
 readme = "README.md"
-dynamic = ["dependencies"]
-requires-python = ">= 3.9"
+dynamic = ["dependencies", "version"]
+requires-python = ">=3.9"
 
 authors = [
     { name = "Serafim Grubas", email = "serafimgrubas@gmail.com" }
@@ -28,9 +27,11 @@ classifiers = [
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
+version = {attr = "cats.__version__"}
 
 [project.urls]
-Homepage = "https://github.com/sgrubas/cats"
+homepage = "https://github.com/sgrubas/cats"
+repository = "https://github.com/sgrubas/cats"
 
 [tool.setuptools.packages.find]
 where = ["cats"]

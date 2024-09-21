@@ -18,6 +18,5 @@ from .io import read_data
 from .core import env_variables
 from .core.env_variables import get_max_memory_available_for_cats, set_max_memory_for_cats
 
-import importlib.metadata
 
-__version__ = importlib.metadata.version("cats")
+__version__ = "0.2.0"
