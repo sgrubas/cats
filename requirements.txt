@@ -19,9 +19,6 @@ ipywidgets  # widgets
 # Hyperparameter optimization
 optuna>=3.6.1
 
-# Interactive working environment
-jupyterlab
-
 # Other
 pydantic>=2.7.0  # for data/arguments parsing
 setuptools>=70.0.0  # to setup the package

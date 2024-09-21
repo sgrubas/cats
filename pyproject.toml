@@ -37,3 +37,6 @@ where = ["cats"]
 
 [tool.setuptools.package-data]
 "data" = ["*.zip", "pretuned/*.pickle"]
+
+[project.optional-dependencies]
+jup = ["jupyterlab==4.2.5"]
