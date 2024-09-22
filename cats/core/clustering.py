@@ -783,6 +783,19 @@ def index_cluster_catalog(catalog, ind):
     return catalog_slice
 
 
+def assign_by_index_cluster_catalog(catalog, ind, columns, values):
+    if isinstance(catalog.index, pd.MultiIndex):
+        catalog_ind = replace_int_by_list(ind)  # to ensure that slicing always returns DataFrame (not Series)
+    else:
+        catalog_ind = ind if isinstance(ind, int) else ind[0]
+        catalog_ind = replace_int_by_list(catalog_ind)
+
+    try:
+        catalog.loc[catalog_ind, columns] = values
+    except KeyError:  # if such trace index is absent --> empty data frame
+        pass
+
+
 def concatenate_cluster_catalogs(catalog1: pd.DataFrame,
                                  catalog2: pd.DataFrame,
                                  t0: float):
