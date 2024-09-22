@@ -16,7 +16,7 @@ import datetime
 
 from .baseclass import CATSBase, CATSResult
 # from .core.association import PickDetectedPeaks
-from .core.projection import IntervalsFeaturesFromCatalogs
+from .core.projection import ProjectCatalogs
 from .core.utils import del_vals_by_keys, give_rectangles, to2d_array_with_num_columns, make_default_index_if_outrange
 from .core.utils import give_index_slice_by_limits, intervals_intersection, StatusKeeper
 from .core.clustering import index_cluster_catalog
@@ -43,19 +43,15 @@ class CATSDetector(CATSBase):
             result_container['likelihood'] = (SNR * (CID > 0)).sum(axis=-2)  # removed the normalization, for simplicity
 
         # Extracts intervals of events
-        shape = result_container['spectrogram_cluster_ID'].shape
-        shape = shape[:-2] + shape[-1:]
-        intervals, features = IntervalsFeaturesFromCatalogs(full_shape=shape,
-                                                            cluster_catalogs=result_container['cluster_catalogs'],
-                                                            dt_sec=self.stft_hop_sec)
+        trace_shape = result_container['spectrogram_cluster_ID'].shape[:-2]
+        intervals, features = ProjectCatalogs(trace_shape,
+                                              result_container['cluster_catalogs'],
+                                              dt_sec=self.stft_hop_sec * 0.5,
+                                              min_separation_sec=self.cluster_distance_t_sec,
+                                              min_duration_sec=0.0)
 
         result_container['detected_intervals'] = intervals
         result_container['picked_features'] = features
-
-        # result_container['picked_features'] = PickDetectedPeaks(result_container['likelihood'],
-        #                                                         result_container['detected_intervals'],
-        #                                                         dt=self.stft_hop_sec, t0=t0)
-        # result_container['detected_intervals'] = result_container['detected_intervals'] * self.stft_hop_sec + t0
 
     def _detect(self, x, /, verbose=False, full_info=False):
         full_info = self.parse_info_dict(full_info)
