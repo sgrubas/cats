@@ -1,4 +1,6 @@
 # Cluster Analysis of Trimmed Spectrograms (CATS)
+[![DOI](https://zenodo.org/badge/595914384.svg)](https://zenodo.org/doi/10.5281/zenodo.13830301)
+
 CATS is a signal processing technique and framework for detecting and denoising sparse signals in the time-frequency domain. 
 Particularly, very useful for processing earthquakes. 
 This work is still in progress, and the package is under active development. 
@@ -45,8 +47,8 @@ If you find CATS useful for your research, please cite this repository (soon the
   author = {Serafim Grubas and Mirko van der Baan},
   journal = {GitHub},
   url = {https://github.com/sgrubas/cats},
-  year = {2023},
-  doi = {TBC},
+  year = {2024},
+  doi = {10.5281/zenodo.13830301},
 }
 ```
 
