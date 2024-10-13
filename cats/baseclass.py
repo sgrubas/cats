@@ -618,7 +618,7 @@ class CATSResult(BaseModel):
             fig3 = (fig3 * cat_fig).relabel(fig3.label).opts(bkh_overlay_opts)
 
         # General params and Matplotlib
-        fontsize = dict(labels=15, title=16, ticks=14, legend=10)
+        fontsize = dict(labels=15, title=16, ticks=14, legend=10, cticks=14)
         figsize = 225
         aspect = 5
         cmap = 'viridis'
@@ -635,11 +635,11 @@ class CATSResult(BaseModel):
         # Matplotlib backend params
         backend = 'matplotlib'
         mpl_curve_opts = hv.opts.Curve(aspect=aspect, fig_size=figsize, fontsize=fontsize, xlim=xlim, ylim=cylim,
-                                       backend=backend)
+                                       show_frame=True, backend=backend)
         mpl_spectr_opts = hv.opts.QuadMesh(cmap=cmap, colorbar=True,  logy=True, norm='log', xlim=xlim, ylim=ylim,
                                            xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize,
-                                           backend=backend)
-        mpl_layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4, title=layout_title,
+                                           cbar_width=0.02, backend=backend)
+        mpl_layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.3, title=layout_title,
                                          aspect_weight=0, sublabel_format='', backend=backend)
 
         # Bokeh backend params

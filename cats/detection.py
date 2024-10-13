@@ -350,7 +350,7 @@ class CATSDetectionResult(CATSResult):
         fig4 = hv.Overlay(last_figs, label=r'4. Likelihood and Detection: $\mathcal{L}(t)$ and $\tilde{\alpha}(t)$')
         lmax = 1.1 * np.max(likelihood)
         cylim = (-0.02 * lmax, lmax)
-        overlay_opts = (hv.opts.Overlay(ylim=cylim, backend='matplotlib'),
+        overlay_opts = (hv.opts.Overlay(ylim=cylim, show_frame=True, backend='matplotlib'),
                         hv.opts.Overlay(ylim=cylim, height=int(opts[1].kwargs['height'] * 1.15), backend='bokeh'))
         fig4 = fig4.opts(*opts[:2]).opts(*overlay_opts)
 
