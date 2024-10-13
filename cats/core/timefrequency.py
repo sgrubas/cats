@@ -11,8 +11,8 @@ from scipy import signal
 import ssqueezepy as ssq
 import os
 from .utils import ReshapeArraysDecorator
-from pydantic import BaseModel, Field, Extra
 from typing import Union, Literal
+from pydantic import BaseModel, Field
 
 
 # --------------------- STFT transform --------------------- #

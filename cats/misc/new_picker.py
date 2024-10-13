@@ -3,7 +3,7 @@
 """
 
 from typing import Callable, Any
-from pydantic import BaseModel, Extra
+from pydantic import BaseModel
 from cats.core.date import xi_func, lambda_func, get_interval_division, _BEDATE_trimming
 from cats.core.utils import ReshapeArraysDecorator, StatusKeeper
 from cats.io.utils import save_pickle, load_pickle
