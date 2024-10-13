@@ -293,16 +293,32 @@ def _ClusteringN3D(SNR, q, s, freq_octaves):
 
 
 def bbox_peaks(freq, time, values, inds):
+    f_inds, t_inds = inds
 
+    # Time interval
+    t_min_id, t_max_id = np.argmin(time), np.argmax(time)
+    t_min, t_max = time[t_min_id], time[t_max_id]
+    t_min -= t_min / (t_inds[t_min_id] + 1) * 0.5  # half-pixel extension (left)
+    t_max += t_max / (t_inds[t_max_id] + 1) * 0.5  # half-pixel extension (right)
+
+    # Frequency bandwidth
+    f_min_id, f_max_id = np.argmin(freq), np.argmax(freq)
+    f_min, f_max = freq[f_min_id], freq[f_max_id]
+    f_min -= f_min / (f_inds[f_min_id] + 1) * 0.5  # half-pixel extension (left)
+    f_max += f_max / (f_inds[f_max_id] + 1) * 0.5  # half-pixel extension (right)
+
+    # Peak location
     peak_id = np.argmax(values)
+    t_peak, f_peak = time[peak_id], freq[peak_id]
+    v_peak = values[peak_id]
 
-    output = {"Time_start": np.min(time),
-              "Time_end": np.max(time),
-              "Frequency_start": np.min(freq),
-              "Frequency_end": np.max(freq),
-              "Time_peak": time[peak_id],
-              "Frequency_peak": freq[peak_id],
-              "Energy_peak": values[peak_id],
+    output = {"Time_start": t_min,
+              "Time_end": t_max,
+              "Frequency_start": f_min,
+              "Frequency_end": f_max,
+              "Time_peak": t_peak,
+              "Frequency_peak": f_peak,
+              "Energy_peak": v_peak,
               }
     return output
 
