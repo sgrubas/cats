@@ -96,6 +96,7 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         """
         super().__init__(**kwargs)
         self._set_params()
+        self._init_params = kwargs
 
     def _set_params(self):
         self.cwt_kwargs = self.cwt_kwargs or {}
@@ -143,22 +144,45 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         self.bedate_scale_grouping_len = max(round(self.bedate_scale_grouping_octaves * self.nvoices), 1)
 
     @property
+    def all_params(self):
+        """ All params from __init__ for the instance
+        """
+        return {kw: getattr(self, kw, None) for kw in self.model_fields.keys()}
+
+    @property
     def main_params(self):
-        # extract only params in __init__
-        return {kw: val for kw in self.model_fields.keys()
-                if (val := getattr(self, kw, None)) is not None}
+        """ Params from __init__ that are not None for the instance
+        """
+        return {kw: val for kw, val in self.all_params.items() if val is not None}
+
+    @property
+    def init_params(self):
+        """ Params passed to __init__ for the instance. Reset updates it.
+        """
+        return self._init_params
+
+    def reset_params(self, **params):
+        """ Updates params of the instance.
+        """
+        kwargs = self.init_params
+        kwargs.update(params)
+
+        self.__init__(**kwargs)
+
+    def save(self, filename):
+        save_pickle(self, filename)
+
+    @classmethod
+    def load(cls, filename):
+        loaded = load_pickle(filename)
+        if isinstance(loaded, dict):
+            return cls(**loaded)
+        else:
+            return loaded
 
     @classmethod
     def from_result(cls, CATSDenoiserCWTResult):
         return cls(**CATSDenoiserCWTResult.main_params)
-
-    def reset_params(self, **params):
-        """
-            Updates the instance with changed parameters.
-        """
-        kwargs = self.main_params
-        kwargs.update(params)
-        self.__init__(**kwargs)
 
     def apply_CWT(self, result_container, /):
         result_container['coefficients'] = self.CWT * result_container['signal']
@@ -475,16 +499,6 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
             n_chunks = int(np.ceil(memory_info["min_required"] / memory_info["available_for_cats"]))
 
         return n_chunks
-
-    def save(self, filename):
-        save_pickle(self.main_params, filename)
-
-    @classmethod
-    def load(cls, filename):
-        loaded = load_pickle(filename)
-        if isinstance(loaded, cls):
-            loaded = loaded.main_params
-        return cls(**loaded)
 
     def memory_usage_estimate(self, x, /, full_info=False):
         memory_usage_bytes, _ = self._memory_usage(x)

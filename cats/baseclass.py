@@ -26,8 +26,6 @@ from .core.utils import format_index_by_dimensions_new, give_nonzero_limits, mat
 from .core.plottingutils import plot_traces, switch_plotting_backend
 from .io.utils import convert_stream_to_dict, save_pickle, load_pickle
 
-# TODO: (possibly)
-#   - make attribute 'main_params' to show only the values passed to the '__init__' (not adjusted parameter set)
 
 # ------------------------ BASE CLASSES ------------------------ #
 
@@ -48,12 +46,12 @@ class CATSBase(BaseModel, extra='allow'):
     stft_overlap: float = Field(0.75, ge=0.0, lt=1.0)
     # main B-E-DATE params
     minSNR: float = 5.5
-    stationary_frame_sec: float = None
+    stationary_frame_sec: Union[float, None] = None
     # main Clustering params
     cluster_size_t_sec: float = 0.2
     cluster_size_f_Hz: float = 15.0
-    cluster_distance_t_sec: float = None
-    cluster_distance_f_Hz: float = None
+    cluster_distance_t_sec: Union[float, None] = None
+    cluster_distance_f_Hz: Union[float, None] = None
 
     # Extra STFT params
     freq_bandpass_Hz: Union[tuple[float, float], Any, None] = None
@@ -141,9 +139,9 @@ than standard deviation. Used in Bienaymé–Chebyshev inequality to get `Nmin` 
 
                 date_Nmin_percentile : float : percentile of data to use as `Nmin` (see above `Q`), supersedes `date_Q`
 
-                date_original_mode : bool : `True` means NOT to use original implementation of DATE algorithm. \
+                date_original_mode : bool : `True` means to use the original implementation of DATE algorithm. \
 Original implementation assumes that if no outliers are found then standard deviation is estimated from `Nmin` \
-to not overestimate the noise. `True` implies that noise can be overestimated. It is beneficial if no outliers \
+to not overestimate the noise, but leads to underestimation. `False` uses our adaptation: if no outliers \
 are found, then no outliers will be present in the trimmed spectrogram.
 
                 stft_backend : str : backend for STFT operator ['scipy', 'ssqueezepy', 'ssqueezepy_gpu']. \
@@ -157,6 +155,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         """
         super().__init__(**kwargs)
         self._set_params()
+        self._init_params = kwargs
 
     def _set_params(self):
         # Setting STFT
@@ -228,22 +227,45 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                                            fft_base=True)
 
     @property
+    def all_params(self):
+        """ All params from __init__ for the instance
+        """
+        return {kw: getattr(self, kw, None) for kw in self.model_fields.keys()}
+
+    @property
     def main_params(self):
-        # extract only params in __init__
-        return {kw: val for kw in self.model_fields.keys()
-                if (val := getattr(self, kw, None)) is not None}
+        """ Params from __init__ that are not None for the instance
+        """
+        return {kw: val for kw, val in self.all_params.items() if val is not None}
+
+    @property
+    def init_params(self):
+        """ Params passed to __init__ for the instance. Reset updates it.
+        """
+        return self._init_params
+
+    def reset_params(self, **params):
+        """ Updates params of the instance.
+        """
+        kwargs = self.init_params
+        kwargs.update(params)
+
+        self.__init__(**kwargs)
+
+    def save(self, filename):
+        save_pickle(self, filename)
+
+    @classmethod
+    def load(cls, filename):
+        loaded = load_pickle(filename)
+        if isinstance(loaded, dict):
+            return cls(**loaded)
+        else:
+            return loaded
 
     @classmethod
     def from_result(cls, CATSResult):
         return cls(**CATSResult.main_params)
-
-    def reset_params(self, **params):
-        """
-            Updates the instance with changed parameters.
-        """
-        kwargs = self.main_params
-        kwargs.update(params)
-        self.__init__(**kwargs)
 
     def apply_STFT(self, result_container, /):
         result_container['coefficients'] = self.STFT * result_container['signal']
@@ -450,16 +472,6 @@ The fastest CPU version is 'ssqueezepy', which is default.
             data, stats = x, None
         return data, stats
 
-    def save(self, filename):
-        save_pickle(self.main_params, filename)
-
-    @classmethod
-    def load(cls, filename):
-        loaded = load_pickle(filename)
-        if isinstance(loaded, cls):
-            loaded = loaded.main_params
-        return cls(**loaded)
-
     def __mul__(self, x):
         return self.apply(x, verbose=False, full_info=False)
 
@@ -639,7 +651,7 @@ class CATSResult(BaseModel):
         mpl_spectr_opts = hv.opts.QuadMesh(cmap=cmap, colorbar=True,  logy=True, norm='log', xlim=xlim, ylim=ylim,
                                            xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize,
                                            cbar_width=0.02, backend=backend)
-        mpl_layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.3, title=layout_title,
+        mpl_layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.35, title=layout_title,
                                          aspect_weight=0, sublabel_format='', backend=backend)
 
         # Bokeh backend params
@@ -741,16 +753,18 @@ class CATSResult(BaseModel):
                     time_interval_sec: Tuple[float] = None,
                     intervals: bool = False,
                     picks: bool = False,
-                    trace_loc: np.ndarray = None,
+                    station_loc: np.ndarray = None,
                     gain: int = 1,
                     clip: bool = False,
-                    each_trace: int = 1,
+                    each_station: int = 1,
                     amplitude_scale: float = None,
+                    per_station_scale: bool = False,
                     component_labels: list[str] = None,
+                    station_labels: list[str] = None,
                     interactive: bool = False,
                     allow_picking: bool = False,
                     **kwargs):
-
+        ind = () if ind is None else ind
         ind = format_index_by_dimensions_new(ind=ind, ndim=signal.ndim - 1, default_ind=0)
         time_interval_sec = format_interval_by_limits(time_interval_sec, (0, (self.time_npts - 1) * self.dt_sec))
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
@@ -766,11 +780,11 @@ class CATSResult(BaseModel):
         detected_intervals = detected_intervals if intervals else None
         picked_onsets = picked_onsets if picks else None
 
-        fig = plot_traces(traces, self.time(time_interval_sec),
-                          intervals=detected_intervals, picks=picked_onsets,
-                          trace_loc=trace_loc, time_interval_sec=time_interval_sec, gain=gain, clip=clip,
-                          each_trace=each_trace, amplitude_scale=amplitude_scale, interactive=interactive,
-                          allow_picking=allow_picking, component_labels=component_labels, **kwargs)
+        fig = plot_traces(traces, self.time(time_interval_sec), intervals=detected_intervals, picks=picked_onsets,
+                          station_loc=station_loc, time_interval_sec=time_interval_sec, gain=gain,
+                          amplitude_scale=amplitude_scale, per_station_scale=per_station_scale, clip=clip,
+                          each_station=each_station, component_labels=component_labels, station_labels=station_labels,
+                          interactive=interactive, allow_picking=allow_picking, **kwargs)
 
         stats = self.stats[ind] if (self.stats is not None) else None
         stats = stats.flat[0] if isinstance(stats, np.ndarray) else stats
