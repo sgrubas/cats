@@ -362,30 +362,25 @@ class CATSDetectionResult(CATSResult):
     def plot_traces(self,
                     ind: Tuple[int] = None,
                     time_interval_sec: Tuple[float] = None,
-                    intervals: bool = True,
-                    picks: bool = True,
-                    trace_loc: np.ndarray = None,
+                    intervals: bool = False,
+                    picks: bool = False,
+                    station_loc: np.ndarray = None,
                     gain: int = 1,
                     clip: bool = False,
-                    each_trace: int = 1,
+                    each_station: int = 1,
                     amplitude_scale: float = None,
+                    per_station_scale: bool = False,
+                    component_labels: list[str] = None,
+                    station_labels: list[str] = None,
                     interactive: bool = False,
                     allow_picking: bool = False,
                     **kwargs):
 
-        fig = super().plot_traces(signal=self.signal,
-                                  ind=ind,
-                                  time_interval_sec=time_interval_sec,
-                                  intervals=intervals,
-                                  picks=picks,
-                                  trace_loc=trace_loc,
-                                  gain=gain,
-                                  clip=clip,
-                                  each_trace=each_trace,
-                                  amplitude_scale=amplitude_scale,
-                                  interactive=interactive,
-                                  allow_picking=allow_picking,
-                                  **kwargs)
+        fig = super().plot_traces(signal=self.signal, ind=ind, time_interval_sec=time_interval_sec, intervals=intervals,
+                                  picks=picks, station_loc=station_loc, gain=gain, clip=clip, each_station=each_station,
+                                  amplitude_scale=amplitude_scale, per_station_scale=per_station_scale,
+                                  component_labels=component_labels, station_labels=station_labels,
+                                  interactive=interactive, allow_picking=allow_picking, **kwargs)
         return fig
 
     def filter_and_update_result(self, cluster_catalogs_filter):
