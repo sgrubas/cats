@@ -4,7 +4,6 @@ from functools import wraps
 from pydantic import BaseModel, Extra
 from typing import Union, Dict, List, Set, Tuple
 from timeit import default_timer
-import pickle
 
 
 #  Generic decorator for formatting inputs & outputs of function when N-dimensional array
