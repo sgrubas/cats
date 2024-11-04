@@ -10,16 +10,20 @@ def plot_traces(data: np.ndarray,
                 time: Union[float, np.ndarray] = None,
                 intervals: np.ndarray = None,
                 picks: np.ndarray = None,
-                trace_loc: Union[float, np.ndarray] = None,
+                station_loc: Union[float, np.ndarray] = None,
                 time_interval_sec: tuple[float, float] = None,
                 gain: float = 1,
-                amplitude_scale: float = None,
+                amplitude_scale: Union[float, np.ndarray] = None,
+                per_station_scale: bool = False,
                 clip: bool = False,
-                each_trace: int = 1,
-                interactive=False,
-                allow_picking=False,
-                component_labels=None,
+                each_station: int = 1,
+                interactive: bool = False,
+                allow_picking: bool = False,
+                component_labels: list[str] = None,
+                station_labels: list[str] = None,
                 **kwargs):
+
+    # ---- Argument parsing ---- #
     if data.ndim == 1:
         data = data.reshape(1, -1)
 
@@ -29,42 +33,63 @@ def plot_traces(data: np.ndarray,
         dt = 1 if time is None else time
         time = np.arange(data.shape[-1]) * dt
 
-    if not isinstance(trace_loc, np.ndarray):
-        dx = 1 if trace_loc is None else trace_loc
-        trace_loc = np.arange(data.shape[-2], dtype=float) * dx
+    if not isinstance(station_loc, np.ndarray):
+        dx = 1 if station_loc is None else station_loc
+        station_loc = np.arange(data.shape[-2], dtype=float) * dx
 
+    # ---- Getting data interval ---- #
     t1, t2 = time_interval_sec = format_interval_by_limits(time_interval_sec, (time.min(), time.max()))
     i_t = give_index_slice_by_limits(time_interval_sec, dt=time[1] - time[0], t0=time[0])
-    i_trace = slice(None, None, each_trace)
+    i_trace = slice(None, None, each_station)
 
     ind_slice = (..., i_trace, i_t)
     data_slice = data[ind_slice]
-    loc_slice = trace_loc[i_trace]
+    loc_slice = station_loc[i_trace]
     time_slice = time[i_t]
 
-    trace_dim = hv.Dimension("Trace")
-    t_dim = hv.Dimension("Time", unit='s')
+    num_stations = data_slice.shape[-2]
+    multi_comp = data_slice.ndim == 3
+    num_comp = data_slice.shape[0] if multi_comp else 1
 
+    # ---- Scaling data ---- #
     dloc = np.nanmin(np.diff(loc_slice)) if len(loc_slice) > 1 else 1
     dloc = dloc if dloc > 0 else 1
     scale = gain * dloc
-    amax = amplitude_scale or np.nanmedian(np.nanmax(abs(data_slice), axis=-1))
-    amax = amax or 1.0
+
+    if not per_station_scale:
+        amax = amplitude_scale or np.nanmedian(np.nanmax(abs(data_slice), axis=-1))
+        amax = amax or 1.0
+    else:
+        if amplitude_scale is not None:
+            amax = np.expand_dims(amplitude_scale, axis=-1)
+            amax = amax if not multi_comp else np.expand_dims(amax, axis=0)
+        else:
+            amax = np.nanmax(abs(data_slice), axis=-1, keepdims=True)  # per station
+            amax = amax if not multi_comp else np.nanmedian(amax, axis=0, keepdims=True)  # per component
+            amax = np.where(amax != 0, amax, 1.0)  # remove zero divisor
+
     data_slice = (data_slice / amax * scale)
     if clip:
         level = dloc / 2.1
         data_slice[-level > data_slice] = -level
         data_slice[level < data_slice] = level
 
-    num_traces = data_slice.shape[-2]
-    num_comp = data_slice.shape[0] if data.ndim == 3 else 1
+    # ---- Labels ---- #
 
     if component_labels is None:
-        component_labels = ["E", "N", "Z"] + list(range(3, 6 - num_comp))
+        component_labels = ["E", "N", "Z"] if num_comp <= 3 else list(range(num_comp))
 
+    if station_labels is None:
+        station_labels = list(range(1, num_stations + 1))
+    station_labels = [(i, st) for i, st in enumerate(station_labels)]
+
+    trace_dim = hv.Dimension("Station")
+    t_dim = hv.Dimension("Time", unit='s')
+
+    # ---- Creating plotting objects ---- #
     #  Data traces
     traces = []
-    for i in range(num_traces):  # iter over traces
+    for i in range(num_stations):  # iter over traces
         for cj in range(num_comp):  # iter over components
             j_ind = cj if num_comp > 1 else Ellipsis  # ellipsis is for absent component axis
             trace_curve = data_slice[j_ind, i, :] + loc_slice[i]
@@ -75,9 +100,16 @@ def plot_traces(data: np.ndarray,
     #  Events intervals
     rects = []
     if intervals is not None:
+        object_dtype = (intervals.dtype == object)
+        indexer = (..., i_trace) + (slice(None),) * (not object_dtype)
+        shape_slice = slice(None, None if object_dtype else -1)
+        intervals_slice = intervals[indexer]
+        shape = intervals_slice.shape[shape_slice]
+
         sliced_intervals = []
         intv_locy = []
-        for ind, intv_i in np.ndenumerate(intervals[..., i_trace]):
+        for ind in np.ndindex(shape):
+            intv_i = intervals_slice[ind]
             if intv_i is not None:
                 sliced_intervals.append(intervals_intersection(intv_i, reference_interval=(t1, t2)))
                 intv_locy.append(loc_slice[ind[-1]])
@@ -90,8 +122,15 @@ def plot_traces(data: np.ndarray,
     #  Not associated picks
     onset_picks = np.zeros((0, 2))
     if picks is not None:
+        object_dtype = (picks.dtype == object)
+        indexer = (..., i_trace) + (slice(None),) * (not object_dtype)
+        shape_slice = slice(None, None if object_dtype else -1)
+        picks_slice = picks[indexer]
+        shape = picks_slice.shape[shape_slice]
+
         onset_picks = []
-        for ind, pi in np.ndenumerate(picks[..., i_trace]):
+        for ind in np.ndindex(shape):
+            pi = picks_slice[ind]
             if pi is not None:
                 locy = loc_slice[ind[-1]]
                 p_i = pi[(t1 <= pi) & (pi <= t2)]
@@ -111,8 +150,8 @@ def plot_traces(data: np.ndarray,
     #               for i, pi in enumerate(associated_picks[ons_inds].T)]
     # curves = hv.Overlay(curves)
 
-    #  Parameters and options
-    ylims = (np.nanmin(trace_loc) - dloc, np.nanmax(trace_loc) + dloc)
+    # ---- Parameters and options ---- #
+    ylims = (np.nanmin(station_loc) - dloc, np.nanmax(station_loc) + dloc)
     aspect = 2
     trace_color = kwargs.get('color', 'black') if num_comp == 1 else hv.Cycle(['red', 'blue', 'green'])
     linewidth = kwargs.get('linewidth', 1)
@@ -130,10 +169,12 @@ def plot_traces(data: np.ndarray,
     backend = 'matplotlib'
     mpl_traces_opts = hv.opts.Curve(color=trace_color, show_legend=True, linewidth=linewidth, backend=backend)
     mpl_rect_opts = hv.opts.Rectangles(facecolor='blue', color='blue', show_legend=True, alpha=alpha, backend=backend)
-    mpl_points_opts = hv.opts.Points(marker='|', edgecolors=None, linewidth=4, show_legend=True, s=1250, backend=backend)
+    mpl_points_opts = hv.opts.Points(marker='|', edgecolors=None, linewidth=4, show_legend=True, s=1250,
+                                     backend=backend)
     # mpl_picks_opts = hv.opts.Curve(marker='|', ms=25, linewidth=2, backend=backend)
     mpl_overlay_opts = hv.opts.Overlay(ylim=ylims, xlim=time_interval_sec, fig_size=figsize, aspect=aspect,
-                                       fontsize=fontsize, legend_position='top_right', backend=backend)
+                                       fontsize=fontsize, legend_position='top_right', yticks=station_labels,
+                                       backend=backend)
 
     # Bokeh opts (duplicate of Matplotlib but with Bokeh syntax)
     backend = 'bokeh'
@@ -145,9 +186,10 @@ def plot_traces(data: np.ndarray,
                                      show_legend=True, tools=tools, hover_tooltips=hover_tooltips, backend=backend)
     # bkh_picks_opts = hv.opts.Curve(line_width=2, tools=tools, hover_tooltips=hover_tooltips, backend=backend)
     bkh_overlay_opts = hv.opts.Overlay(ylim=ylims, xlim=time_interval_sec, fontsize=fontsize, width=width,
-                                       height=height, legend_opts={"click_policy": "hide"}, backend=backend)
+                                       height=height, legend_opts={"click_policy": "hide"}, yticks=station_labels,
+                                       backend=backend)
 
-    # finalizing figure object
+    # ---- Finalizing figure object ---- #
     figure = hv.Overlay((traces.opts(mpl_traces_opts, bkh_traces_opts),
                          rects.opts(mpl_rect_opts, bkh_rect_opts),
                          onsets.opts(mpl_points_opts, bkh_points_opts)))
@@ -155,7 +197,7 @@ def plot_traces(data: np.ndarray,
 
     switch_plotting_backend(interactive, fig_mpl='png', fig_bokeh='auto')  # switch MPL or BKH
 
-    # Enabling interactive picking tool
+    # ---- Enabling interactive picking tool ---- #
     if allow_picking:
         assert interactive, "Picking is possible only when interactive plot is used"
 
