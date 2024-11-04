@@ -291,6 +291,7 @@ def _ClusteringN3D(SNR, q, s, freq_octaves):
 
 # ---------------- Cluster catalogs ---------------- #
 
+# TODO: - make 'snr' and 'energy' values accessible to all feature functions, not just 'values'
 
 def bbox_peaks(freq, time, values, inds):
     f_inds, t_inds = inds
