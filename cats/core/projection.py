@@ -256,10 +256,11 @@ def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, m
             detected_intervals[ind] = projected_intervals
 
             # ------- going to be deprecated --------
-            features = cat[features_cols].values
+            features = cat[features_cols].values  # 2D array
             max_inds = maximum_position(features[:, 1], merge_inds + 1,
                                         np.arange(merge_inds.max() + 1) + 1)  # peak energy criterion
-            picked_features[ind] = features[np.array(max_inds).squeeze()]
+            features = features[np.array(max_inds).squeeze()]
+            picked_features[ind] = features if features.ndim > 1 else features.reshape(-1, len(features_cols))
 
         else:  # if empty then it is `pyobject` array, and fails numba JIT below
             detected_intervals[ind] = np.zeros((0, 2), dtype=float)
