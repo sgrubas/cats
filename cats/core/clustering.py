@@ -4,15 +4,16 @@
 
 import numpy as np
 import numba as nb
-from .utils import ReshapeArraysDecorator, replace_int_by_list
-from scipy import ndimage, stats, interpolate
+from .utils import ReshapeArraysDecorator, replace_int_by_list, replace_int_by_slice
+from scipy import stats, interpolate
 import pandas as pd
 from collections import ChainMap, defaultdict
+from typing import List, Dict, Callable, Union, Tuple
 
 # ------------------- CLUSTERING ------------------- #
 
 
-def Clustering(SNR, /, q, s, freq_octaves):
+def Clustering(T_mask, /, q, s, freq_octaves):
     """
         Performs clustering [Note 1] of trimmed spectrograms via Connected-Component labeling [Ch 7.7 P 152, 1; 2].
         Algorithm based on method "one component at a time" via graph traversal using Depth-First Search [3, 4, 5][Note 2].
@@ -22,8 +23,8 @@ def Clustering(SNR, /, q, s, freq_octaves):
             3. Filters out labeled clusters smaller than `s` (see below for `s`).
 
         Arguments:
-            SNR : np.ndarray (M, Nf, Nt) or (M, Nc, Nf, Nt) :
-                  Trimmed SNR spectrogram where nonzero elements (SNR > 0) will be labelled.
+            T_mask : np.ndarray (M, Nf, Nt) or (M, Nc, Nf, Nt) :
+                  Trimmed binary mask where nonzero elements will be labelled.
                   `M` is number of spectrograms, `Nc` is number of traces, `Nf` is frequency axis, `Nt` is time axis.
 
             q : tuple[int, int] / tuple[int, int, int] : neighborhood distance for clustering
@@ -65,19 +66,17 @@ def Clustering(SNR, /, q, s, freq_octaves):
 
     func = {2: _ClusteringN2D, 3: _ClusteringN3D}
     assert len(q) == len(s)
-    return func[len(q)](SNR, q, s, freq_octaves)
+    return func[len(q)](T_mask, q, s, freq_octaves)
 
 
 IND_ND = lambda n: f'UniTuple(i8, {n})'
-CLUSTER_STAT_SIGNATURE_ND = lambda n: f"Tuple(({IND_ND(n)}, {IND_ND(n)}))"
+CLUSTER_OUT_SIGNATURE_ND = lambda n: f"Tuple(({IND_ND(n)}, {IND_ND(n)}))"
 
 
-@nb.njit([f"{CLUSTER_STAT_SIGNATURE_ND(2)}({IND_ND(2)}, {IND_ND(2)}, f8[:, :], i4[:, :], i4, f8)",
-          f"{CLUSTER_STAT_SIGNATURE_ND(2)}({IND_ND(2)}, {IND_ND(2)}, f4[:, :], i4[:, :], i4, f8)"],
-         cache=True)
-def depth_first_search_2D(ind, q, SNR, C, cid, freq_distance_octaves):
+@nb.njit(f"{CLUSTER_OUT_SIGNATURE_ND(2)}({IND_ND(2)}, {IND_ND(2)}, b1[:, :], i4[:, :], i4, f8)", cache=True)
+def depth_first_search_2D(ind, q, T_mask, C, cid, freq_distance_octaves):
     q_f, q_t = q
-    Nf, Nt = SNR.shape
+    Nf, Nt = T_mask.shape
 
     mins = ind
     maxs = ind
@@ -112,7 +111,7 @@ def depth_first_search_2D(ind, q, SNR, C, cid, freq_distance_octaves):
         for li in range(i1, i2):
             for lj in range(j1, j2):
                 lind = (li, lj)
-                nonzero = (SNR[lind] > 0.0)  # SNR must be > 0
+                nonzero = T_mask[lind]  # mask value must be True
                 non_visited = (C[lind] == 0)  # only non-visited elements are added to stack
                 if nonzero and non_visited:
                     stack.append(lind)  # add to stack
@@ -121,21 +120,19 @@ def depth_first_search_2D(ind, q, SNR, C, cid, freq_distance_octaves):
     return mins, maxs
 
 
-@nb.njit([f"i4[:, :](f8[:, :], {IND_ND(2)}, {IND_ND(2)}, UniTuple(f8, 2))",
-          f"i4[:, :](f4[:, :], {IND_ND(2)}, {IND_ND(2)}, UniTuple(f8, 2))"],
-         cache=True)
-def _Clustering2D(SNR, q, s, freq_octaves):
-    shape = SNR.shape
+@nb.njit(f"i4[:, :](b1[:, :], {IND_ND(2)}, {IND_ND(2)}, UniTuple(f8, 2))", cache=True)
+def _Clustering2D(T_mask, q, s, freq_octaves):
+    shape = T_mask.shape
     freq_width_octaves, freq_distance_octaves = freq_octaves
 
     # Finding and labelling clusters
     C = np.zeros(shape, dtype=np.int32)
     cluster_size = {}  # remembers cluster sizes
     cid = 1
-    for i, j in np.argwhere(SNR):  # iteratively scan each pixel
+    for i, j in np.argwhere(T_mask):  # iteratively scan each pixel
         ind = (i, j)
         if C[ind] < 1:  # if pixel does not have label, do DFS
-            cluster_size[cid] = depth_first_search_2D(ind, q, SNR, C, cid, freq_distance_octaves)
+            cluster_size[cid] = depth_first_search_2D(ind, q, T_mask, C, cid, freq_distance_octaves)
             cid += 1
 
     # Filtering clusters by sizes
@@ -162,24 +159,20 @@ def _Clustering2D(SNR, q, s, freq_octaves):
 
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
-@nb.njit([f"i4[:, :, :](f8[:, :, :], {IND_ND(2)}, {IND_ND(2)}, UniTuple(f8, 2))",
-          f"i4[:, :, :](f4[:, :, :], {IND_ND(2)}, {IND_ND(2)}, UniTuple(f8, 2))"],
-         parallel=True, cache=True)
-def _ClusteringN2D(SNR, q, s, freq_octaves):
-    C = np.empty(SNR.shape, dtype=np.int32)
-    for i in nb.prange(SNR.shape[0]):
-        C[i] = _Clustering2D(SNR[i], q, s, freq_octaves)
+@nb.njit(f"i4[:, :, :](b1[:, :, :], {IND_ND(2)}, {IND_ND(2)}, UniTuple(f8, 2))", parallel=True, cache=True)
+def _ClusteringN2D(T_mask, q, s, freq_octaves):
+    C = np.empty(T_mask.shape, dtype=np.int32)
+    for i in nb.prange(T_mask.shape[0]):
+        C[i] = _Clustering2D(T_mask[i], q, s, freq_octaves)
     return C
 
 
-@nb.njit([f"{CLUSTER_STAT_SIGNATURE_ND(3)}({IND_ND(3)}, {IND_ND(3)}, f8[:, :, :], i4[:, :, :], i4, f8)",
-          f"{CLUSTER_STAT_SIGNATURE_ND(3)}({IND_ND(3)}, {IND_ND(3)}, f4[:, :, :], i4[:, :, :], i4, f8)"],
-         cache=True)
-def depth_first_search_3D(ind, q, SNR, C, cid, freq_distance_octaves):
+@nb.njit(f"{CLUSTER_OUT_SIGNATURE_ND(3)}({IND_ND(3)}, {IND_ND(3)}, b1[:, :, :], i4[:, :, :], i4, f8)", cache=True)
+def depth_first_search_3D(ind, q, T_mask, C, cid, freq_distance_octaves):
     """ See detailed comments in `depth_first_search_2D` """
 
     q_c, q_f, q_t = q
-    Nc, Nf, Nt = SNR.shape
+    Nc, Nf, Nt = T_mask.shape
 
     mins = ind
     maxs = ind
@@ -215,7 +208,7 @@ def depth_first_search_3D(ind, q, SNR, C, cid, freq_distance_octaves):
             for li in range(i1, i2):
                 for lj in range(j1, j2):
                     lind = (lk, li, lj)
-                    nonzero = (SNR[lind] > 0.0)
+                    nonzero = T_mask[lind]  # mask must be True
                     non_visited = (C[lind] == 0)
                     if nonzero and non_visited:
                         stack.append(lind)
@@ -224,21 +217,19 @@ def depth_first_search_3D(ind, q, SNR, C, cid, freq_distance_octaves):
     return mins, maxs
 
 
-@nb.njit([f"i4[:, :, :](f8[:, :, :], {IND_ND(3)}, {IND_ND(3)}, UniTuple(f8, 2))",
-          f"i4[:, :, :](f4[:, :, :], {IND_ND(3)}, {IND_ND(3)}, UniTuple(f8, 2))"],
-         cache=True)
-def _Clustering3D(SNR, q, s, freq_octaves):
-    shape = SNR.shape
+@nb.njit(f"i4[:, :, :](b1[:, :, :], {IND_ND(3)}, {IND_ND(3)}, UniTuple(f8, 2))", cache=True)
+def _Clustering3D(T_mask, q, s, freq_octaves):
+    shape = T_mask.shape
     freq_width_octaves, freq_distance_octaves = freq_octaves
 
     # finding clusters
     C = np.zeros(shape, dtype=np.int32)
     cluster_size = {}
     cid = 1
-    for k, i, j in np.argwhere(SNR):
+    for k, i, j in np.argwhere(T_mask):
         ind = (k, i, j)
         if C[ind] < 1:
-            cluster_size[cid] = depth_first_search_3D(ind, q, SNR, C, cid, freq_distance_octaves)
+            cluster_size[cid] = depth_first_search_3D(ind, q, T_mask, C, cid, freq_distance_octaves)
             cid += 1
 
     # filtering clusters
@@ -279,21 +270,284 @@ def _Clustering3D(SNR, q, s, freq_octaves):
 
 
 @ReshapeArraysDecorator(dim=4, input_num=1, methodfunc=False, output_num=1, first_shape=True)
-@nb.njit([f"i4[:, :, :, :](f8[:, :, :, :], {IND_ND(3)}, {IND_ND(3)}, UniTuple(f8, 2))",
-          f"i4[:, :, :, :](f4[:, :, :, :], {IND_ND(3)}, {IND_ND(3)}, UniTuple(f8, 2))"],
-         parallel=True, cache=True)
-def _ClusteringN3D(SNR, q, s, freq_octaves):
-    C = np.empty(SNR.shape, dtype=np.int32)
-    for i in nb.prange(SNR.shape[0]):
-        C[i] = _Clustering3D(SNR[i], q, s, freq_octaves)
+@nb.njit(f"i4[:, :, :, :](b1[:, :, :, :], {IND_ND(3)}, {IND_ND(3)}, UniTuple(f8, 2))", parallel=True, cache=True)
+def _ClusteringN3D(T_mask, q, s, freq_octaves):
+    C = np.empty(T_mask.shape, dtype=np.int32)
+    for i in nb.prange(T_mask.shape[0]):
+        C[i] = _Clustering3D(T_mask[i], q, s, freq_octaves)
     return C
 
 
 # ---------------- Cluster catalogs ---------------- #
 
-# TODO: - make 'snr' and 'energy' values accessible to all feature functions, not just 'values'
+# def feature_func_wrapper(funcs, freq, time):
+#     def wrapper(def_values, inds):
+#         sep_inds = np.divmod(inds, len(time))
+#         freq_inds, time_inds = sep_inds
+#         t = time[time_inds]  # time axis of `values`
+#         f = freq[freq_inds]  # freq axis of `values`
+#
+#         output_dicts = [func(f, t, def_values, sep_inds) for func in funcs]
+#         return ChainMap(*output_dicts)
+#
+#     return wrapper
+#
+#
+# def calculate_cluster_features(Val, CID, freq, time, feature_funcs):
+#     cids = np.arange(1, CID.max() + 1).tolist()  # list is important for unpacking further in ClusterCatalogs
+#     func = feature_func_wrapper(feature_funcs, freq, time)
+#     if len(cids) > 0:
+#         cluster_features = ndimage.labeled_comprehension(input=Val, labels=CID,
+#                                                          index=cids, func=func,
+#                                                          out_dtype=dict,
+#                                                          default={},  # empty dict by default!
+#                                                          pass_positions=True)
+#         # `if cldict` to skip non-existing cluster IDs (happens if multitrace)
+#         features_dict = {'Cluster_ID': [cid for cid, cldict in zip(cids, cluster_features) if cldict]}
+#         # extracts all unique keys
+#         ref_keys = ChainMap(*cluster_features).keys()
+#         for name in ref_keys:  # iter over features
+#             features_dict[name] = [cldict.get(name, np.nan)
+#                                    for cldict in cluster_features if cldict]  # list is important, see above
+#     else:
+#         features_dict = {}
+#
+#     return features_dict
 
-def bbox_peaks(freq, time, values, inds):
+# TODO:
+#  - parallelize 'calculate_cluster_features' with 'numba'? (seems not feasible due to 'funcs' and 'dicts' types)
+#  - implement ClusterCatalogs for 3D, when `multitrace=True`? (is it useful?)
+
+def calculate_cluster_features(values_dict: Dict[str, np.ndarray],
+                               labels: np.ndarray,
+                               funcs: List[Callable],
+                               freq: np.ndarray,
+                               time: np.ndarray) -> Dict[str, List[float]]:
+
+    index = range(1, labels.max() + 1)
+    catalog = defaultdict(list)
+
+    for cid in index:
+        # Find elements for cluster index == 'cid'
+        cond_inds = (labels == cid)
+
+        # Get time and freq indexes
+        freq_inds, time_inds = sep_inds = np.nonzero(cond_inds)  # always 2D !
+        nonzero_num = len(freq_inds)
+
+        if nonzero_num > 0:  # skip non-existing indexes
+            f = freq[freq_inds]  # exact time values
+            t = time[time_inds]  # exact freq values
+
+            # Slice feature distributions
+            vals_slices_dict = {}
+            for name, val in values_dict.items():
+                val_shape = val.shape[:-2]  # the last 2 dims are (freq, time)
+
+                if len(val_shape) > 0:  # handles arrays in case of aggregated clustering
+                    val_new = np.zeros(val_shape + (len(freq_inds),), dtype=val.dtype)
+                    for val_ind in np.ndindex(*val_shape):
+                        val_new[val_ind] = val[val_ind][cond_inds]
+                else:
+                    val_new = val[cond_inds]
+
+                vals_slices_dict[name] = val_new
+
+            # Iterate over feature funcs on feature distributions
+            res_dicts = [func(f, t, vals_slices_dict, sep_inds) for func in funcs]
+
+            # Compose single long dict (must be unique keys / feature names, else it picks the first occuring)
+            func_res_dict = ChainMap(*res_dicts)
+
+            # Make 'dict of lists of vals' from 'dict of vals'
+            catalog['Cluster_ID'].append(cid)
+            for name, vals in func_res_dict.items():
+                catalog[name].append(vals)
+
+    return catalog
+
+
+def ClusterCatalogs(values_dict: Dict[str, np.ndarray],
+                    CID: np.ndarray,
+                    freq: np.ndarray,
+                    time: np.ndarray,
+                    feature_funcs: List[Callable] = None,
+                    aggr_clustering_axis: Union[int, Tuple[int], None] = None,
+                    frequency_unit: str = 'Hz',
+                    time_unit: str = 'sec',
+                    trace_dim_names: List[str] = None):
+    """
+        Calculates statistics/features of cluster in each trace
+
+        Arguments:
+             values_dict : dict[str, np.ndarray (..., Nf, Nt)] : array of values (PSD, SNR, ...)
+             CID : np.ndarray (..., Nf, Nt) : array cluster ID values
+             freq : np.ndarray (Nf,) : array of frequencies
+             time : np.ndarray (Nt,) : array of time samples
+             feature_funcs : list[callable] : Funcs of signature
+                         `func(freq, time, values_dict, inds) -> dict[str, float]`,
+                         where `freq`, `time`, `values` are 1D arrays, `inds = [freq_inds, time_inds]`.
+                         Must return dict with the calculated features.
+             aggr_clustering_axis : int | tuple[int] : axis for aggregated clustering
+             frequency_unit : str : unit name for adding suffix to column names in Catalog DataFrame
+             time_unit : str : unit name for adding suffix to column names in Catalog DataFrame
+             trace_dim_names : list[str] : names of trace dimensions for DataFrame MultiIndex
+
+        Returns:
+            Catalogs: pd.DataFrame : dataframe with calculated features for each trace and cluster
+    """
+
+    if feature_funcs is None:
+        feature_funcs = [bbox_peaks]
+    assert isinstance(feature_funcs, (list, tuple)), "`feature_funcs` must be list or tuple"
+
+    assert all([val.shape[-2:] == CID.shape[-2:] for val in values_dict.values()]), \
+        "Key time-freq dimensions (last two) must coincide with CID array for all 'values_dict'"
+
+    trace_shape = CID.shape[:-2]
+    ndim = len(trace_shape)
+
+    if trace_dim_names is None:
+        trace_dim_names = [f"Trace_dim_{i}" for i in range(ndim)]
+
+    # 1. get features data in dicts; 2. then DataFrame. This order is much more efficient (~2-3x)
+    catalogs = defaultdict(list)  # list type is important for appending/extending lists
+    for ind in np.ndindex(*trace_shape):  # iter over traces
+        val_ind = replace_int_by_slice(ind, aggr_clustering_axis)  # for slicing values_dict (needed to handle aggr.)
+
+        # calculate features
+        values_dict_ind = {name: val[val_ind] for name, val in values_dict.items()}
+        catalog = calculate_cluster_features(values_dict=values_dict_ind,
+                                             labels=CID[ind],
+                                             funcs=feature_funcs,
+                                             freq=freq,
+                                             time=time)
+        for name, data in catalog.items():
+            catalogs[name].extend(data)
+
+        if (cids := catalog.get("Cluster_ID", None)) is not None:  # if non-empty, at least one cluster
+            for name, tr_i in zip(trace_dim_names, ind):  # iter over trace dims
+                catalogs[name].extend([tr_i] * len(cids))
+
+    # create DataFrame
+    catalogs = pd.DataFrame(catalogs)  # Unified DataFrame for all traces
+
+    if len(catalogs) > 0:  # otherwise throws errors
+        catalogs.set_index(trace_dim_names, inplace=True)  # Create (Multi)Index for proper indexing over traces
+
+        # append unit suffixes to appropriate feature names
+        apply_units(catalogs, frequency_unit=frequency_unit, time_unit=time_unit)
+
+        # sort columns order
+        sorted_cols = sort_feature_names(catalogs.columns)
+        catalogs = catalogs[sorted_cols]
+
+    return catalogs
+
+
+def apply_units(catalog, frequency_unit='Hz', time_unit='sec'):
+    cols = list(catalog.columns)
+    unit_names = {'frequency': frequency_unit, 'time': time_unit}
+    combine = '_'.join
+    renames = []
+    for name, unit in unit_names.items():
+        only_one_name = lambda col: sum(nm in col.casefold() for nm in unit_names.keys()) < 2
+        condition_func = lambda col: (name in col.casefold()) and only_one_name(col) and not (unit in col.casefold())
+        if name:
+            renames.append({ci: combine([ci, unit]) for ci in cols if condition_func(ci)})
+    renames = ChainMap(*renames)
+
+    catalog.rename(columns=renames, inplace=True)
+
+
+def sort_feature_names(cols):
+    sorted_cols = ["Cluster_ID"]
+    sorted_cols += [ci for ci in cols if "time" in ci.casefold() and ci not in sorted_cols]
+    sorted_cols += [ci for ci in cols if "frequency" in ci.casefold() and ci not in sorted_cols]
+    sorted_cols += [ci for ci in ["First_arrival", "Strong_arrival"] if ci in cols]
+    sorted_cols += [ci for ci in cols if "energy" in ci.casefold() and ci not in sorted_cols]
+    sorted_cols += [ci for ci in cols if "ellipse" in ci.casefold() and ci not in sorted_cols]
+    sorted_cols += [ci for ci in cols if ci not in sorted_cols]
+    return sorted_cols
+
+
+def index_cluster_catalog(catalog, ind):
+    if isinstance(catalog.index, pd.MultiIndex):
+        catalog_ind = replace_int_by_list(ind)  # to ensure that slicing always returns DataFrame (not Series)
+    else:
+        catalog_ind = ind if isinstance(ind, int) else ind[0]
+        catalog_ind = replace_int_by_list(catalog_ind)
+
+    try:
+        catalog_slice = catalog.loc[catalog_ind, :]  # last slice for columns
+    except KeyError:  # if such trace index is absent --> empty data frame
+        catalog_slice = pd.DataFrame(columns=catalog.columns,
+                                     index=pd.MultiIndex.from_tuples([],
+                                                                     names=catalog.index.names))
+    return catalog_slice
+
+
+def assign_by_index_cluster_catalog(catalog, ind, columns, values):
+    if isinstance(catalog.index, pd.MultiIndex):
+        catalog_ind = replace_int_by_list(ind)  # to ensure that slicing always returns DataFrame (not Series)
+    else:
+        catalog_ind = ind if isinstance(ind, int) else ind[0]
+        catalog_ind = replace_int_by_list(catalog_ind)
+
+    try:
+        catalog.loc[catalog_ind, columns] = values
+    except KeyError:  # if such trace index is absent --> empty data frame
+        pass
+
+
+def concatenate_cluster_catalogs(catalog1: pd.DataFrame,
+                                 catalog2: pd.DataFrame,
+                                 t0: float):
+    time_shift_cols = ["Time_start_sec", "Time_end_sec",
+                       "Time_peak_sec", "Time_centroid_sec",
+                       "Time_first_arrival_sec", "Time_strong_arrival_sec"]
+
+    if catalog2 is not None:
+        time_shift_cols = [col_i for col_i in time_shift_cols if col_i in catalog2.columns]
+        if len(catalog2) > 0:
+            # time shift
+            catalog2[time_shift_cols] += t0
+
+            if catalog1 is not None:
+                # cluster ID shift
+                catalog2["Cluster_ID_2"] = catalog1.Cluster_ID.groupby(
+                    catalog1.index.names).max()  # assign new col to handle empty traces with no clusters (NaNs)
+                catalog2.Cluster_ID += catalog2.pop("Cluster_ID_2").fillna(0).astype(
+                    int)  # empty traces with NaN are replaced with 0, and added to original Cluster_IDs
+
+        catalog_new = pd.concat([catalog1, catalog2], copy=False)
+        catalog_new.sort_values(by=catalog_new.index.names, inplace=True)
+        return catalog_new
+
+    elif (catalog1 is not None) and (catalog2 is None):
+        return catalog1
+
+    else:
+        return None
+
+
+def update_cluster_ID_by_catalog(cluster_ID, catalog, keep_catalog_rows):
+    # the fastest so far
+    remove_inds = ~keep_catalog_rows
+    bad_catalog = catalog[remove_inds]
+    for row in bad_catalog.itertuples():  # over traces with bad clusters
+        ind, cid = row.Index, row.Cluster_ID
+        CID = cluster_ID[ind]
+        CID[CID == cid] = 0
+
+
+# ---------------- Feature functions ---------------- #
+
+def bbox_peaks(freq, time, values_dict, inds, aggr_func=np.max):
+    energy = values_dict['spectrogram']
+    aggr_axes = tuple(range(energy.ndim - 1))
+    energy = aggr_func(energy, axis=aggr_axes) if energy.ndim > 1 else energy
+
     f_inds, t_inds = inds
 
     # Time interval
@@ -309,9 +563,9 @@ def bbox_peaks(freq, time, values, inds):
     f_max += f_max / (f_inds[f_max_id] + 1) * 0.5  # half-pixel extension (right)
 
     # Peak location
-    peak_id = np.argmax(values)
+    peak_id = np.argmax(energy)
     t_peak, f_peak = time[peak_id], freq[peak_id]
-    v_peak = values[peak_id]
+    v_peak = energy[peak_id]
 
     output = {"Time_start": t_min,
               "Time_end": t_max,
@@ -321,6 +575,12 @@ def bbox_peaks(freq, time, values, inds):
               "Frequency_peak": f_peak,
               "Energy_peak": v_peak,
               }
+
+    snr = values_dict.get('spectrogram_SNR', None)
+    if snr is not None:
+        aggr_axes = tuple(range(snr.ndim - 1))
+        snr = aggr_func(snr, axis=aggr_axes) if snr.ndim > 1 else energy
+        output["SNR_mean"] = np.mean(snr)
     return output
 
 
@@ -358,11 +618,14 @@ def get_last_rising_point_spline(x, y, default_value, spline_lam=None):
     return last_rising_point
 
 
-def first_and_strong_arrivals(freq, time, values, inds, spline_lam=0.0):
+def first_and_strong_arrivals(freq, time, values_dict, inds, aggr_func=np.max, spline_lam=0.0):
+    energy = values_dict['spectrogram']
+    aggr_axes = tuple(range(energy.ndim - 1))
+    energy = aggr_func(energy, axis=aggr_axes) if energy.ndim > 1 else energy
     freq_inds, time_inds = inds
 
     # Mode / Peak to identify the strongest event phase
-    peak_id = np.argmax(values)
+    peak_id = np.argmax(energy)
     f_peak_id = freq_inds[peak_id]
     t_peak_id = time_inds[peak_id]
     f_peak_inds = (freq_inds == f_peak_id)
@@ -380,9 +643,9 @@ def first_and_strong_arrivals(freq, time, values, inds, spline_lam=0.0):
     #   2.3. Polynomial approximation
     slice_ids = (time_inds <= t_peak_id) & f_peak_inds  # only preceding points at peak frequency
     # slice_ids = f_peak_inds  # only preceding points at peak frequency
-    strong_arrival = get_last_rising_point_spline(time[slice_ids], values[slice_ids], time[peak_id], spline_lam)
+    strong_arrival = get_last_rising_point_spline(time[slice_ids], energy[slice_ids], time[peak_id], spline_lam)
 
-    # strong_arrival = get_last_rising_point_poly(t[slice_ids], values[slice_ids], poly_deg, first_arrival)
+    # strong_arrival = get_last_rising_point_poly(t[slice_ids], energy[slice_ids], poly_deg, first_arrival)
 
     output = {"Time_first_arrival": first_arrival,
               "Time_strong_arrival": strong_arrival}
@@ -390,91 +653,94 @@ def first_and_strong_arrivals(freq, time, values, inds, spline_lam=0.0):
     return output
 
 
-def phase_picks_from_spline_roots(freq, time, values, inds, spline_lam):
+def phase_picks_from_spline_roots(freq, time, values_dict, inds, spline_lam):
     # TODO:
     #   - check `freq` & `time` validity
     #   - check sorting of ch_curve
     raise NotImplementedError("Not fully implemented feature")
 
-    # NOTE: A way to smooth characteristic curve - binning and averaging
-    # sum_vals, bin_edges, binnumber = scipy.stats.binned_statistic(time_index[nonzero_sum], sum_vals,
-    #                                                               statistic='mean', bins=bin_num)
+    # # NOTE: A way to smooth characteristic curve - binning and averaging
+    # # sum_vals, bin_edges, binnumber = scipy.stats.binned_statistic(time_index[nonzero_sum], sum_vals,
+    # #                                                               statistic='mean', bins=bin_num)
+    #
+    # freq_inds, time_inds = inds
+    #
+    # # Estimate of all phase arrivals in a cluster via smooth spline interpolation
+    # # It can detect arrivals of multiple events and other phases (P/S/Surface/...) by energy change
+    #
+    # # Characteristic function
+    # t0_ind = time_inds.min()
+    # time_inds_shift = time_inds - t0_ind
+    # ch_curve = np.bincount(time_inds_shift, weights=values)  # Sum over frequencies
+    # ch_curve = ch_curve * np.bincount(time_inds_shift)  # Normalize by number of frequency bins
+    #
+    # # Remove zero-len time indices (side effect of `np.bincount`)
+    # nonzero_ids = (ch_curve > 0)
+    # ch_curve = ch_curve[nonzero_ids]
+    # # N = len(ch_curve)
+    #
+    # # Time axis
+    # time_index = np.arange(time_inds_shift.max() + 1) + t0_ind
+    # time_index = time_index[nonzero_ids]
+    # time_vals = time[time_index]
+    #
+    # try:
+    #     argsort = time_vals.argsort()
+    #     x = time_vals[argsort]
+    #     y = ch_curve[argsort]
+    #
+    #     # Create smooth cubic spline
+    #     spline = interpolate.make_smoothing_spline(x, y, lam=spline_lam)
+    #     interp = interpolate.PPoly.from_spline(spline)  # Make piecewise-polynomial to have `roots` methods
+    #
+    #     der1_interp = interp.derivative(1)
+    #     der2_interp = interp.derivative(2)
+    #     der3_interp = interp.derivative(3)
+    #
+    #     zeros = der2_interp.roots()  # defines potential position phase arrivals (2nd derivative is zero)
+    #
+    #     der1 = der1_interp(zeros)
+    #     der3 = der3_interp(zeros)
+    #     picks = zeros[(der1 > 0) & (der3 < 0)]  # keep only those where energy is rising only
+    #
+    #     # ---- Adjustment of picks by associated 3rd derivative zeros ---- seems unwarranted, better change `lam`
+    #     # zero_der3 = der3_interp.roots()
+    #     # pre_picks = picks.copy()
+    #     # for i, pi in enumerate(pre_picks):
+    #     #     zj = zero_der3[zero_der3 < pi]  # check missing der3-zeros neighbours to der2-zeros
+    #     #     if len(zj) > 0:
+    #     #         pre_picks[i] = zj[-1]
+    #     # picks = (picks + pre_picks) / 2  # maybe non-uniform weighting?
+    #
+    # except ValueError:
+    #     picks = []
+    #
+    # output = {"Phases": picks}
+    #
+    # return output
 
-    freq_inds, time_inds = inds
 
-    # Estimate of all phase arrivals in a cluster via smooth spline interpolation
-    # It can detect arrivals of multiple events and other phases (P/S/Surface/...) by energy change
-
-    # Characteristic function
-    t0_ind = time_inds.min()
-    time_inds_shift = time_inds - t0_ind
-    ch_curve = np.bincount(time_inds_shift, weights=values)  # Sum over frequencies
-    ch_curve = ch_curve * np.bincount(time_inds_shift)  # Normalize by number of frequency bins
-
-    # Remove zero-len time indices (side effect of `np.bincount`)
-    nonzero_ids = (ch_curve > 0)
-    ch_curve = ch_curve[nonzero_ids]
-    # N = len(ch_curve)
-
-    # Time axis
-    time_index = np.arange(time_inds_shift.max() + 1) + t0_ind
-    time_index = time_index[nonzero_ids]
-    time_vals = time[time_index]
-
-    try:
-        argsort = time_vals.argsort()
-        x = time_vals[argsort]
-        y = ch_curve[argsort]
-
-        # Create smooth cubic spline
-        spline = interpolate.make_smoothing_spline(x, y, lam=spline_lam)
-        interp = interpolate.PPoly.from_spline(spline)  # Make piecewise-polynomial to have `roots` methods
-
-        der1_interp = interp.derivative(1)
-        der2_interp = interp.derivative(2)
-        der3_interp = interp.derivative(3)
-
-        zeros = der2_interp.roots()  # defines potential position phase arrivals (2nd derivative is zero)
-
-        der1 = der1_interp(zeros)
-        der3 = der3_interp(zeros)
-        picks = zeros[(der1 > 0) & (der3 < 0)]  # keep only those where energy is rising only
-
-        # ---- Adjustment of picks by associated 3rd derivative zeros ---- seems unwarranted, better change `lam`
-        # zero_der3 = der3_interp.roots()
-        # pre_picks = picks.copy()
-        # for i, pi in enumerate(pre_picks):
-        #     zj = zero_der3[zero_der3 < pi]  # check missing der3-zeros neighbours to der2-zeros
-        #     if len(zj) > 0:
-        #         pre_picks[i] = zj[-1]
-        # picks = (picks + pre_picks) / 2  # maybe non-uniform weighting?
-
-    except ValueError:
-        picks = []
-
-    output = {"Phases": picks}
-
-    return output
-
-
-def energy_statistics(freq, time, values, inds):
+def energy_statistics(freq, time, values_dict, inds, aggr_func=np.max):
     """
         References: (Section 6) http://dx.doi.org/10.1016/j.dsp.2017.07.015
     """
-    N = values.size
+    energy = values_dict['spectrogram']
+    aggr_axes = tuple(range(energy.ndim - 1))
+    energy = aggr_func(energy, axis=aggr_axes) if energy.ndim > 1 else energy
+    N = energy.size
     N = N if N > 1 else 2
 
     # Energy stats
-    vmin = values.min()
-    vmax = values.max()
-    amean = values.mean()
-    std = np.sqrt(np.sum((values - amean) ** 2) / (N - 1))
-    skew = stats.skew(values, bias=False)
-    kurtosis = stats.kurtosis(values, fisher=True, bias=False)
-    gmean = stats.gmean(values)
+    vmin = energy.min()
+    vmax = energy.max()
+    amean = energy.mean()
+    std = np.sqrt(np.sum((energy - amean) ** 2) / (N - 1))
+    skew = stats.skew(energy, bias=False)
+    kurtosis = stats.kurtosis(energy, fisher=True, bias=False)
+    gmean = stats.gmean(energy)
     flatness = gmean / amean
 
-    entropy = stats.entropy(values)  # Shannon entropy
+    entropy = stats.entropy(energy)  # Shannon entropy
 
     output = {"Energy_min": vmin,
               "Energy_max": vmax,
@@ -488,11 +754,14 @@ def energy_statistics(freq, time, values, inds):
     return output
 
 
-def freq_of_time_polynomial(freq, time, values, inds, order):
+def freq_of_time_polynomial(freq, time, values_dict, inds, order, aggr_func=np.max):
+    energy = values_dict['spectrogram']
+    aggr_axes = tuple(range(energy.ndim - 1))
+    energy = aggr_func(energy, axis=aggr_axes) if energy.ndim > 1 else energy
     try:
-        if len(values) <= order:
+        if len(energy) <= order:
             raise ValueError
-        poly = np.polynomial.Polynomial.fit(time - time.min(), freq, deg=order, rcond=np.nan, w=values)
+        poly = np.polynomial.Polynomial.fit(time - time.min(), freq, deg=order, rcond=np.nan, w=energy)
         coefs = poly.coef
     except:
         coefs = [np.nan] * (order + 1)
@@ -598,260 +867,17 @@ def interpret_central_moments(catalog, interpretable_only):
         catalog['Ellipse_eccentricity'] = ecc
 
 
-def calculate_moments(freq, time, values, inds, order, interpretable_only):
-    moments = central_moments(freq, time, values, inds, order=order, interpretable_only=interpretable_only)
+def calculate_moments(freq, time, values_dict, inds, order, interpretable_only, aggr_func=np.max):
+    energy = values_dict['spectrogram']
+    aggr_axes = tuple(range(energy.ndim - 1))
+    energy = aggr_func(energy, axis=aggr_axes) if energy.ndim > 1 else energy
+
+    moments = central_moments(freq, time, energy, inds, order=order, interpretable_only=interpretable_only)
     naming = "m{0}{1}".format
     moment_dicts = {naming(*ind): mij for ind, mij in np.ndenumerate(moments)}
     del moments
     interpret_central_moments(moment_dicts, interpretable_only=interpretable_only)
     return moment_dicts
-
-
-def default_features(freq, time, values, inds, **params):
-    basic = params.get('bbox_peaks', True)
-    polynomial = params.get('polynomial', False)
-    energy = params.get('energy', False)
-    moments = params.get('moments', False)
-    arrivals = params.get('arrivals', False)
-    spline_phases = params.get('spline_phases', False)
-
-    calculated_features = []
-    if basic:  # 1. bounding box
-        bbox_arrivals = bbox_peaks(freq, time, values, inds)
-        calculated_features.append(bbox_arrivals)
-
-    if polynomial or isinstance(polynomial, dict):  # 2. cubic polynomial `freq(t)`
-        order = 3
-        if isinstance(polynomial, dict):
-            order = polynomial.get('order', order)
-        coefs = freq_of_time_polynomial(freq, time, values, inds, order=order)
-        calculated_features.append(coefs)
-
-    if energy:  # 3. energy statistics
-        energy_stats = energy_statistics(freq, time, values, inds)
-        calculated_features.append(energy_stats)
-
-    if moments or isinstance(moments, dict):  # 4. moments up to 4th order
-        order = 4
-        interpretable_only = True
-        if isinstance(moments, dict):
-            order = moments.get('order', order)
-            interpretable_only = moments.get('interpretable_only', order)
-
-        moment_dicts = calculate_moments(freq, time, values, inds, order, interpretable_only)
-        calculated_features.append(moment_dicts)
-
-    if arrivals or isinstance(arrivals, dict):  # 5. P/S arrivals
-        spline_lam = 0.0  # spline to get S arrival
-        if isinstance(arrivals, dict):
-            spline_lam = arrivals.get('spline_lam', spline_lam)
-        arrivals = first_and_strong_arrivals(freq, time, values, inds, spline_lam=spline_lam)
-        calculated_features.append(arrivals)
-
-    if spline_phases or isinstance(spline_phases, dict):  # 6. All pickable phases arrivals
-        spline_lam = 0.0
-        if isinstance(spline_phases, dict):
-            spline_lam = spline_phases.get('spline_lam', spline_lam)
-        phases = phase_picks_from_spline_roots(freq, time, values, inds, spline_lam=spline_lam)
-        calculated_features.append(phases)
-
-    features = ChainMap(*calculated_features)
-
-    return features
-
-
-def feature_func_wrapper(funcs, freq, time):
-    def wrapper(values, inds):
-        sep_inds = np.divmod(inds, len(time))
-        freq_inds, time_inds = sep_inds
-        t = time[time_inds]  # time axis of `values`
-        f = freq[freq_inds]  # freq axis of `values`
-
-        output_dicts = [func(f, t, values, sep_inds) for func in funcs]
-        return ChainMap(*output_dicts)
-
-    return wrapper
-
-
-def calculate_cluster_features(Val, CID, freq, time, feature_funcs):
-    cids = np.arange(1, CID.max() + 1).tolist()  # list is important for unpacking further in ClusterCatalogs
-    func = feature_func_wrapper(feature_funcs, freq, time)
-    if len(cids) > 0:
-        cluster_features = ndimage.labeled_comprehension(input=Val, labels=CID,
-                                                         index=cids, func=func,
-                                                         out_dtype=dict,
-                                                         default={},  # empty dict by default!
-                                                         pass_positions=True)
-        # `if cldict` to skip non-existing cluster IDs (happens if multitrace)
-        features_dict = {'Cluster_ID': [cid for cid, cldict in zip(cids, cluster_features) if cldict]}
-        # extracts all unique keys
-        ref_keys = ChainMap(*cluster_features).keys()
-        for name in ref_keys:  # iter over features
-            features_dict[name] = [cldict.get(name, np.nan)
-                                   for cldict in cluster_features if cldict]  # list is important, see above
-    else:
-        features_dict = {}
-
-    return features_dict
-
-
-# TODO:
-#   - implement cluster catalogs for 3D, when `multitrace=True`
-
-
-def ClusterCatalogs(Val, CID, freq, time, feature_funcs=None, frequency_unit='Hz', time_unit='sec', energy_unit='',
-                    trace_dim_names=None):
-    """
-        Calculates statistics/features of cluster in each trace
-
-        Arguments:
-             Val : np.ndarray (..., Nf, Nt) : array of values (PSD, SNR, ...)
-             CID : np.ndarray (..., Nf, Nt) : array cluster ID values
-             freq : np.ndarray (Nf,) : array of frequencies
-             time : np.ndarray (Nt,) : array of time samples
-             feature_funcs : list[callable] : Funcs of signature `func(freq, time, values, inds) -> dict[str, float]`,
-                         where `freq`, `time`, `values` are 1D arrays, `inds = [freq_inds, time_inds]`.
-                         Must return dict with calculated features.
-             frequency_unit : str : unit name for adding suffix to column names in Catalog DataFrame
-             time_unit : str : unit name for adding suffix to column names in Catalog DataFrame
-             energy_unit : str : unit name for adding suffix to column names in Catalog DataFrame
-             trace_dim_names : list[str] : names of trace dimensions for DataFrame MultiIndex
-
-        Returns:
-            Catalogs: pd.DataFrame : dataframe with calculated features for each trace and cluster
-    """
-    if feature_funcs is None:
-        feature_funcs = [default_features]
-    assert isinstance(feature_funcs, (list, tuple)), "`feature_funcs` must be list or tuple"
-
-    shape = Val.shape[:-2]
-    ndim = len(shape)
-
-    if trace_dim_names is None:
-        trace_dim_names = [f"Trace_dim_{i}" for i in range(ndim)]
-
-    # 1. get features data in dicts; 2. then DataFrame. This order is much more efficient (~2-3x)
-    catalogs = defaultdict(list)  # list type is important for appending/extending lists
-    for ind in np.ndindex(*shape):
-        # calculate features
-        catalog = calculate_cluster_features(Val[ind], CID[ind], freq, time, feature_funcs)
-        for name, data in catalog.items():
-            catalogs[name].extend(data)
-
-        if (cids := catalog.get("Cluster_ID", None)) is not None:  # if non-empty, at least one cluster
-            for name, tr_i in zip(trace_dim_names, ind):  # iter over trace dims
-                catalogs[name].extend([tr_i] * len(cids))
-
-    # create DataFrame
-    catalogs = pd.DataFrame(catalogs)  # Unified DataFrame for all traces
-
-    if len(catalogs) > 0:  # otherwise throws errors
-        catalogs.set_index(trace_dim_names, inplace=True)  # Create (Multi)Index for proper indexing over traces
-
-        # append unit suffixes to appropriate feature names
-        apply_units(catalogs, frequency_unit=frequency_unit, time_unit=time_unit, energy_unit=energy_unit)
-
-        # sort columns order
-        sorted_cols = sort_feature_names(catalogs.columns)
-        catalogs = catalogs[sorted_cols]
-
-    return catalogs
-
-
-def apply_units(catalog, frequency_unit='Hz', time_unit='sec', energy_unit=''):
-    cols = list(catalog.columns)
-    unit_names = {'frequency': frequency_unit, 'time': time_unit, 'energy': energy_unit}
-    combine = '_'.join
-    renames = []
-    for name, unit in unit_names.items():
-        only_one_name = lambda col: sum(nm in col.casefold() for nm in unit_names.keys()) < 2
-        condition_func = lambda col: (name in col.casefold()) and only_one_name(col) and not (unit in col.casefold())
-        if name:
-            renames.append({ci: combine([ci, unit]) for ci in cols if condition_func(ci)})
-    renames = ChainMap(*renames)
-
-    catalog.rename(columns=renames, inplace=True)
-
-
-def sort_feature_names(cols):
-    sorted_cols = ["Cluster_ID"]
-    sorted_cols += [ci for ci in cols if "time" in ci.casefold() and ci not in sorted_cols]
-    sorted_cols += [ci for ci in cols if "frequency" in ci.casefold() and ci not in sorted_cols]
-    sorted_cols += [ci for ci in ["First_arrival", "Strong_arrival"] if ci in cols]
-    sorted_cols += [ci for ci in cols if "energy" in ci.casefold() and ci not in sorted_cols]
-    sorted_cols += [ci for ci in cols if "ellipse" in ci.casefold() and ci not in sorted_cols]
-    sorted_cols += [ci for ci in cols if ci not in sorted_cols]
-    return sorted_cols
-
-
-def index_cluster_catalog(catalog, ind):
-    if isinstance(catalog.index, pd.MultiIndex):
-        catalog_ind = replace_int_by_list(ind)  # to ensure that slicing always returns DataFrame (not Series)
-    else:
-        catalog_ind = ind if isinstance(ind, int) else ind[0]
-        catalog_ind = replace_int_by_list(catalog_ind)
-
-    try:
-        catalog_slice = catalog.loc[catalog_ind, :]  # last slice for columns
-    except KeyError:  # if such trace index is absent --> empty data frame
-        catalog_slice = pd.DataFrame(columns=catalog.columns,
-                                     index=pd.MultiIndex.from_tuples([],
-                                                                     names=catalog.index.names))
-    return catalog_slice
-
-
-def assign_by_index_cluster_catalog(catalog, ind, columns, values):
-    if isinstance(catalog.index, pd.MultiIndex):
-        catalog_ind = replace_int_by_list(ind)  # to ensure that slicing always returns DataFrame (not Series)
-    else:
-        catalog_ind = ind if isinstance(ind, int) else ind[0]
-        catalog_ind = replace_int_by_list(catalog_ind)
-
-    try:
-        catalog.loc[catalog_ind, columns] = values
-    except KeyError:  # if such trace index is absent --> empty data frame
-        pass
-
-
-def concatenate_cluster_catalogs(catalog1: pd.DataFrame,
-                                 catalog2: pd.DataFrame,
-                                 t0: float):
-    time_shift_cols = ["Time_start_sec", "Time_end_sec",
-                       "Time_peak_sec", "Time_centroid_sec",
-                       "Time_first_arrival_sec", "Time_strong_arrival_sec"]
-
-    if catalog2 is not None:
-        time_shift_cols = [col_i for col_i in time_shift_cols if col_i in catalog2.columns]
-        if len(catalog2) > 0:
-            # time shift
-            catalog2[time_shift_cols] += t0
-
-            if catalog1 is not None:
-                # cluster ID shift
-                catalog2["Cluster_ID_2"] = catalog1.Cluster_ID.groupby(
-                    catalog1.index.names).max()  # assign new col to handle empty traces with no clusters (NaNs)
-                catalog2.Cluster_ID += catalog2.pop("Cluster_ID_2").fillna(0).astype(
-                    int)  # empty traces with NaN are replaced with 0, and added to original Cluster_IDs
-
-        catalog_new = pd.concat([catalog1, catalog2], copy=False)
-        catalog_new.sort_values(by=catalog_new.index.names, inplace=True)
-        return catalog_new
-
-    elif (catalog1 is not None) and (catalog2 is None):
-        return catalog1
-
-    else:
-        return None
-
-
-def update_cluster_ID_by_catalog(cluster_ID, catalog, keep_catalog_rows):
-    # the fastest so far
-    remove_inds = ~keep_catalog_rows
-    bad_catalog = catalog[remove_inds]
-    for row in bad_catalog.itertuples():  # over traces with bad clusters
-        ind, cid = row.Index, row.Cluster_ID
-        CID = cluster_ID[ind]
-        CID[CID == cid] = 0
 
 
 def get_last_rising_point_poly(x, y, poly_deg, default_value):
