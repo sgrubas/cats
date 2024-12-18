@@ -81,7 +81,7 @@ def plot_traces(data: np.ndarray,
 
     if station_labels is None:
         station_labels = list(range(1, num_stations + 1))
-    station_labels = [(i, st) for i, st in enumerate(station_labels)]
+    station_labels = [(i, st) for i, st in zip(loc_slice, station_labels)]
 
     trace_dim = hv.Dimension("Station")
     t_dim = hv.Dimension("Time", unit='s')
