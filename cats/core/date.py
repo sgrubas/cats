@@ -128,14 +128,15 @@ def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
 ########################################################################################
 
 
-@nb.njit(["UniTuple(f8[:, :, :], 2)(f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)",
-          "UniTuple(f4[:, :, :], 2)(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)"],
+@nb.njit(["Tuple((f8[:, :, :], b1[:, :, :], f8[:, :, :]))(f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)",
+          "Tuple((f4[:, :, :], b1[:, :, :], f4[:, :, :]))(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)"],
          parallel=True, cache=True)
 def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mode):
     K = PSD.shape[0]
     m, n = len(freq_groups), len(time_frames)
     Sgm = np.zeros((K, m, n), dtype=PSD.dtype)
     SNR = np.zeros_like(PSD)
+    Mask = np.full_like(PSD, False, dtype=np.bool_)
     for i in nb.prange(m):  # iter over frequencies
         i1, i2 = freq_groups[i]
         xi_i = xi[i]
@@ -147,13 +148,13 @@ def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mod
 
                 psd = psdl[i1: i2 + 1, j1: j2 + 1]
                 Sgm[k, i, j] = sgm = DATE(psd.ravel(), xi_i, lamb_i, Nmin, original_mode)
+                Mask[k, i1: i2 + 1, j1: j2 + 1] = (psd > sgm * xi_i)
+                SNR[k, i1: i2 + 1, j1: j2 + 1] = psd / (sgm + 1e-8)
+                # snr = (psd > sgm * xi_i) * psd / (sgm + 1e-8)  # the fastest way so far
+    return SNR, Mask, Sgm
 
-                snr = (psd > sgm * xi_i) * psd / (sgm + 1e-8)  # the fastest way so far
-                SNR[k, i1: i2 + 1, j1: j2 + 1] = snr
-    return SNR, Sgm
 
-
-@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=2, first_shape=True)
+@ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=3, first_shape=True)
 def BEDATE_trimming(PSD, /, frequency_groups_indexes, bandpass_slice,
                     time_frames, minSNR, time_edge, Q=None, Nmin_percentile=None,
                     original_mode=False, fft_base=True, dim=2):
@@ -177,23 +178,23 @@ def BEDATE_trimming(PSD, /, frequency_groups_indexes, bandpass_slice,
     # The B-E-DATE trimming
     bedate_ind = (..., groups_slice, slice(None))
     noise_std = np.zeros(PSD.shape[:-2] + (m, n), dtype=PSD.dtype)
-    spectrogram_SNR_trimmed, noise_std[bedate_ind] = _BEDATE_trimming(PSD, time_frames,
-                                                                      frequency_groups_indexes[groups_slice],
-                                                                      Xi[groups_slice],
-                                                                      Lambda[groups_slice],
-                                                                      Nmin, original_mode)
+    spectrogram_SNR, Mask, noise_std[bedate_ind] = _BEDATE_trimming(PSD, time_frames,
+                                                                    frequency_groups_indexes[groups_slice],
+                                                                    Xi[groups_slice],
+                                                                    Lambda[groups_slice],
+                                                                    Nmin, original_mode)
 
     # Removing everything out of the bandpass range
     b1 = bandpass_slice.start or 0
     b2 = bandpass_slice.stop or -1
-    spectrogram_SNR_trimmed[..., :b1, :] = 0.0
-    spectrogram_SNR_trimmed[..., b2:, :] = 0.0
+    Mask[..., :b1, :] = False
+    Mask[..., b2:, :] = False
 
     # Removing edge effects
-    spectrogram_SNR_trimmed[..., :time_edge] = 0.0
-    spectrogram_SNR_trimmed[..., -time_edge - 1:] = 0.0
+    Mask[..., :time_edge] = False
+    Mask[..., -time_edge - 1:] = False
 
-    return spectrogram_SNR_trimmed, noise_std, Xi
+    return spectrogram_SNR, Mask, noise_std, Xi
 
 
 ########################################################################################
