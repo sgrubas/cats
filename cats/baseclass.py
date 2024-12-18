@@ -39,19 +39,34 @@ class CATSBase(BaseModel, extra='allow'):
             3) Trimming spectrogram based minSNR
             4) Clustering trimmed spectrogram
         """
-    # main STFT params
+
     dt_sec: float
+
+    # main STFT params
     stft_window_type: str = 'hann'
     stft_window_sec: float = 0.5
     stft_overlap: float = Field(0.75, ge=0.0, lt=1.0)
+
     # main B-E-DATE params
-    minSNR: float = 5.5
+    minSNR: float = 8.0
     stationary_frame_sec: Union[float, None] = None
+
     # main Clustering params
     cluster_size_t_sec: float = 0.2
     cluster_size_f_Hz: float = 15.0
+    cluster_size_f_octaves: Union[float, None] = None
     cluster_distance_t_sec: Union[float, None] = None
     cluster_distance_f_Hz: Union[float, None] = None
+    aggr_clustering_axis: Union[int, Tuple[int], None] = None
+
+    # mCATS
+    clustering_multitrace: bool = False
+    cluster_size_trace: int = Field(1, ge=1)
+    cluster_distance_trace: int = Field(1, ge=1)
+
+    # main cluster catalog params
+    cluster_catalogs_funcs: Union[List[Callable], None] = None
+    cluster_feature_distributions: Union[List[str], None] = None
 
     # Extra STFT params
     freq_bandpass_Hz: Union[tuple[float, float], Any, None] = None
@@ -67,17 +82,10 @@ class CATSBase(BaseModel, extra='allow'):
     date_original_mode: bool = False
 
     # Extra clustering params
-    cluster_size_f_octaves: Union[float, None] = None
-    cluster_distance_f_octaves: Union[float, None] = None
-    cluster_catalogs_funcs: Union[List[Callable], None] = None
-    cluster_catalogs_filter: Union[Callable, None] = None
-    cluster_catalogs_opts: Union[dict, None] = None
-    clustering_multitrace: bool = False
-    cluster_size_trace: int = Field(1, ge=1)
-    cluster_distance_trace: int = Field(1, ge=1)
-
-    aggr_clustering_axis: Union[int, Tuple[int], None] = None
     aggr_clustering_func: Union[str, None] = None
+    cluster_distance_f_octaves: Union[float, None] = None
+    cluster_catalogs_opts: Union[dict, None] = None
+    cluster_catalogs_filter: Union[Callable, None] = None
 
     # Misc
     name: str = "CATS"
@@ -194,8 +202,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.cluster_size_f_len = max(round(self.cluster_size_f_Hz / self.STFT.df), 1)
         self.cluster_size_trace_len = self.cluster_size_trace
 
-        self.cluster_size_f_octaves = self.cluster_size_f_octaves or 0.0
-        self.cluster_distance_f_octaves = self.cluster_distance_f_octaves or 0.0
+        self.cluster_size_f_octaves = self.cluster_size_f_octaves or -1.0
+        self.cluster_distance_f_octaves = self.cluster_distance_f_octaves or -1.0
 
         self.cluster_distance_t_sec = v if (v := self.cluster_distance_t_sec) is not None else self.stft_hop_sec
         self.cluster_distance_f_Hz = v if (v := self.cluster_distance_f_Hz) is not None else self.stft_df
@@ -211,6 +219,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.min_separation_sec = self.min_separation_len * self.stft_hop_sec
 
         # Catalog params
+        self.cluster_catalogs_funcs = self.cluster_catalogs_funcs or [bbox_peaks]
+        self.cluster_feature_distributions = (self.cluster_feature_distributions or ['spectrogram', 'spectrogram_SNR'])
         self.cluster_catalogs_opts = self.cluster_catalogs_opts or {}
 
         # BEDATE grouping
@@ -252,8 +262,9 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         self.__init__(**kwargs)
 
-    def save(self, filename):
-        save_pickle(self, filename)
+    def save(self, filename, as_dict=False):
+        obj = self.init_params if as_dict else self
+        save_pickle(obj, filename)
 
     @classmethod
     def load(cls, filename):
@@ -275,22 +286,22 @@ The fastest CPU version is 'ssqueezepy', which is default.
         result_container['time_frames'] = get_interval_division(N=result_container['spectrogram'].shape[-1],
                                                                 L=self.stationary_frame_len)
 
-        T, STD, THR = BEDATE_trimming(result_container['spectrogram'],
-                                      self.frequency_groups_indexes, self.freq_bandpass_slice,
-                                      result_container['time_frames'], self.minSNR, self.time_edge,
-                                      Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
-                                      original_mode=self.date_original_mode, fft_base=True, dim=2)
+        SNR, T, STD, THR = BEDATE_trimming(result_container['spectrogram'],
+                                           self.frequency_groups_indexes, self.freq_bandpass_slice,
+                                           result_container['time_frames'], self.minSNR, self.time_edge,
+                                           Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
+                                           original_mode=self.date_original_mode, fft_base=True, dim=2)
 
-        result_container['spectrogram_SNR_trimmed'] = T
+        result_container['spectrogram_SNR'] = SNR
+        result_container['spectrogram_trim_mask'] = T
         result_container['noise_std'] = STD
         result_container['noise_threshold_conversion'] = THR
 
         # Aggregate trimmed spectrogram over `aggr_clustering_axis` by `aggr_clustering_func`
-        # Maybe useful if multi-component data are used (3-C or receiver groups)
-        result_container['spectrogram_SNR_trimmed_aggr'] = aggregate_array_by_axis_and_func(T,
-                                                                                            self.aggr_clustering_axis,
-                                                                                            self.aggr_clustering_func,
-                                                                                            min_last_dims=2)
+        # Useful if multi-component data are used (3-C or receiver groups)
+        result_container['spectrogram_trim_mask_aggr'] = aggregate_array_by_axis_and_func(T,
+                                                                                          self.aggr_clustering_axis,
+                                                                                          func='any', min_last_dims=2)
 
     def apply_Clustering(self, result_container, /):
         mc = self.clustering_multitrace
@@ -298,34 +309,36 @@ The fastest CPU version is 'ssqueezepy', which is default.
         s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_f_len, self.cluster_size_t_len)
         freq_octaves = (self.cluster_size_f_octaves, self.cluster_distance_f_octaves)
 
-        result_container['spectrogram_cluster_ID'] = Clustering(result_container['spectrogram_SNR_trimmed_aggr'],
+        result_container['spectrogram_cluster_ID'] = Clustering(result_container['spectrogram_trim_mask_aggr'],
                                                                 q=q, s=s, freq_octaves=freq_octaves)
 
     def apply_ClusterCatalogs(self, result_container, /, tf_time, frequencies):
         opts = self.cluster_catalogs_opts or {}
 
-        feature_funcs = self.cluster_catalogs_funcs or [bbox_peaks]
+        feature_funcs = self.cluster_catalogs_funcs
 
-        opts.setdefault("frequency_octaves", False)
-        opts.setdefault("feature_funcs", feature_funcs)
-        opts.setdefault("log10_spectrogram", False)
         opts.setdefault("trace_dim_names", None)
-        opts.setdefault("aggr_clustering_axis", self.aggr_clustering_axis)
-        opts.setdefault("aggr_clustering_func", self.aggr_clustering_func)
-        use_SNR = opts.pop('use_SNR', False)
-        opts.setdefault('energy_unit', "SNR" if use_SNR else "")
-
+        cluster_ID = result_container.get('spectrogram_cluster_ID', None)
         update_cluster_ID = opts.pop('update_cluster_ID', False)
 
-        cluster_ID = result_container.get('spectrogram_cluster_ID', None)
-        TFR = result_container.get('spectrogram', None) if not use_SNR \
-            else result_container('spectrogram_SNR_trimmed_aggr', None)
+        vals_keys = self.cluster_feature_distributions
+        assert isinstance(vals_keys, (list, tuple)) and len(vals_keys) > 0
 
-        if (cluster_ID is not None) and (TFR is not None):
+        values_dict = {}
+        for name in vals_keys:
+            val = result_container.get(name, None)  # take feature distribution from 'result_container'
+            if val is not None:
+                values_dict[name] = val
 
-            catalog = CATSResult.calculate_cluster_catalogs(cluster_ID=cluster_ID, TFR=TFR,
-                                                            tf_time=tf_time, frequencies=frequencies,
-                                                            **opts)
+        if (cluster_ID is not None) and (len(values_dict) > 0):
+
+            catalog = ClusterCatalogs(values_dict=values_dict,
+                                      CID=cluster_ID,
+                                      freq=frequencies,
+                                      time=tf_time,
+                                      feature_funcs=feature_funcs,
+                                      aggr_clustering_axis=self.aggr_clustering_axis,
+                                      **opts)
 
             catalog = CATSResult.filter_cluster_catalogs(catalog,
                                                          self.cluster_catalogs_filter,
@@ -347,20 +360,20 @@ The fastest CPU version is 'ssqueezepy', which is default.
                 "spectrogram",
                 "noise_std",
                 "noise_threshold_conversion",
-                "spectrogram_SNR_trimmed",
-                "spectrogram_SNR_trimmed_aggr",
+                "spectrogram_SNR",
+                "spectrogram_trim_mask",
+                "spectrogram_trim_mask_aggr",
                 "spectrogram_cluster_ID",
                 "cluster_catalogs"]
 
     @classmethod
     def get_qc_keys(cls):
-        return ["signal", "spectrogram", "spectrogram_SNR_trimmed",
-                "noise_std", "noise_threshold_conversion",
+        return ["signal", "spectrogram", "spectrogram_trim_mask", "noise_std", "noise_threshold_conversion",
                 "spectrogram_cluster_ID", "cluster_catalogs"]
 
     @classmethod
     def get_cluster_catalog_keys(cls):
-        return ["spectrogram", "spectrogram_cluster_ID"]
+        return ["spectrogram_cluster_ID"]
 
     @classmethod
     def get_default_keys(cls):
@@ -384,6 +397,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         # add necessary, repetitions will be deleted
         full_info += self.get_default_keys()  # defaults
+        full_info += self.cluster_feature_distributions  # for cluster catalogs
 
         # Parse
         full_info = cast_to_bool_dict(full_info, self.get_all_keys())
@@ -411,18 +425,21 @@ The fastest CPU version is 'ssqueezepy', which is default.
         memory_usage_bytes = {
             "frequencies":                  8. * stft_shape[-2],                            # float64 always
             "time_frames":                  8. * bedate_shape[-1],                          # float64 always
-            "signal":                       1. * x_bytes,                                   # float / int
-            "coefficients":                 2. * precision_order * stft_size,               # complex
-            "spectrogram":                  1. * precision_order * stft_size,               # float
-            "noise_threshold_conversion":   8. * bedate_shape[-2],                          # float
-            "noise_std":                    1. * precision_order * bedate_size,             # float
-            "spectrogram_SNR_trimmed":      1. * precision_order * stft_size,               # float
-            "spectrogram_SNR_trimmed_aggr": 1. * precision_order * stft_size * cluster_sc,  # float
+            "signal":                       1. * x_bytes,                                   # float64 / int64
+            "coefficients":                 2. * precision_order * stft_size,               # complex64
+            "spectrogram":                  1. * precision_order * stft_size,               # float64
+            "noise_threshold_conversion":   8. * bedate_shape[-2],                          # float64
+            "noise_std":                    1. * precision_order * bedate_size,             # float64
+            "spectrogram_SNR":              1. * precision_order * stft_size,               # float64
+            "spectrogram_trim_mask":        1. * stft_size,                                 # bool
+            "spectrogram_trim_mask_aggr":   1. * stft_size * cluster_sc,                    # bool
             "spectrogram_cluster_ID":       4. * stft_size * cluster_sc,                    # int32 always
         }
-        used_together = [('coefficients', 'spectrogram'),
-                         ('spectrogram', 'noise_threshold_conversion', 'noise_std', 'spectrogram_SNR_trimmed'),
-                         ('spectrogram_SNR_trimmed_aggr', 'spectrogram_cluster_ID')]
+        used_together = [('coefficients', 'spectrogram'),  # STFT step
+                         ('spectrogram', 'noise_threshold_conversion', 'noise_std', 'spectrogram_SNR',
+                          "spectrogram_trim_mask", "spectrogram_trim_mask_aggr"),  # BEDATE step
+                         ('spectrogram_trim_mask_aggr', 'spectrogram_cluster_ID')  # Clustering
+                         ]
 
         return memory_usage_bytes, used_together
 
@@ -488,8 +505,9 @@ class CATSResult(BaseModel):
     spectrogram: Any = None
     noise_threshold_conversion: Any = None
     noise_std: Any = None
-    spectrogram_SNR_trimmed: Any = None
-    spectrogram_SNR_trimmed_aggr: Any = None
+    spectrogram_SNR: Any = None
+    spectrogram_trim_mask: Any = None
+    spectrogram_trim_mask_aggr: Any = None
     spectrogram_cluster_ID: Any = None
     cluster_catalogs: Any = None
     dt_sec: float = None
@@ -560,7 +578,7 @@ class CATSResult(BaseModel):
         inds_tf_cid = aggr_ind + (slice(None), i_tf)
 
         PSD = self.spectrogram[inds_tf]
-        SNR = self.spectrogram_SNR_trimmed[inds_tf]
+        T = self.spectrogram_trim_mask[inds_tf]
         M = self.spectrogram_cluster_ID[inds_tf_cid] > 0
 
         PSD_clims = give_nonzero_limits(PSD, initials=(1e-1, 1e1))
@@ -570,13 +588,14 @@ class CATSResult(BaseModel):
         label_func = lambda name, var, mask: f'{name} spectrogram: $' f'|{var}(t,f)| {mask}$'
 
         if SNR_spectrograms:
+            SNR = self.spectrogram_SNR[inds_tf] * T
             C = SNR * M
             label_trimmed = label_func('SNR', 'SNR', trim_mask)
             label_clustered = label_func('SNR', 'SNR', cluster_mask)
             SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
             SNR_vdim = hv.Dimension('SNR')
         else:
-            SNR = PSD * (SNR > 0)
+            SNR = PSD * T
             C = PSD * M
             label_trimmed = label_func('', 'X', trim_mask)
             label_clustered = label_func('', 'X', cluster_mask)
@@ -797,69 +816,46 @@ class CATSResult(BaseModel):
         fig = fig.opts(title=layout_title)
         return fig
 
-    @staticmethod
-    def calculate_cluster_catalogs(cluster_ID, TFR, tf_time, frequencies,
-                                   aggr_clustering_axis=None, aggr_clustering_func=None,
-                                   frequency_octaves=False, feature_funcs=None, energy_unit='',
-                                   log10_spectrogram=False, trace_dim_names=None):
-        if frequency_octaves:
-            f_inds = frequencies > 0  # to ensure that zeros are not taken
-            freqs = np.log2(frequencies[f_inds])
-            TFR = TFR[..., f_inds, :]
-            cluster_ID = cluster_ID[..., f_inds, :]
-        else:
-            freqs = frequencies
-
-        frequency_unit = 'octave' if frequency_octaves else 'Hz'
-        TFR = np.log10(TFR) if log10_spectrogram else TFR
-        TFR = aggregate_array_by_axis_and_func(TFR, axis=aggr_clustering_axis,
-                                               func=aggr_clustering_func, min_last_dims=2)
-
-        catalogs = ClusterCatalogs(TFR, cluster_ID,
-                                   freqs, tf_time,
-                                   feature_funcs=feature_funcs,
-                                   frequency_unit=frequency_unit,
-                                   time_unit='sec',
-                                   energy_unit=energy_unit,
-                                   trace_dim_names=trace_dim_names)
-        return catalogs
-
-    def get_cluster_catalogs(self, frequency_octaves=False, feature_funcs=None, use_SNR=False,
-                             log10_spectrogram=False, trace_dim_names=None):
+    def get_cluster_catalogs(self,
+                             values_keys: List[str] = None,
+                             feature_funcs: List[Callable] = None,
+                             trace_dim_names: List[str] = None):
         """
             Calculates statistics/features of cluster in each trace
 
             Arguments:
-                 frequency_octaves : bool : whether to use frequency in octaves `log2(f)`
-                 feature_funcs : list[callable] : Funcs of signature `func(freq, time, values, inds) -> dict[str, float]`,
-                             where `freq`, `time`, `values` are 1D arrays, `inds = [freq_inds, time_inds]`.
-                             Must return dict with calculated features.
-                 use_SNR : bool : whether to use SNR spectrogram, if False, it uses absolute spectrogram values.
-                 log10_spectrogram : bool : whether to apply `log10(spectrogram)`
-                 trace_dim_names : list[str] : names of trace dimensions for DataFrame MultiIndex
+                values_keys : list[str] : names of attributes / values in T-F domain to calculate features on
+                                    (e.g. 'spectrogram', 'spectrogram_trim_mask_aggr')
+                feature_funcs : list[callable] : Funcs of signature
+                         `func(freq, time, values_dict, inds) -> dict[str, float]`,
+                         where `freq`, `time`, `values` are 1D arrays, `inds = [freq_inds, time_inds]`.
+                         Must return dict with the calculated features.
+                trace_dim_names : list[str] : names of trace dimensions for DataFrame MultiIndex
         """
         assert (self.spectrogram_cluster_ID is not None), ("CATS result must contain `spectrogram_cluster_ID` "
                                                            "(use `full_info`)")
 
-        TFR = self.spectrogram_SNR_trimmed_aggr if use_SNR else self.spectrogram
-        energy_unit = "SNR" if use_SNR else ""
-        assert TFR is not None, ("Time-Frequency representation is either `spectrogram_SNR_trimmed_aggr` or "
-                                 "`spectrogram`, CATS result must contain at least one of them")
+        if (values_keys is None) or (len(values_keys) == 0):
+            values_keys = ['spectrogram', 'spectrogram_SNR']
 
-        catalog = self.calculate_cluster_catalogs(cluster_ID=self.spectrogram_cluster_ID, TFR=TFR,
-                                                  tf_time=self.tf_time(), frequencies=self.frequencies,
-                                                  aggr_clustering_axis=self.main_params.get('aggr_clustering_axis'),
-                                                  aggr_clustering_func=self.main_params.get('aggr_clustering_func'),
-                                                  frequency_octaves=frequency_octaves, feature_funcs=feature_funcs,
-                                                  energy_unit=energy_unit, log10_spectrogram=log10_spectrogram,
-                                                  trace_dim_names=trace_dim_names)
+        values_dict = {name: val for name in values_keys if (val := getattr(self, name)) is not None}
+
+        catalog = ClusterCatalogs(values_dict=values_dict,
+                                  CID=self.spectrogram_cluster_ID,
+                                  freq=self.frequencies,
+                                  time=self.tf_time(),
+                                  feature_funcs=feature_funcs,
+                                  aggr_clustering_axis=self.main_params['aggr_clustering_axis'],
+                                  frequency_unit='Hz',
+                                  time_unit='sec',
+                                  trace_dim_names=trace_dim_names)
 
         if isinstance(self.cluster_catalogs, pd.DataFrame):
             merge_cols = self.cluster_catalogs.index.names + ['Cluster_ID']
             self.cluster_catalogs = pd.merge(self.cluster_catalogs, catalog, how='outer',
                                              on=merge_cols, suffixes=("_old", "_new"))
-
-        self.cluster_catalogs = catalog
+        else:
+            self.cluster_catalogs = catalog
 
     @staticmethod
     def filter_cluster_catalogs(catalog, cluster_catalogs_filter, cluster_ID=None):
@@ -884,7 +880,9 @@ class CATSResult(BaseModel):
                 "coefficients",
                 "spectrogram",
                 "noise_std",
-                "spectrogram_SNR_trimmed",
+                "spectrogram_SNR",
+                "spectrogram_trim_mask",
+                "spectrogram_trim_mask_aggr",
                 "spectrogram_cluster_ID",
                 "signal_denoised",
                 "time_frames"]

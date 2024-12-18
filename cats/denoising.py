@@ -34,7 +34,7 @@ class CATSDenoiser(CATSBase):
     """
         Denoiser of seismic events based on Cluster Analysis of Trimmed Spectrograms
     """
-    background_weight: float = 0.0
+    background_weight: Union[float, None] = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -44,7 +44,7 @@ class CATSDenoiser(CATSBase):
 
     def apply_ISTFT(self, result_container, /, N):
         weights = result_container['spectrogram_cluster_ID'] > 0
-        if self.background_weight:
+        if (self.background_weight is not None) and (self.background_weight > 0.0):
             weights = np.where(weights, 1.0, self.background_weight)
 
         weighted_coefficients = result_container['coefficients'] * weights
@@ -68,19 +68,19 @@ class CATSDenoiser(CATSBase):
         # B-E-DATE
         self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
                         process_name='B-E-DATE trimming')
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed', 'noise_std', 'noise_threshold_conversion'])
+        del_vals_by_keys(result, full_info, ['spectrogram_trim_mask', 'noise_std', 'noise_threshold_conversion'])
 
         # Clustering
         self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
                         process_name='Clustering')
 
         # Cluster catalog
-        self.cluster_catalogs_opts.setdefault('update_cluster_ID', True)
+        self.cluster_catalogs_opts.setdefault('update_cluster_ID', True)  # update cluster_ID for inverse STFT
         self.apply_func(func_name='apply_ClusterCatalogs', result_container=result,
                         tf_time=stft_time, frequencies=self.stft_frequency, status_keeper=history,
                         process_name='Cluster catalog')
 
-        del_vals_by_keys(result, full_info, ['spectrogram', 'spectrogram_SNR_trimmed_aggr'])
+        del_vals_by_keys(result, full_info, ['spectrogram', 'spectrogram_trim_mask_aggr'])
 
         # Inverse STFT
         self.apply_func(func_name='apply_ISTFT', result_container=result, status_keeper=history,
@@ -127,7 +127,7 @@ class CATSDenoiser(CATSBase):
                             - "spectrogram" - absolute value of `coefficients`
                             - "noise_std" - noise level, standard deviation
                             - "noise_threshold_conversion" - conversion to threshold from `noise_std`
-                            - "spectrogram_SNR_trimmed" - `spectrogram / noise_std` trimmed by `noise_threshold`
+                            - "spectrogram_trim_mask" - `spectrogram / noise_std` trimmed by `noise_threshold`
                             - "spectrogram_cluster_ID" - cluster indexes on `spectrogram_SNR_clustered`
                             - "signal_denoised" - inverse STFT of `coefficients` * (`spectrogram_SNR_clustered` > 0)
         """
@@ -173,11 +173,11 @@ class CATSDenoiser(CATSBase):
         }
         memory_usage_bytes.update(memory_usage_bytes_new)
 
-        used_together = [('coefficients', 'spectrogram'),
-                         ('coefficients', 'spectrogram', 'noise_threshold_conversion',
-                          'noise_std', 'spectrogram_SNR_trimmed'),
-                         ('coefficients', 'spectrogram_SNR_trimmed_aggr', 'spectrogram_cluster_ID'),
-                         ('coefficients', 'signal_denoised')]
+        used_together = [('coefficients', 'spectrogram'),  # STFT step
+                         ('coefficients', 'spectrogram', 'noise_threshold_conversion', 'noise_std',
+                          'spectrogram_SNR', "spectrogram_trim_mask", "spectrogram_trim_mask_aggr"),  # BEDATE step
+                         ('coefficients', 'spectrogram_trim_mask_aggr', 'spectrogram_cluster_ID'),  # Clustering
+                         ('coefficients', 'signal_denoised')]  # Inverse STFT
 
         base_info = ["signal", "frequencies", "time_frames"]
 

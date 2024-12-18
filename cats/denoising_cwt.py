@@ -8,7 +8,7 @@ import holoviews as hv
 from cats.baseclass import CATSResult
 from cats.denoising import CATSDenoisingResult
 from cats.core.timefrequency import CWTOperator
-from cats.core.clustering import Clustering, bbox_peaks
+from cats.core.clustering import Clustering, bbox_peaks, ClusterCatalogs
 from cats.core.date import BEDATE_trimming, divide_into_groups
 from cats.core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
 from cats.core.utils import (get_interval_division, cast_to_bool_dict, del_vals_by_keys, StatusKeeper,
@@ -56,6 +56,7 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
     # Extra clustering params
     background_weight: float = 0.0
     cluster_catalogs_funcs: Union[List[Callable], None] = None
+    cluster_feature_distributions: Union[List[str], None] = None
     cluster_catalogs_filter: Union[Callable, None] = None
     cluster_catalogs_opts: Union[dict, None] = None
     clustering_multitrace: bool = False
@@ -137,6 +138,9 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         self.min_separation_sec = self.min_separation_len * self.dt_sec
 
         # Catalog params
+        self.cluster_catalogs_funcs = self.cluster_catalogs_funcs or [bbox_peaks]
+        self.cluster_feature_distributions = (self.cluster_feature_distributions or
+                                              ['spectrogram', 'spectrogram_SNR'])
         self.cluster_catalogs_opts = self.cluster_catalogs_opts or {}
 
         # Grouping scales for BEDATE
@@ -203,59 +207,63 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         result_container['time_frames'] = get_interval_division(N=result_container['spectrogram'].shape[-1],
                                                                 L=self.stationary_frame_len)
         dim = 1 + np.iscomplexobj(result_container["coefficients"])  # checks if coefs are complex for dims
-        T, STD, THR = BEDATE_trimming(result_container['spectrogram'],
+
+        SNR, T, STD, THR = BEDATE_trimming(result_container['spectrogram'],
                                       scales_groups_indexes, self.bandpass_scale_slice,
                                       result_container['time_frames'], self.minSNR, self.time_edge,
                                       Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
                                       original_mode=self.date_original_mode, fft_base=False, dim=dim)
 
-        result_container['spectrogram_SNR_trimmed'] = T
+        result_container['spectrogram_SNR'] = SNR
+        result_container['spectrogram_trim_mask'] = T
         result_container['noise_std'] = STD
         result_container['noise_threshold_conversion'] = THR
 
         # Aggregate trimmed spectrogram over `aggr_clustering_axis` by `aggr_clustering_func`
         # Maybe useful if multi-component data are used (3-C or receiver groups)
-        result_container['spectrogram_SNR_trimmed_aggr'] = aggregate_array_by_axis_and_func(T,
-                                                                                            self.aggr_clustering_axis,
-                                                                                            self.aggr_clustering_func,
-                                                                                            min_last_dims=2)
+        result_container['spectrogram_trim_mask_aggr'] = aggregate_array_by_axis_and_func(T,
+                                                                                          self.aggr_clustering_axis,
+                                                                                          func='any', min_last_dims=2)
 
     def apply_Clustering(self, result_container, /):
         mc = self.clustering_multitrace
         q = (self.cluster_distance_trace_len,) * mc + (self.cluster_distance_scale_len, self.cluster_distance_t_len)
         s = (self.cluster_size_trace_len,) * mc + (self.cluster_size_scale_len, self.cluster_size_t_len)
-        log_freq_cluster = (0.0, 0.0)
+        log_freq_cluster = (-1.0, -1.0)
 
-        result_container['spectrogram_cluster_ID'] = Clustering(result_container['spectrogram_SNR_trimmed_aggr'],
+        result_container['spectrogram_cluster_ID'] = Clustering(result_container['spectrogram_trim_mask_aggr'],
                                                                 q=q, s=s, freq_octaves=log_freq_cluster)
 
     def apply_ClusterCatalogs(self, result_container, /):
         opts = self.cluster_catalogs_opts or {}
 
-        feature_funcs = self.cluster_catalogs_funcs or [bbox_peaks]
+        feature_funcs = self.cluster_catalogs_funcs
 
-        opts.setdefault("frequency_octaves", False)
-        opts.setdefault("feature_funcs", feature_funcs)
-        opts.setdefault("log10_spectrogram", False)
         opts.setdefault("trace_dim_names", None)
-        opts.setdefault("aggr_clustering_axis", self.aggr_clustering_axis)
-        opts.setdefault("aggr_clustering_func", self.aggr_clustering_func)
-        use_SNR = opts.pop('use_SNR', False)
-        opts.setdefault('energy_unit', "SNR" if use_SNR else "")
-
-        update_cluster_ID = opts.pop('update_cluster_ID', True)
 
         cluster_ID = result_container.get('spectrogram_cluster_ID', None)
-        TFR = result_container.get('spectrogram', None) if not use_SNR \
-            else result_container('spectrogram_SNR_trimmed_aggr', None)
+        update_cluster_ID = opts.pop('update_cluster_ID', False)
 
-        if (cluster_ID is not None) and (TFR is not None):
+        vals_keys = self.cluster_feature_distributions
+        assert isinstance(vals_keys, (list, tuple)) and len(vals_keys) > 0
+
+        values_dict = {}
+        for name in vals_keys:
+            val = result_container.get(name, None)  # take feature distribution from 'result_container'
+            if val is not None:
+                values_dict[name] = val
+
+        if (cluster_ID is not None) and (len(values_dict) > 0):
             tf_time = np.arange(cluster_ID.shape[-1]) * self.dt_sec
             frequencies = result_container['frequencies']
 
-            catalog = CATSResult.calculate_cluster_catalogs(cluster_ID=cluster_ID, TFR=TFR,
-                                                            tf_time=tf_time, frequencies=frequencies,
-                                                            **opts)
+            catalog = ClusterCatalogs(values_dict=values_dict,
+                                      CID=cluster_ID,
+                                      freq=frequencies,
+                                      time=tf_time,
+                                      feature_funcs=feature_funcs,
+                                      aggr_clustering_axis=self.aggr_clustering_axis,
+                                      **opts)
 
             catalog = CATSResult.filter_cluster_catalogs(catalog,
                                                          self.cluster_catalogs_filter,
@@ -295,7 +303,8 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         # B-E-DATE
         self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
                         process_name='B-E-DATE trimming')
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed', 'noise_std', 'noise_threshold_conversion'])
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR', 'spectrogram_trim_mask', 'noise_std',
+                                             'noise_threshold_conversion'])
 
         # Clustering
         self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
@@ -306,7 +315,7 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         self.apply_func(func_name='apply_ClusterCatalogs', result_container=result, status_keeper=history,
                         process_name='Cluster catalog')
 
-        del_vals_by_keys(result, full_info, ['spectrogram', 'spectrogram_SNR_trimmed_aggr'])
+        del_vals_by_keys(result, full_info, ['spectrogram', 'spectrogram_trim_mask_aggr'])
 
         # Inverse STFT
         self.apply_func(func_name='apply_ICWT', result_container=result, status_keeper=history,
@@ -380,8 +389,9 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
                 "spectrogram",
                 "noise_std",
                 "noise_threshold_conversion",
-                "spectrogram_SNR_trimmed",
-                "spectrogram_SNR_trimmed_aggr",
+                "spectrogram_SNR",
+                "spectrogram_trim_mask",
+                "spectrogram_trim_mask_aggr",
                 "spectrogram_cluster_ID",
                 "cluster_catalogs",
                 "scales",
@@ -395,7 +405,7 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
 
     @classmethod
     def get_qc_keys(cls):
-        return ["signal", "spectrogram", "spectrogram_SNR_trimmed", "spectrogram_cluster_ID",
+        return ["signal", "spectrogram", "spectrogram_trim_mask", "spectrogram_cluster_ID",
                 "noise_std", "noise_threshold_conversion", "cluster_catalogs",
                 "signal_denoised", "scales", "frequencies"]
 
@@ -421,6 +431,7 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
 
         # add necessary, repetitions will be deleted
         full_info += self.get_default_keys()  # defaults
+        full_info += self.cluster_feature_distributions  # for cluster catalogs
 
         # Parse
         full_info = cast_to_bool_dict(full_info, self.get_all_keys())
@@ -455,13 +466,17 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
             "spectrogram":                  1. * precision_order * ft_size,               # float
             "noise_threshold_conversion":   8. * bedate_shape[-2],                        # float
             "noise_std":                    1. * precision_order * bedate_size,           # float
-            "spectrogram_SNR_trimmed":      1. * precision_order * ft_size,               # float
-            "spectrogram_SNR_trimmed_aggr": 1. * precision_order * ft_size * cluster_sc,  # float
+            "spectrogram_SNR":              1. * precision_order * ft_size,               # float
+            "spectrogram_trim_mask":        1. * ft_size,                                 # bool
+            "spectrogram_trim_mask_aggr":   1. * ft_size * cluster_sc,                    # bool
             "spectrogram_cluster_ID":       4. * ft_size,                                 # uint32 always
         }
-        used_together = [('coefficients', 'spectrogram'),
-                         ('spectrogram', 'noise_threshold_conversion', 'noise_std', 'spectrogram_SNR_trimmed'),
-                         ('spectrogram_SNR_trimmed_aggr', 'spectrogram_cluster_ID')]
+
+        used_together = [('coefficients', 'spectrogram'),  # STFT step
+                         ('coefficients', 'spectrogram', 'noise_threshold_conversion', 'noise_std',
+                          'spectrogram_SNR', "spectrogram_trim_mask", "spectrogram_trim_mask_aggr"),  # BEDATE step
+                         ('coefficients', 'spectrogram_trim_mask_aggr', 'spectrogram_cluster_ID'),  # Clustering
+                         ('coefficients', 'signal_denoised')]  # Inverse STFT
 
         return memory_usage_bytes, used_together
 
@@ -511,8 +526,8 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
 
         used_together = [('coefficients', 'spectrogram'),
                          ('coefficients', 'spectrogram', 'noise_threshold_conversion',
-                          'noise_std', 'spectrogram_SNR_trimmed'),
-                         ('coefficients', 'spectrogram_SNR_trimmed_aggr', 'spectrogram_cluster_ID'),
+                          'noise_std', 'spectrogram_trim_mask'),
+                         ('coefficients', 'spectrogram_trim_mask_aggr', 'spectrogram_cluster_ID'),
                          ('coefficients', 'signal_denoised')]
 
         base_info = ["signal", "frequencies", "scales", "time_frames"]

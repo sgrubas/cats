@@ -36,7 +36,7 @@ class CATSDetector(CATSBase):
     def apply_Projection(self, result_container, /, bandpass_slice, full_info):
         if full_info.get("likelihood", False):
             # Project SNR on time axis
-            SNR, CID = (result_container['spectrogram_SNR_trimmed_aggr'][bandpass_slice],
+            SNR, CID = (result_container['spectrogram_SNR'][bandpass_slice],
                         result_container['spectrogram_cluster_ID'][bandpass_slice])
             # counts = np.count_nonzero(clustered, axis=-2)
             # counts[counts == 0] = 1  # normalization by number of nonzero elements, not by all frequencies
@@ -71,7 +71,7 @@ class CATSDetector(CATSBase):
         # B-E-DATE
         self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
                         process_name='B-E-DATE trimming')
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed',
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR', 'spectrogram_trim_mask',
                                              'noise_std', 'noise_threshold_conversion'])
 
         # Clustering
@@ -79,7 +79,7 @@ class CATSDetector(CATSBase):
                         process_name='Clustering')
 
         # Cluster catalog
-        self.cluster_catalogs_opts.setdefault('update_cluster_ID', False)
+        self.cluster_catalogs_opts.setdefault('update_cluster_ID', False)  # no need to update cluster_ID
         self.apply_func(func_name='apply_ClusterCatalogs', result_container=result,
                         tf_time=stft_time, frequencies=self.stft_frequency, status_keeper=history,
                         process_name='Cluster catalog')
@@ -88,7 +88,7 @@ class CATSDetector(CATSBase):
         # Projecting intervals
         self.apply_func(func_name='apply_Projection', result_container=result, status_keeper=history,
                         process_name='Projecting intervals', bandpass_slice=bandpass_slice, full_info=full_info)
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR_trimmed_aggr', 'spectrogram_cluster_ID',
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR', 'spectrogram_cluster_ID',
                                              'likelihood', 'detection', 'cluster_catalogs'])
 
         history.print_total_time()
@@ -131,7 +131,7 @@ class CATSDetector(CATSBase):
                             - "spectrogram" - absolute value of `coefficients`
                             - "noise_std" - noise level, standard deviation
                             - "noise_threshold_conversion" - conversion to threshold from `noise_std`
-                            - "spectrogram_SNR_trimmed" - `spectrogram / noise_std` trimmed by `noise_threshold`
+                            - "spectrogram_trim_mask" - `spectrogram / noise_std` trimmed by `noise_threshold`
                             - "spectrogram_cluster_ID" - cluster indexes on `spectrogram_SNR_clustered`
                             - "likelihood" - projected `spectrogram_SNR_clustered`
                             - "detected_intervals" - detected intervals (start, end) in seconds (always returned)
@@ -192,8 +192,8 @@ class CATSDetector(CATSBase):
         }
         memory_usage_bytes.update(memory_usage_bytes_new)
 
-        used_together.append(('spectrogram_cluster_ID', 'likelihood'))
-        used_together.append(("likelihood", "detection", "picked_features", "detected_intervals"))
+        used_together.append(('spectrogram_cluster_ID', 'likelihood'))  # Projection step
+        used_together.append(("likelihood", "detection", "picked_features", "detected_intervals"))  # cluster catalog
         base_info = ["signal", "frequencies", "time_frames"]
 
         return self.memory_info(memory_usage_bytes, used_together, base_info, full_info)
