@@ -174,6 +174,19 @@ def replace_int_by_list(ind):
         raise ValueError(f"Invalid type of `ind` {type(ind) = }")
 
 
+def replace_int_by_slice(ind, ind2slice):
+    if ind2slice is not None:
+        ind2slice = ind2slice if isinstance(ind2slice, (tuple, list)) else [ind2slice]
+        if isinstance(ind, (list, tuple)):
+            return tuple(map(lambda x: slice(None) if (x[0] in ind2slice) else x[1], enumerate(ind)))
+        elif isinstance(ind, int):
+            return slice(None) if ind2slice == 0 else ind
+        else:
+            raise ValueError(f"Invalid type of `ind` {type(ind) = }")
+    else:
+        return ind
+
+
 def format_index_by_dimensions(ind, shape, slice_dims, default_ind=0):
     ndim = len(shape) - slice_dims
     if ind is None:
@@ -188,7 +201,7 @@ def format_index_by_dimensions(ind, shape, slice_dims, default_ind=0):
         ind = ind + (slice(None),) * (slice_dims - slice_count)
         assert len(ind) == len(shape)
     else:
-        raise KeyError("Unknown ind type")
+        raise KeyError("Unknown 'ind' type")
 
     return ind
 
@@ -259,12 +272,14 @@ AGGREGATORS = {"min": np.min,
                "max": np.max,
                "median": np.median,
                "sum": np.sum,
-               "prod": np.prod}
+               "prod": np.prod,
+               "any": np.any,
+               "all": np.all}
 
 
 def aggregate_array_by_axis_and_func(array, axis, func, min_last_dims):
     if (array.ndim > min_last_dims) and (axis is not None) and (func is not None):
-        max_axis = axis if isinstance(axis, int) else max(axis)  # max - to check if last needed axes are involved
+        max_axis = axis if isinstance(axis, int) else max(axis)  # max - to check if 'min_last_dims' axes are involved
         assert max_axis < array.ndim - min_last_dims  # last axes must not be aggregated
         func = func if callable(func) else AGGREGATORS[func]
         array = func(array, axis=axis, keepdims=True)
