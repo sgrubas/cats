@@ -295,8 +295,10 @@ class CATSDetectionResult(CATSResult):
         L_dim = hv.Dimension('Likelihood')
         t1, t2 = time_interval_sec
 
-        aggr_ind = make_default_index_if_outrange(inds_slices[0], self.likelihood.shape[:-1], default_ind_value=0)
-        inds_stft = aggr_ind + (inds_slices[2],)
+        ind, i_time, i_stft = inds_slices
+
+        aggr_ind = make_default_index_if_outrange(ind, self.spectrogram_cluster_ID.shape[:-2], default_ind_value=0)
+        inds_stft = aggr_ind + (i_stft,)
 
         stft_time = self.tf_time(time_interval_sec)
 
@@ -307,7 +309,8 @@ class CATSDetectionResult(CATSResult):
 
         # Arrivals
         cluster_catalogs = getattr(self, 'cluster_catalogs', None)
-        catalog = index_cluster_catalog(cluster_catalogs, aggr_ind) if (cluster_catalogs is not None) else None
+        catalog = index_cluster_catalog(cluster_catalogs, aggr_ind).copy() if (cluster_catalogs is not None) else None
+
         arrivals_figs = []
         if catalog is not None:
             vals = catalog.get(['Time_first_arrival_sec', 'Time_strong_arrival_sec'], None)
