@@ -33,6 +33,8 @@ class CATSDetector(CATSBase):
         Detector of events based on Cluster Analysis of Trimmed Spectrograms
     """
 
+    full_aggregated_mask: Union[bool, None] = True
+
     def apply_Projection(self, result_container, /, bandpass_slice, full_info):
         if full_info.get("likelihood", False):
             # Project SNR on time axis
@@ -78,8 +80,13 @@ class CATSDetector(CATSBase):
         self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
                         process_name='Clustering')
 
+        # Phase separation
+        if self.phase_separation is not None:
+            self.apply_func(func_name='apply_PhaseSeparation', result_container=result, status_keeper=history,
+                            process_name='Phase separation', tf_time=stft_time, frequencies=self.stft_frequency)
+
         # Cluster catalog
-        self.cluster_catalogs_opts.setdefault('update_cluster_ID', False)  # no need to update cluster_ID
+        self.cluster_catalogs_opts.setdefault('update_cluster_ID', True)  # no need to update cluster_ID
         self.apply_func(func_name='apply_ClusterCatalogs', result_container=result,
                         tf_time=stft_time, frequencies=self.stft_frequency, status_keeper=history,
                         process_name='Cluster catalog')
@@ -282,12 +289,20 @@ class CATSDetectionResult(CATSResult):
              ind: Tuple[int] = None,
              time_interval_sec: Tuple[float] = None,
              SNR_spectrograms: bool = False,
+             show_cluster_ID: bool = False,
+             show_aggregated: bool = False,
+             detrend_type: str = 'constant',
+             aggr_func: callable = np.max,
              interactive: bool = False,
              **kwargs):
 
         fig, opts, inds_slices, time_interval_sec = super().plot(ind=ind,
                                                                  time_interval_sec=time_interval_sec,
                                                                  SNR_spectrograms=SNR_spectrograms,
+                                                                 show_cluster_ID=show_cluster_ID,
+                                                                 show_aggregated=show_aggregated,
+                                                                 detrend_type=detrend_type,
+                                                                 aggr_func=aggr_func,
                                                                  interactive=interactive,
                                                                  frequencies=self.frequencies)
 
@@ -359,16 +374,21 @@ class CATSDetectionResult(CATSResult):
 
         # Output
         fig = (fig + fig4).opts(*opts).cols(1)
+
+        if show_cluster_ID:
+            fig31 = fig[-2].opts(hv.opts.QuadMesh(norm=None, backend='matplotlib'),
+                                 hv.opts.QuadMesh(logz=False, backend='bokeh'))
         # fig = (fig + fig4).opts(*opts[-2:]).cols(1)  # apply layout opts
         return fig
 
     def plot_traces(self,
                     ind: Tuple[int] = None,
                     time_interval_sec: Tuple[float] = None,
-                    intervals: bool = False,
+                    intervals: bool = True,
                     picks: bool = False,
                     station_loc: np.ndarray = None,
                     gain: int = 1,
+                    detrend_type: str = 'constant',
                     clip: bool = False,
                     each_station: int = 1,
                     amplitude_scale: float = None,
@@ -381,9 +401,10 @@ class CATSDetectionResult(CATSResult):
 
         fig = super().plot_traces(signal=self.signal, ind=ind, time_interval_sec=time_interval_sec, intervals=intervals,
                                   picks=picks, station_loc=station_loc, gain=gain, clip=clip, each_station=each_station,
-                                  amplitude_scale=amplitude_scale, per_station_scale=per_station_scale,
-                                  component_labels=component_labels, station_labels=station_labels,
-                                  interactive=interactive, allow_picking=allow_picking, **kwargs)
+                                  detrend_type=detrend_type, amplitude_scale=amplitude_scale,
+                                  per_station_scale=per_station_scale, component_labels=component_labels,
+                                  station_labels=station_labels, interactive=interactive, allow_picking=allow_picking,
+                                  **kwargs)
         return fig
 
     def filter_and_update_result(self, cluster_catalogs_filter):
