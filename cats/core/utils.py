@@ -177,14 +177,39 @@ def replace_int_by_list(ind):
 def replace_int_by_slice(ind, ind2slice):
     if ind2slice is not None:
         ind2slice = ind2slice if isinstance(ind2slice, (tuple, list)) else [ind2slice]
+
         if isinstance(ind, (list, tuple)):
+            assert max(ind2slice) < len(ind), "Index for slice is out of range"
             return tuple(map(lambda x: slice(None) if (x[0] in ind2slice) else x[1], enumerate(ind)))
         elif isinstance(ind, int):
-            return slice(None) if ind2slice == 0 else ind
+            assert max(ind2slice) < 1, "Index for slice is out of range"
+            return slice(None) if (0 in ind2slice) else ind
         else:
             raise ValueError(f"Invalid type of `ind` {type(ind) = }")
     else:
         return ind
+
+
+def give_trace_dim_names(ndims, aggr_clustering_axis=None, trace_dim_names=None):
+
+    if trace_dim_names is None:
+        if aggr_clustering_axis is not None:
+            axes = aggr_clustering_axis if isinstance(aggr_clustering_axis, (tuple, list)) else [aggr_clustering_axis]
+            assert (len(axes) <= ndims) and max(axes) < ndims, "Number of `aggr_clustering_axis` must match `ndims`"
+            names = [("Aggregated" if i in axes else "Trace") + f"_dim_{i}"
+                     for i in range(ndims)]
+            if len(axes) == 1:
+                names[axes[0]] = "Component"
+                if ndims - len(axes) == 1:
+                    names[1 - axes[0]] = "Station"
+            return names
+        else:
+            return [f"Trace_dim_{i}" for i in range(ndims)]
+    else:
+        assert isinstance(trace_dim_names, (list, tuple)) and len(trace_dim_names) == ndims, \
+            "Trace dim names must be list or tuple, and length must be equal to number of dimensions"
+
+        return trace_dim_names
 
 
 def format_index_by_dimensions(ind, shape, slice_dims, default_ind=0):
@@ -262,8 +287,9 @@ def cast_to_bool_dict(iterable: Union[bool, List[str], Tuple[str], Set[str], Dic
 def del_vals_by_keys(dict_vals: dict,
                      dict_cond: Dict[str, bool],
                      keys: Union[list, tuple]):
+    available_keys = dict_vals.keys()
     for kw in keys:
-        if not dict_cond[kw]:
+        if (not dict_cond[kw]) and (kw in available_keys):
             del dict_vals[kw]
 
 
