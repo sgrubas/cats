@@ -11,7 +11,7 @@ from scipy import signal
 import ssqueezepy as ssq
 import os
 from .utils import ReshapeArraysDecorator
-from typing import Union, Literal
+from typing import Union, Literal, Any
 from pydantic import BaseModel, Field
 
 
@@ -62,6 +62,7 @@ class STFTOperator(BaseModel, extra="allow"):
 
         """
         super().__init__(**kwargs)
+        self._init_params = kwargs  # this first because if `reset_params` raises error, the instance gets broken
         self._set_params()
 
     def _set_params(self):
@@ -136,12 +137,28 @@ class STFTOperator(BaseModel, extra="allow"):
         self.forw_kw = forw_kw
         self.inv_kw = inv_kw
 
-    def export_main_params(self):
-        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+    @property
+    def all_params(self):
+        """ All params from __init__ for the instance
+        """
+        return {kw: getattr(self, kw, None) for kw in self.model_fields.keys()}
+
+    @property
+    def main_params(self):
+        return {kw: val for kw, val in self.all_params.items() if val is not None}
+
+    @property
+    def init_params(self):
+        """ Params passed to __init__ for the instance. Reset updates it.
+        """
+        return self._init_params
 
     def reset_params(self, **params):
-        kwargs = self.export_main_params()
+        """ Updates params of the instance.
+        """
+        kwargs = self.init_params
         kwargs.update(params)
+
         self.__init__(**kwargs)
 
     def padsignal(self, X: np.ndarray):
@@ -254,7 +271,8 @@ class CWTOperator(BaseModel, extra="allow"):
     wavelet: Union[str, tuple[str, dict]] = ('morlet', {'mu': 5})
     scales: Union[Literal['log', 'log-piecewise', 'linear', 'log:maximal'],
                   tuple[float],
-                  list[float]] = 'log'
+                  list[float],
+                  Any] = 'log'
     nv: int = 32  # >= 16
     l1_norm: bool = True
     derivative: bool = False
@@ -277,6 +295,7 @@ class CWTOperator(BaseModel, extra="allow"):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._init_params = kwargs  # this first because if `reset_params` raises error, the instance gets broken
         self._set_params()
 
     def _set_params(self):
@@ -308,12 +327,28 @@ class CWTOperator(BaseModel, extra="allow"):
                            "rpadded": self.rpadded,
                            "l1_norm": self.l1_norm}
 
-    def export_main_params(self):
-        return {kw: val for kw in type(self).__fields__.keys() if (val := getattr(self, kw, None)) is not None}
+    @property
+    def all_params(self):
+        """ All params from __init__ for the instance
+        """
+        return {kw: getattr(self, kw, None) for kw in self.model_fields.keys()}
+
+    @property
+    def main_params(self):
+        return {kw: val for kw, val in self.all_params.items() if val is not None}
+
+    @property
+    def init_params(self):
+        """ Params passed to __init__ for the instance. Reset updates it.
+        """
+        return self._init_params
 
     def reset_params(self, **params):
-        kwargs = self.export_main_params()
+        """ Updates params of the instance.
+        """
+        kwargs = self.init_params
         kwargs.update(params)
+
         self.__init__(**kwargs)
 
     @ReshapeArraysDecorator(dim=2, input_num=1, methodfunc=True, output_num=1, first_shape=True)
@@ -343,4 +378,12 @@ class CWTOperator(BaseModel, extra="allow"):
 
     def get_frequencies(self, N):
         return ssq.experimental.scale_to_freq(self.get_scales(N), self.wavelet, N,
+                                              fs=self.fs, padtype=self.padtype).squeeze()
+
+    def get_scales_from_freqs(self, freqs, N):
+        return ssq.experimental.freq_to_scale(np.array(freqs), self.wavelet, N, fs=self.fs,
+                                              n_search_scales=None, kind='peak', base=2)
+
+    def get_freqs_from_scales(self, scales, N):
+        return ssq.experimental.scale_to_freq(scales, self.wavelet, N,
                                               fs=self.fs, padtype=self.padtype).squeeze()
