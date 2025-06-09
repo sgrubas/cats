@@ -33,8 +33,12 @@ from .io import read_data, convert_dict_to_stream
 class CATSDenoiser(CATSBase):
     """
         Denoiser of seismic events based on Cluster Analysis of Trimmed Spectrograms
+
+        background_weight : float : weight of the background noise in the inverse STFT. If None, then 0.0
+
     """
     background_weight: Union[float, None] = None
+    full_aggregated_mask: Union[bool, None] = False
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -44,6 +48,10 @@ class CATSDenoiser(CATSBase):
 
     def apply_ISTFT(self, result_container, /, N):
         weights = result_container['spectrogram_cluster_ID'] > 0
+
+        if not self.full_aggregated_mask:
+            weights = weights * result_container['spectrogram_trim_mask']
+
         if (self.background_weight is not None) and (self.background_weight > 0.0):
             weights = np.where(weights, 1.0, self.background_weight)
 
@@ -68,11 +76,17 @@ class CATSDenoiser(CATSBase):
         # B-E-DATE
         self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
                         process_name='B-E-DATE trimming')
-        del_vals_by_keys(result, full_info, ['spectrogram_trim_mask', 'noise_std', 'noise_threshold_conversion'])
+        del_vals_by_keys(result, full_info, ['noise_std', 'noise_threshold_conversion'] +
+                         ['spectrogram_trim_mask'] * self.full_aggregated_mask)
 
         # Clustering
         self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
                         process_name='Clustering')
+
+        # Phase separation
+        if self.phase_separation is not None:
+            self.apply_func(func_name='apply_PhaseSeparation', result_container=result, status_keeper=history,
+                            process_name='Phase separation', tf_time=stft_time, frequencies=self.stft_frequency)
 
         # Cluster catalog
         self.cluster_catalogs_opts.setdefault('update_cluster_ID', True)  # update cluster_ID for inverse STFT
@@ -86,7 +100,7 @@ class CATSDenoiser(CATSBase):
         self.apply_func(func_name='apply_ISTFT', result_container=result, status_keeper=history,
                         process_name='Inverse STFT', N=x.shape[-1])
 
-        del_vals_by_keys(result, full_info, ['coefficients', 'spectrogram_cluster_ID'])
+        del_vals_by_keys(result, full_info, ['spectrogram_trim_mask', 'coefficients', 'spectrogram_cluster_ID'])
 
         from_full_info = {kw: result.get(kw, None) for kw in full_info}
 
@@ -283,7 +297,7 @@ class CATSDenoisingResult(CATSResult):
             psd_fig = fig[1]  # original PSD
             psd_vdim = fig[1].dimensions()[2]
 
-            sparse_spectr = fig[-2]
+            sparse_spectr = fig[2]
             dim_key = sparse_spectr.dimensions()[2].name
             # take sparse spectrogram data values
             if isinstance(sparse_spectr, hv.QuadMesh):
@@ -300,7 +314,7 @@ class CATSDenoisingResult(CATSResult):
                       hv.opts.QuadMesh(clim=clim, backend='bokeh'))
             fig31 = hv.QuadMesh((psd_fig.data[t_dim.name], psd_fig.data[f_dim.name], WPSD),
                                 kdims=[t_dim, f_dim], vdims=psd_vdim,
-                                label='3.1. Weighted amplitude spectrogram: $|X(t,f) \cdot W(t,f)|$').opts(*w_opts)
+                                label='3.2. Weighted amplitude spectrogram: $|X(t,f) \cdot W(t,f)|$').opts(*w_opts)
 
             fig = fig + fig31  # Append the weighted spectrogram
 
@@ -353,15 +367,23 @@ class CATSDenoisingResult(CATSResult):
              ind: Tuple[int] = None,
              time_interval_sec: Tuple[float] = None,
              SNR_spectrograms: bool = False,
+             show_cluster_ID: bool = False,
+             show_aggregated: bool = False,
+             detrend_type: str = 'constant',
              weighted_coefficients: bool = False,
              intervals: bool = False,
              picks: bool = False,
+             aggr_func: callable = np.max,
              interactive: bool = False
              ):
 
         fig, opts, inds_slices, time_interval_sec = super().plot(ind=ind,
                                                                  time_interval_sec=time_interval_sec,
                                                                  SNR_spectrograms=SNR_spectrograms,
+                                                                 show_cluster_ID=show_cluster_ID,
+                                                                 show_aggregated=show_aggregated,
+                                                                 detrend_type=detrend_type,
+                                                                 aggr_func=aggr_func,
                                                                  interactive=interactive,
                                                                  frequencies=self.frequencies)
         fig = self._plot(weighted_coefficients=weighted_coefficients,
@@ -371,6 +393,12 @@ class CATSDenoisingResult(CATSResult):
                          opts=opts,
                          inds_slices=inds_slices,
                          time_interval_sec=time_interval_sec)
+
+        if show_cluster_ID:
+            ind = -2 - weighted_coefficients
+            fig31 = fig[ind].opts(hv.opts.QuadMesh(norm=None, backend='matplotlib'),
+                                  hv.opts.QuadMesh(logz=False, backend='bokeh'))
+
         return fig
 
     def plot_traces(self,
@@ -381,6 +409,7 @@ class CATSDenoisingResult(CATSResult):
                     picks: bool = False,
                     station_loc: np.ndarray = None,
                     gain: int = 1,
+                    detrend_type: str = 'constant',
                     clip: bool = False,
                     each_station: int = 1,
                     amplitude_scale: float = None,
@@ -396,6 +425,7 @@ class CATSDenoisingResult(CATSResult):
                                   picks=picks, station_loc=station_loc, gain=gain, clip=clip, each_station=each_station,
                                   amplitude_scale=amplitude_scale, per_station_scale=per_station_scale,
                                   component_labels=component_labels, station_labels=station_labels,
+                                  detrend_type=detrend_type,
                                   interactive=interactive, allow_picking=allow_picking, **kwargs)
         return fig
 
