@@ -19,6 +19,7 @@ from cats.core.association import PickDetectedPeaks
 from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
 from cats.io.utils import save_pickle, load_pickle
+from cats.core.plottingutils import detrend_func
 
 
 # --------------- STA/LTA DETECTOR API --------------- #
@@ -152,14 +153,17 @@ class STALTADetector(BaseModel, extra='allow'):
             results.append(self._detect(dc, verbose=verbose, full_info=full_info))
         return STALTADetectionResult.concatenate(*results)
 
+    def apply(self, x, verbose, full_info):
+        return self.detect(x, verbose=verbose, full_info=full_info)
+
     def __mul__(self, x):
-        return self.detect(x, verbose=False, full_info=False)
+        return self.apply(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
-        return self.detect(x, verbose=True, full_info='qc')
+        return self.apply(x, verbose=True, full_info='qc')
 
     def __matmul__(self, x):
-        return self.detect(x, verbose=True, full_info=True)
+        return self.apply(x, verbose=True, full_info=True)
 
     @staticmethod
     def get_qc_keys():
@@ -242,6 +246,7 @@ class STALTADetectionResult(CATSDetectionResult):
     def plot(self,
              ind: Tuple[int] = None,
              time_interval_sec: Tuple[float] = None,
+             detrend_type='constant',
              **kwargs):
 
         if ind is None:
@@ -256,13 +261,17 @@ class STALTADetectionResult(CATSDetectionResult):
         i_time = give_index_slice_by_limits(time_interval_sec, self.dt_sec)
         i_stalta = give_index_slice_by_limits(time_interval_sec, self.stalta_dt_sec)
         inds_time = ind + (i_time,)
-        inds_stalta = ind + (i_stalta,)
 
         time = self.time(time_interval_sec)
         stalta_time = self.stalta_time(time_interval_sec)
 
-        fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims='Amplitude',
-                        label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.2)
+        signal = self.signal[inds_time]
+        if detrend_type:
+            detrend_type = 'linear' if detrend_type == 'linear' else 'constant'
+            signal = detrend_func(signal, axis=-1, type=detrend_type)
+
+        fig0 = hv.Curve((time, signal), kdims=[t_dim], vdims='Amplitude',
+                        label='0. Input data: $x(t)$').opts(xlabel='')
 
         ind = make_default_index_if_outrange(ind, self.likelihood.shape[:-1], default_ind_value=0)
         inds_stalta = ind + (i_stalta,)
@@ -289,16 +298,48 @@ class STALTADetectionResult(CATSDetectionResult):
         snr_level_fig = hv.HLine(self.threshold, kdims=[t_dim, L_dim]).opts(color='k', linestyle='--', alpha=0.7)
 
         last_figs = [intervals_fig, snr_level_fig, likelihood_fig, peaks_fig]
-        fig1 = hv.Overlay(last_figs, label='1. Likelihood and Detection:'
-                                           ' $\mathcal{L}(t)$ and $\mathcal{D}(t)$')
+        fig1 = hv.Overlay(last_figs, label=r'1. Likelihood and Detection: $\mathcal{L}(t)$ and $\tilde{\alpha}(t)$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250
 
-        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=time_interval_sec)
+        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, show_frame=True,
+                                   xlim=time_interval_sec)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      aspect_weight=0, sublabel_format='')
         fig = (fig0 + fig1).cols(1).opts(layout_opts, curve_opts)
+        return fig
+
+    def plot_multi(self,
+                   inds,
+                   share_time_labels=True,
+                   share_vertical_axes=True,
+                   hspace=None,
+                   vspace=None,
+                   **kwargs):
+
+        figs = [self.plot(ind, **kwargs) for ind in inds]
+        nrows = len(figs[0])
+        ncols = len(figs)
+
+        if share_time_labels:
+            for i, figs_i in enumerate(zip(*figs)):
+                if i < nrows - 1:
+                    for fi in figs_i:
+                        fi = fi.opts(xaxis='bare')
+
+        if share_vertical_axes:
+            for i, fig_i in enumerate(figs):
+                if i > 0:
+                    fig_i = fig_i.opts(hv.opts.Curve(yaxis='bare'))
+
+        fig = hv.Layout(figs).cols(nrows).opts(**figs[0].opts.get().kwargs)
+
+        vspace = vspace or 0.050 + 0.02 * (not share_time_labels)
+        hspace = hspace or 0.025 + 0.10 * sum([not share_vertical_axes])
+
+        fig = fig.opts(shared_axes=share_vertical_axes, vspace=vspace, hspace=hspace, transpose=True)
+
         return fig
 
     def stalta_time(self, time_interval_sec=None):

@@ -20,6 +20,7 @@ from cats.baseclass import CATSBase
 from cats.detection import CATSDetector, CATSDetectionResult
 from cats.denoising import CATSDenoiser, CATSDenoisingResult
 from cats.io.utils import read_data, save_pickle, load_pickle
+from cats.core.plottingutils import detrend_func
 
 
 # --------------- PSD DETECTOR API --------------- #
@@ -221,14 +222,17 @@ class PSDDetector(BaseModel, extra="allow"):
             results.append(self._detect(dc, verbose=verbose, full_info=full_info))
         return PSDDetectionResult.concatenate(*results)
 
+    def apply(self, x, verbose, full_info):
+        return self.detect(x, verbose=verbose, full_info=full_info)
+
     def __mul__(self, x):
-        return self.detect(x, verbose=False, full_info=False)
+        return self.apply(x, verbose=False, full_info=False)
 
     def __pow__(self, x):
-        return self.detect(x, verbose=True, full_info='qc')
+        return self.apply(x, verbose=True, full_info='qc')
 
     def __matmul__(self, x):
-        return self.detect(x, verbose=True, full_info=True)
+        return self.apply(x, verbose=True, full_info=True)
 
     @staticmethod
     def get_qc_keys():
@@ -336,11 +340,13 @@ class PSDDetector(BaseModel, extra="allow"):
 class PSDDetectionResult(CATSDetectionResult):
     noise_mean: Any = None
     threshold: float = None
+    spectrogram_SNR_trimmed: Any = None
 
     def plot(self,
              ind=None,
              time_interval_sec=None,
              SNR_spectrograms: bool = True,
+             detrend_type: str = 'constant',
              **kwargs):
 
         if ind is None:
@@ -370,7 +376,12 @@ class PSDDetectionResult(CATSDetectionResult):
         time = self.time(time_interval_sec)
         stft_time = self.tf_time(time_interval_sec)
 
-        fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
+        signal = self.signal[inds_time]
+        if detrend_type:
+            detrend_type = 'linear' if detrend_type == 'linear' else 'constant'
+            signal = detrend_func(signal, axis=-1, type=detrend_type)
+
+        fig0 = hv.Curve((time, signal), kdims=[t_dim], vdims=A_dim,
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
         fig1 = hv.Image((stft_time, self.frequencies, PSD), kdims=[t_dim, f_dim],
                         label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
@@ -402,8 +413,7 @@ class PSDDetectionResult(CATSDetectionResult):
 
         last_figs = [intervals_fig, snr_level_fig, likelihood_fig, peaks_fig]
 
-        fig3 = hv.Overlay(last_figs, label='3. Likelihood and Detection:'
-                                           ' $\mathcal{L}(t)$ and $\mathcal{D}(t)$')
+        fig3 = hv.Overlay(last_figs, label=r'3. Likelihood and Detection: $\mathcal{L}(t)$ and $\tilde{\alpha}(t)$')
 
         fontsize = dict(labels=15, title=16, ticks=14)
         figsize = 250
@@ -411,12 +421,60 @@ class PSDDetectionResult(CATSDetectionResult):
         xlim = time_interval_sec
         ylim = (max(1e-1, self.frequencies[1]), None)
         spectr_opts = hv.opts.Image(cmap=cmap, colorbar=True,  logy=True, logz=True, xlim=xlim, ylim=ylim,
-                                    xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize)
-        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim, show_legend=False)
+                                    cbar_width=0.02, xlabel='', clabel='', aspect=2,
+                                    fig_size=figsize, fontsize=fontsize)
+        curve_opts = hv.opts.Curve(aspect=5, fig_size=figsize, fontsize=fontsize, xlim=xlim,
+                                   show_frame=True, show_legend=False)
         layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.4,
                                      aspect_weight=0, sublabel_format='')
         figs = [fig0, fig1, fig2, fig3]
         fig = hv.Layout(figs).cols(1).opts(layout_opts, curve_opts, spectr_opts)
+        return fig
+
+    def plot_multi(self,
+                   inds,
+                   share_time_labels=True,
+                   share_vertical_axes=True,
+                   share_spectrogram_cmaps=True,
+                   hspace=None,
+                   vspace=None,
+                   **kwargs):
+
+        figs = [self.plot(ind, **kwargs) for ind in inds]
+        nrows = len(figs[0])
+        ncols = len(figs)
+
+        if share_time_labels:
+            for i, figs_i in enumerate(zip(*figs)):
+                if i < nrows - 1:
+                    for fi in figs_i:
+                        fi = fi.opts(xaxis='bare')
+
+        if share_vertical_axes:
+            for i, fig_i in enumerate(figs):
+                if i > 0:
+                    fig_i = fig_i.opts(hv.opts.Image(yaxis='bare'),
+                                       hv.opts.Curve(yaxis='bare'))
+        if share_spectrogram_cmaps:
+            for i, figs_i in enumerate(zip(*figs)):
+                if (0 < i < nrows - 1):
+                    clims = [fi.opts.get().kwargs['clim'] for fi in figs_i]
+                    if all([(cl is not None) for i, cl in np.ndenumerate(clims)]):
+                        clim = (np.min(clims), np.max(clims))
+                        for fi in figs_i:
+                            fi = fi.opts(clim=clim)
+
+            for i, fig_i in enumerate(figs):
+                if i < ncols - 1:
+                    fig_i = fig_i.opts(hv.opts.Image(colorbar=False))
+
+        fig = hv.Layout(figs).cols(nrows).opts(**figs[0].opts.get().kwargs)
+
+        vspace = vspace or 0.05 + 0.02 * (not share_time_labels)
+        hspace = hspace or 0.025 + 0.1 * sum([not share_vertical_axes, not share_spectrogram_cmaps])
+
+        fig = fig.opts(shared_axes=share_vertical_axes, vspace=vspace, hspace=hspace, transpose=True)
+
         return fig
 
     def append(self, other):
@@ -666,6 +724,7 @@ class PSDDenoisingResult(CATSDenoisingResult):
              weighted_coefficients: bool = False,
              intervals=False,
              picks=False,
+             detrend_type='constant',
              interactive=False):
 
         if ind is None:
@@ -701,7 +760,12 @@ class PSDDenoisingResult(CATSDenoisingResult):
         time = self.time(time_interval_sec)
         stft_time = self.tf_time(time_interval_sec)
 
-        fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=A_dim,
+        signal = self.signal[inds_time]
+        if detrend_type:
+            detrend_type = 'linear' if detrend_type == 'linear' else 'constant'
+            signal = detrend_func(signal, axis=-1, type=detrend_type)
+
+        fig0 = hv.Curve((time, signal), kdims=[t_dim], vdims=A_dim,
                         label='0. Input data: $x(t)$').opts(xlabel='', linewidth=0.5)
         fig1 = hv.Image((stft_time, self.frequencies, PSD), kdims=[t_dim, f_dim],
                         label='1. Power spectrogram: $|X(t,f)|^2$').opts(clim=PSD_clims, clabel='Power')
@@ -765,6 +829,52 @@ class PSDDenoisingResult(CATSDenoisingResult):
                                      aspect_weight=0, sublabel_format='')
 
         fig = hv.Layout(figs).cols(1).opts(layout_opts, curve_opts, spectr_opts)
+        return fig
+
+    def plot_multi(self,
+                   inds,
+                   share_time_labels=True,
+                   share_vertical_axes=True,
+                   share_spectrogram_cmaps=True,
+                   hspace=None,
+                   vspace=None,
+                   **kwargs):
+
+        figs = [self.plot(ind, **kwargs) for ind in inds]
+        nrows = len(figs[0])
+        ncols = len(figs)
+
+        if share_time_labels:
+            for i, figs_i in enumerate(zip(*figs)):
+                if i < nrows - 1:
+                    for fi in figs_i:
+                        fi = fi.opts(xaxis='bare')
+
+        if share_vertical_axes:
+            for i, fig_i in enumerate(figs):
+                if i > 0:
+                    fig_i = fig_i.opts(hv.opts.Image(yaxis='bare'),
+                                       hv.opts.Curve(yaxis='bare'))
+        if share_spectrogram_cmaps:
+            for i, figs_i in enumerate(zip(*figs)):
+                if (0 < i < nrows - 1):
+                    clims = [fi.opts.get().kwargs['clim'] for fi in figs_i]
+                    if all([(cl is not None) for i, cl in np.ndenumerate(clims)]):
+                        clim = (np.min(clims), np.max(clims))
+                        for fi in figs_i:
+                            fi = fi.opts(clim=clim)
+
+            for i, fig_i in enumerate(figs):
+                if i < ncols - 1:
+                    fig_i = fig_i.opts(hv.opts.Image(colorbar=False))
+
+        fig = hv.Layout(figs).cols(nrows).opts(**figs[0].opts.get().kwargs)
+
+        vspace = vspace or 0.05 + 0.02 * (not share_time_labels)
+        hspace = hspace or 0.025 + 0.1 * sum([not share_vertical_axes, not share_spectrogram_cmaps])
+
+        fig = fig.opts(shared_axes=share_vertical_axes, vspace=vspace, hspace=hspace, transpose=True)
+
         return fig
 
     def append(self, other):
