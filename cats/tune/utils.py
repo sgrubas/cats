@@ -17,12 +17,12 @@ class TraceAugmenter(BaseModel):
     product_levels_and_colors: bool = False
     reference_noise: List[Any] = []
     reference_noise_levels: Union[List[float], List[List[float]]] = [0.5]
+    reference_noise_name: str = "reference"
     trace_dropout_rate: float = Field(0.0, ge=0, lt=1.0)
     # shuffle_traces: bool = False
     # shuffle_axis: Union[int, None] = None
     progress_bar: bool = False
     callbacks: List[Callable] = []
-    noise_reference_name: str = "reference"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -97,7 +97,7 @@ class TraceAugmenter(BaseModel):
 
     def __call__(self):
         repeats = self.random_noise_repeats
-        ref_name = self.noise_reference_name
+        ref_name = self.reference_noise_name
         rand_prod = self.product_levels_and_colors
         cntr = 0
         zipped = zip(enumerate(self.traces), self.reference_outputs, self.reference_level,
