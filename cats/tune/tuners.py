@@ -18,8 +18,8 @@ class BaseScoring(BaseModel):
     param_parser: Union[Callable, None] = None
     prepare_operator: Union[Callable, None] = None
 
-    def export_main_params(self):
-        return {kw: getattr(self, kw, None) for kw in type(self).__fields__.keys()}
+    def main_params(self):
+        return {kw: getattr(self, kw, None) for kw in type(self).model_fields()}
 
     def update_operator(self, **kwargs):
         if self.param_parser is not None:
