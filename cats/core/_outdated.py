@@ -164,3 +164,241 @@
 #     p = special.gammaincc(d / 2, xi**2 / 2)
 #     q_opt = _optimalNeighborhoodDistance(p, pmin=pmin, qmax=qmax, maxN=maxN)
 #     return q_opt
+
+
+# @nb.njit(["f8[:, :](f8[:, :], UniTuple(i8, 2), b1)",
+#           "f4[:, :](f4[:, :], UniTuple(i8, 2), b1)",
+#           "b1[:, :](b1[:, :], UniTuple(i8, 2), b1)"],
+#          cache=True, parallel=True)
+# def _topo_density_estimation(Z, q, smoothing):
+#     """ Basically, it is equivalent to 2D convolution. But since I can ignore 'zero' pixels,
+#         it can speed up it a little bit, as well as I use 'parallel' loop.
+#     """
+#     Nf, Nt = Z.shape
+#     q_f, q_t = q
+#     k_weight = 1.0 / ((2 * q_f + 1) * (2 * q_t + 1))
+#     D = np.zeros_like(Z)
+#
+#     for flat_index in nb.prange(0, Z.size):  # parallel
+#         if not Z.flat[flat_index] > 0.0:
+#             continue
+#
+#         i, j = ind = divmod(flat_index, Nt)
+#
+#         i1, i2 = max(i - q_f, 0), min(i + q_f + 1, Nf)
+#         j1, j2 = max(j - q_t, 0), min(j + q_t + 1, Nt)
+#
+#         for ii in range(i1, i2):
+#             for jj in range(j1, j2):
+#                 if Z[ii, jj] > 0.0:
+#                     if smoothing:
+#                         D[ind] += k_weight * Z[ii, jj]  # smoother
+#                     else:
+#                         D[ind] += k_weight  # w/o smoothing
+#         if not smoothing:
+#             D[ind] *= Z[ind]  # w/o smoothing
+#
+#     return D
+#
+#
+# @nb.njit([f"i4[:, :](f4[:, :], {IND_ND(2)}, {IND_ND(2)}, UniTuple(f8, 2), f8, i8, b1)",
+#           f"i4[:, :](f8[:, :], {IND_ND(2)}, {IND_ND(2)}, UniTuple(f8, 2), f8, i8, b1)",
+#           f"i4[:, :](b1[:, :], {IND_ND(2)}, {IND_ND(2)}, UniTuple(f8, 2), f8, i8, b1)"],
+#          cache=True)
+# def _TopoClustering2D(Z, q, s, freq_octaves, prominence_thr, merge_rule, smoothing):
+#     """
+#     This is an adaptation of ToMATo algorithm [1].
+#
+#     Notes:
+#         1. This implementation adds additional criterion on size of clusters.
+#         2. Small clusters get merged into neighbouring clusters, otherwise removed, see 'merge_rule' below.
+#
+#     Arguments:
+#         Z : np.ndarray (Nf, Nt) : 2D array of density values.
+#         q : tuple[int, int] : neighbourhood distance for clustering `(q_f, q_t)`.
+#         s : tuple[int, int] : minimum cluster sizes `(s_f, s_t)`.
+#         freq_octaves : tuple[float, float] : equivalent to `s_f` and `q_f` (see above), but in log2 scale (octaves),
+#                        for frequency only, in the order: (cluster_size_f_octaves, cluster_distance_f_octaves).
+#                        By default, zeros and not used, but if non-zero, they replace `s_f` and `q_f` respectively.
+#         prominence_thr : float : threshold for cluster density prominence.
+#         merge_rule : int : Merging rule for small clusters:
+#                            0 - Kept as is, no rule applied, as long as they are prominent enough
+#                            1 - Delete small clusters,
+#                            2 - Merge to the closest prominent neighbouring cluster.
+#
+#     Reference: [1] Chazal, F., Guibas, L. J., Oudot, S. Y., & Skraba, P. (2013).
+#                Persistence-based clustering in Riemannian manifolds. Journal of the ACM (JACM), 60(6), 1-38.
+#     """
+#     Nf, Nt = shape = Z.shape
+#     freq_width_octaves, freq_distance_octaves = freq_octaves
+#
+#     C = np.zeros(shape, dtype=np.int64)  # cluster IDs
+#
+#     D = _topo_density_estimation(Z, q, smoothing)  # smoothed density map, takes into account connectivity
+#     q_f, q_t = q
+#     sort_inds = np.argsort(-D.ravel())  # decreasing order sorting, 1D flat index
+#
+#     clusters = {}  # to store cluster members
+#     prominences = {}  # to store cluster prominences
+#     neighbour_clusters = {-1: -1}  # to keep the largest neighbouring cluster to a cluster
+#     cluster_id = 1
+#     for flat_index in sort_inds:
+#         D_ij = D.flat[flat_index]
+#         if not D_ij > 0.0:
+#             continue  # skip null pixels
+#
+#         # 1. ---------- Find neighbours ----------
+#         ind = divmod(flat_index, Nt)
+#         i, j = ind
+#
+#         # define lookout window to search for neighbors
+#         if freq_distance_octaves > 0.0:  # log2 step for frequency
+#             i1 = min(i - 1, round(i * 2 ** (-freq_distance_octaves)))  # octave is power of 2
+#             i2 = max(i + 1, round(i * 2 ** freq_distance_octaves)) + 1  # octave is power of 2
+#         else:  # normal linear step
+#             i1, i2 = i - q_f, i + q_f + 1
+#
+#         i1, i2 = max(i1, 0), min(i2, Nf)
+#         j1, j2 = max(j - q_t, 0), min(j + q_t + 1, Nt)
+#
+#         neighbours = []
+#         for ii in range(i1, i2):
+#             for jj in range(j1, j2):
+#                 ind_kk = (ii, jj)
+#                 D_kk = D[ind_kk]
+#                 if (ind_kk != ind) and (D_kk > D_ij):
+#                     neighbours.append((D_kk, ind_kk))
+#
+#         # 2. ---------- Assign a cluster ----------
+#         # 2.1. ---------- Declare a new cluster (peak) ----------
+#         if len(neighbours) == 0:
+#             C[ind] = cluster_id  # assign cluster id, `+1` to avoid `0` id
+#             clusters[cluster_id] = {
+#                 ind: D_ij}  # add to the cluster list, NUMBA does not support List and Set as values (0.60.0)
+#             prominences[cluster_id] = (ind, D_ij, -np.inf)  # ID, birth, death
+#             cluster_id += 1
+#
+#         # 2.2. ---------- Assign to existing cluster (peak) ----------
+#         else:
+#             max_i = np.argmax(np.array([xi[0] for xi in neighbours]))
+#             D_j, ind_j = neighbours[max_i]  # max among the neighbours
+#
+#             C[ind] = cid_j = C[ind_j]  # assign ID of the highest cluster in the neighbourhood
+#             clusters[cid_j][ind] = D_ij  # add current point to the cluster 'j'
+#             D_rj = prominences[cid_j][1]  # root vertex height of local max gradient
+#
+#             # 2.3 ---------- Merge neighbouring clusters ----------
+#             for Z_k, ind_k in neighbours:
+#                 cid_k = C[ind_k]
+#                 D_rk = prominences[cid_k][1]  # current root vertex height
+#                 low_prominence = (min(D_rk, D_rj) - D_ij < prominence_thr)
+#
+#                 # This 'if' branch is for merging not prominent clusters
+#                 if ((cid_k != cid_j) and  # to avoid repeated merging 'k -> j'
+#                    low_prominence and  # prominence threshold
+#                    (clusters.get(cid_j, None) is not None)):  # to avoid repeated merging 'j -> k'
+#
+#                     cids = np.array([cid_j, cid_k])  # cluster IDs
+#                     roots = np.array([D_rj, D_rk])  # their root vertices, to compare
+#                     cids_sort = np.argsort(roots)  # sort, to find the most prominent cluster
+#
+#                     cid_d, cid_l = cids[cids_sort]  # to die, to live
+#
+#                     prominences[cid_d] = (prominences[cid_d][0],  # index
+#                                           prominences[cid_d][1],  # birth level
+#                                           D_ij)  # kill and update death
+#
+#                     clusters_d = clusters.pop(cid_d)  # clear dead cluster
+#                     clusters[cid_l].update(clusters_d)  # merge dead cluster with live cluster
+#
+#                     # update cluster mask after merging
+#                     for ind_d in clusters_d.keys():
+#                         C[ind_d] = cid_l  # update cluster IDs
+#
+#                 # This 'elif' branch is for remembering bigger neighbours of clusters
+#                 elif ((cid_k != cid_j) and  # if different cluster than 'j'
+#                       (not low_prominence) and  # if prominent
+#                       (merge_rule == 2)):  # if merging is needed
+#                     cids = np.array([cid_j, cid_k])  # cluster IDs
+#                     roots = np.array([D_rj, D_rk])  # their root vertices, to compare
+#                     cids_sort = np.argsort(roots)  # sort, to find the most prominent cluster
+#
+#                     cid_d, cid_l = cids[cids_sort]  # to die, to live (probably)
+#                     D_rd, D_rl = roots[cids_sort]  # root vertex of the dead cluster
+#
+#                     ind_d = prominences[cid_d][0]
+#                     ind_l = prominences[cid_l][0]
+#                     dist_new = np.sqrt((D_rd - D_rl) ** 2 +
+#                                        (ind_d[0] - ind_l[0]) ** 2 +
+#                                        (ind_d[1] - ind_l[1]) ** 2)
+#
+#                     neighb_cid = neighbour_clusters.get(cid_d, cid_d)
+#                     if cid_d == neighb_cid:
+#                         dist_old = np.inf
+#                     else:
+#                         dist_old = np.sqrt((D_rd - prominences[neighb_cid][1]) ** 2 +
+#                                            (ind_d[0] - prominences[neighb_cid][0][0]) ** 2 +
+#                                            (ind_d[1] - prominences[neighb_cid][0][1]) ** 2)
+#
+#                     if dist_new < dist_old:
+#                         neighbour_clusters[cid_d] = cid_l
+#
+#                     # there are two ways to merge
+#                     # 1. To a bigger neighbour
+#                     # if D_rj > neighbour_stats[1]:  # if neighbour is more prominent
+#                     #     neighbour_clusters[cid_k] = cid_j
+#
+#                     # 2. To a closest neighbour (by peak-to-peak distance)
+#
+#     # 3. ---------- Filter clusters by size and merge if needed ----------
+#     if merge_rule > 0:
+#         s_f, s_t = s
+#         proms, cluster_ids = [], []
+#         for cid in clusters.keys():
+#             birth, death = prominences[cid][1:]
+#             if death < 0:  # i.e. -np.inf, means that this cluster is alive by prominence
+#                 proms.append(birth)  # its root height
+#                 cluster_ids.append(cid)
+#         sort_ind = np.argsort(np.array(proms))
+#
+#         for ind in sort_ind:
+#             cid = cluster_ids[ind]
+#             cluster = clusters.get(cid, None)
+#             if cluster is None:
+#                 continue  # skip clusters already removed (should not happen)
+#
+#             # check size
+#             cluster_inds = list(cluster.keys())
+#             cl_ids = np.array(cluster_inds)
+#             f_max, f_min = cl_ids[:, 0].max(), cl_ids[:, 0].min()
+#             t_max, t_min = cl_ids[:, 1].max(), cl_ids[:, 1].min()
+#
+#             if freq_width_octaves > 0.0:
+#                 min_frequency_width = np.log2((f_max + 1) / (f_min + 1e-8)) >= freq_width_octaves  # log2 for octaves
+#             else:  # linear width
+#                 min_frequency_width = (f_max - f_min + 1 >= s_f)
+#
+#             # remove, merge, or keep
+#             if (not min_frequency_width) or (t_max - t_min + 1 < s_t):
+#                 cluster_cid = clusters.pop(cid)  # remove
+#
+#                 # Merging step (iteratively searches for the first alive closest neighbour via their links)
+#                 if merge_rule == 2:  # if merging is allowed
+#                     neighbour = neighbour_clusters.get(cid, 0)
+#                     neighbour_dead = clusters.get(neighbour, None) is None  # if neighbour still exists
+#                     neigh_cntr = 1  # counter to avoid infinite loops
+#                     while neighbour_dead and (neighbour > 0) and neigh_cntr < 50:
+#                         neighbour = neighbour_clusters.get(neighbour, 0)
+#                         neighbour_dead = clusters.get(neighbour, None) is None
+#                         neigh_cntr += 1
+#
+#                     if (not neighbour_dead) and (neighbour > 0):
+#                         clusters[neighbour].update(cluster_cid)  # merge
+#
+#     # 4. ---------- Assign new labels 1...K ----------
+#     C = np.zeros(shape, dtype=np.int32)
+#     for k, cluster in enumerate(clusters.values()):
+#         for ind in cluster.keys():
+#             C[ind] = k + 1
+#
+#     return C
