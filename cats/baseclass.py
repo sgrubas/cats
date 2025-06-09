@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 import obspy
 from typing import Tuple
 
+from .core.utils import replace_int_by_slice
 from .core.timefrequency import STFTOperator
 from .core.clustering import Clustering, ClusterCatalogs, concatenate_cluster_catalogs, index_cluster_catalog
 from .core.clustering import bbox_peaks, update_cluster_ID_by_catalog
@@ -23,14 +24,15 @@ from .core.utils import (get_interval_division, format_index_by_dimensions, cast
                          intervals_intersection_inds, aggregate_array_by_axis_and_func, make_default_index_if_outrange)
 from .core.utils import format_interval_by_limits, give_index_slice_by_limits, make_default_index_on_axis
 from .core.utils import format_index_by_dimensions_new, give_nonzero_limits, mat_structure_to_tight_dataframe_dict
-from .core.plottingutils import plot_traces, switch_plotting_backend
+from .core.plottingutils import plot_traces, switch_plotting_backend, detrend_func
 from .io.utils import convert_stream_to_dict, save_pickle, load_pickle
+from .core.phaseseparation import NewMapFromClusters, PhaseSeparator, event_id_recorder
 
 
 # ------------------------ BASE CLASSES ------------------------ #
 
 
-class CATSBase(BaseModel, extra='allow'):
+class CATSBase(BaseModel, extra='allow', arbitrary_types_allowed=True):
     """
         Base class for CATS based on STFT. Implements unpacking of the main parameters.
         Implements 4 main steps:
@@ -57,16 +59,25 @@ class CATSBase(BaseModel, extra='allow'):
     cluster_size_f_octaves: Union[float, None] = None
     cluster_distance_t_sec: Union[float, None] = None
     cluster_distance_f_Hz: Union[float, None] = None
-    aggr_clustering_axis: Union[int, Tuple[int], None] = None
+    cluster_distance_f_octaves: Union[float, None] = None
 
-    # mCATS
-    clustering_multitrace: bool = False
-    cluster_size_trace: int = Field(1, ge=1)
-    cluster_distance_trace: int = Field(1, ge=1)
+    # multi-component clustering
+    aggr_clustering_axis: Union[int, Tuple[int], None] = None
+    full_aggregated_mask: Union[bool, None] = False
 
     # main cluster catalog params
     cluster_catalogs_funcs: Union[List[Callable], None] = None
     cluster_feature_distributions: Union[List[str], None] = None
+    cluster_catalogs_opts: Union[dict, None] = None
+    cluster_catalogs_filter: Union[Callable, None] = None
+
+    # Phase separation
+    phase_separation: Union[PhaseSeparator, Callable, None] = None
+
+    # mCATS
+    clustering_multitrace: Union[bool, None] = False
+    cluster_size_trace: int = Field(1, ge=1)
+    cluster_distance_trace: int = Field(1, ge=1)
 
     # Extra STFT params
     freq_bandpass_Hz: Union[tuple[float, float], Any, None] = None
@@ -80,12 +91,6 @@ class CATSBase(BaseModel, extra='allow'):
     date_Q: float = 0.95
     date_Nmin_percentile: float = Field(0.25, gt=0.0, lt=0.5)
     date_original_mode: bool = False
-
-    # Extra clustering params
-    aggr_clustering_func: Union[str, None] = None
-    cluster_distance_f_octaves: Union[float, None] = None
-    cluster_catalogs_opts: Union[dict, None] = None
-    cluster_catalogs_filter: Union[Callable, None] = None
 
     # Misc
     name: str = "CATS"
@@ -130,7 +135,17 @@ Minimum separation frequency width between two different events.
                 cluster_distance_f_octaves : float : clustering distance in octaves (2^octaves). \
                 If not None, then it will be applied instead of `cluster_distance_f_Hz`. Default None.
 
+                aggr_clustering_axis : int or tuple[int] or None : axis to aggregate clustering mask by. Supposed
+                to be components of multi-component data (e.g. 3-C or receiver groups).
+
+                full_aggregated_mask : bool : whether to use the full aggregated mask (True) or only the trimmed
+                elements masked by aggregated mask (False). Default, False.
+
                 cluster_catalogs_opts : dict : options for calculating catalogs
+
+                cluster_catalogs_filter : callable : function to filter cluster catalogs
+
+                phase_separation : callable : function to separate phases in each event
 
                 freq_bandpass_Hz : tuple[float, float] : bandpass frequency range, in hertz, i.e. everything out of \
 the range is zero (e.g. (f_min, f_max)).
@@ -157,13 +172,11 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
                 stft_kwargs : dict : additional keyword arguments for STFT operator (see `cats.STFTOperator`).
 
-                reference_datetime : str : reference datetime is `datetime.datetime.isoformat`
-
                 name : str : name of the object
         """
         super().__init__(**kwargs)
+        self._init_params = kwargs  # this first because if `reset_params` raises error, the instance gets broken
         self._set_params()
-        self._init_params = kwargs
 
     def _set_params(self):
         # Setting STFT
@@ -181,6 +194,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.stft_nfft = self.STFT.nfft
         self.stft_hop_len = self.STFT.hop
         self.stft_hop_sec = self.stft_hop_len * self.dt_sec
+        self.tf_dt_sec = self.stft_hop_sec
 
         # DATE params
         self.stationary_frame_sec = v if (v := self.stationary_frame_sec) is not None else 0.0
@@ -193,8 +207,6 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                                           (self.stft_frequency[0], self.stft_frequency[-1]))
         self.freq_bandpass_Hz = (min(self.freq_bandpass_Hz), max(self.freq_bandpass_Hz))
         self.freq_bandwidth_Hz = self.freq_bandpass_Hz[1] - self.freq_bandpass_Hz[0]
-        assert (fbw := self.freq_bandwidth_Hz) > (csf := self.cluster_size_f_Hz), \
-            f"Frequency bandpass width `{fbw}` must be bigger than min frequency cluster size `{csf}`"
         self.freq_bandpass_slice = give_index_slice_by_limits(self.freq_bandpass_Hz, self.STFT.df)
 
         # Clustering params
@@ -211,6 +223,10 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.cluster_distance_f_len = max(round(self.cluster_distance_f_Hz / self.stft_df), 1)
         self.cluster_distance_trace_len = self.cluster_distance_trace
 
+        if self.cluster_size_f_octaves <= 0.0:
+            assert (fbw := self.freq_bandwidth_Hz) > (csf := self.cluster_size_f_Hz), \
+                f"Frequency bandpass width `{fbw}` must be bigger than min frequency cluster size `{csf}`"
+
         self.time_edge = int(self.stft_window_len // 2 / self.stft_hop_len)
 
         self.min_duration_len = max(self.cluster_size_t_len, 1)  # `-1` to include bounds (0, 1, 0)
@@ -219,8 +235,14 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.min_separation_sec = self.min_separation_len * self.stft_hop_sec
 
         # Catalog params
-        self.cluster_catalogs_funcs = self.cluster_catalogs_funcs or [bbox_peaks]
+        if self.cluster_catalogs_funcs is None:
+            self.cluster_catalogs_funcs = [event_id_recorder, bbox_peaks]
+        else:
+            self.cluster_catalogs_funcs = [event_id_recorder] + self.cluster_catalogs_funcs
+
         self.cluster_feature_distributions = (self.cluster_feature_distributions or ['spectrogram', 'spectrogram_SNR'])
+        self.cluster_feature_distributions = self.cluster_feature_distributions + ['spectrogram_event_ID']
+
         self.cluster_catalogs_opts = self.cluster_catalogs_opts or {}
 
         # BEDATE grouping
@@ -311,6 +333,28 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         result_container['spectrogram_cluster_ID'] = Clustering(result_container['spectrogram_trim_mask_aggr'],
                                                                 q=q, s=s, freq_octaves=freq_octaves)
+        result_container['spectrogram_event_ID'] = result_container['spectrogram_cluster_ID']
+
+    def apply_PhaseSeparation(self, result_container, /, tf_time, frequencies):
+
+        cluster_ID = result_container.get('spectrogram_cluster_ID', None)
+
+        d_name = self.phase_separation.on_distribution_name
+        self.phase_separation.set_dt_sec(self.tf_dt_sec)
+        distribution = result_container.get(d_name, None)
+        values_dict = {d_name: distribution}
+
+        if (cluster_ID is not None) and (distribution is not None):
+            Maps = NewMapFromClusters(values_dict=values_dict,
+                                      CID=cluster_ID,
+                                      freq=frequencies,
+                                      time=tf_time,
+                                      map_funcs=[self.phase_separation],
+                                      out_dtypes=[cluster_ID.dtype],
+                                      out_is_aggr=[True],
+                                      aggr_clustering_axis=self.aggr_clustering_axis)
+
+            result_container['spectrogram_cluster_ID'] = Maps[0]  # Phase IDs
 
     def apply_ClusterCatalogs(self, result_container, /, tf_time, frequencies):
         opts = self.cluster_catalogs_opts or {}
@@ -321,7 +365,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         cluster_ID = result_container.get('spectrogram_cluster_ID', None)
         update_cluster_ID = opts.pop('update_cluster_ID', False)
 
-        vals_keys = self.cluster_feature_distributions
+        vals_keys = self.cluster_feature_distributions + ['spectrogram_event_ID']
         assert isinstance(vals_keys, (list, tuple)) and len(vals_keys) > 0
 
         values_dict = {}
@@ -329,6 +373,9 @@ The fastest CPU version is 'ssqueezepy', which is default.
             val = result_container.get(name, None)  # take feature distribution from 'result_container'
             if val is not None:
                 values_dict[name] = val
+
+                if (not self.full_aggregated_mask) and (val.shape == result_container['spectrogram_trim_mask'].shape):
+                    values_dict[name] = val * result_container['spectrogram_trim_mask']
 
         if (cluster_ID is not None) and (len(values_dict) > 0):
 
@@ -363,17 +410,18 @@ The fastest CPU version is 'ssqueezepy', which is default.
                 "spectrogram_SNR",
                 "spectrogram_trim_mask",
                 "spectrogram_trim_mask_aggr",
+                "spectrogram_event_ID",
                 "spectrogram_cluster_ID",
                 "cluster_catalogs"]
 
     @classmethod
     def get_qc_keys(cls):
         return ["signal", "spectrogram", "spectrogram_trim_mask", "noise_std", "noise_threshold_conversion",
-                "spectrogram_cluster_ID", "cluster_catalogs"]
+                "spectrogram_event_ID", "spectrogram_cluster_ID", "cluster_catalogs"]
 
     @classmethod
     def get_cluster_catalog_keys(cls):
-        return ["spectrogram_cluster_ID"]
+        return ["spectrogram_event_ID", "spectrogram_cluster_ID"]
 
     @classmethod
     def get_default_keys(cls):
@@ -416,6 +464,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
         bedate_size = np.prod(np.float64(bedate_shape))  # float is to prevent `int` overflow to negatives
 
         cluster_sc = 2.0  # clustering requires < 2 copies of spectrogram (max estimate)
+        cluster_sc += 1.0  # for 'cluster ID' and 'event ID' copies
         if self.aggr_clustering_axis is not None:
             cluster_sc /= x.shape[self.aggr_clustering_axis]  # reduced by aggregation (if applied)
 
@@ -508,6 +557,7 @@ class CATSResult(BaseModel):
     spectrogram_SNR: Any = None
     spectrogram_trim_mask: Any = None
     spectrogram_trim_mask_aggr: Any = None
+    spectrogram_event_ID: Any = None
     spectrogram_cluster_ID: Any = None
     cluster_catalogs: Any = None
     dt_sec: float = None
@@ -554,6 +604,10 @@ class CATSResult(BaseModel):
              ind=None,
              time_interval_sec=None,
              SNR_spectrograms=True,
+             show_cluster_ID=False,
+             show_aggregated=False,
+             detrend_type='constant',
+             aggr_func=np.max,
              interactive=False,
              frequencies=None):
 
@@ -577,9 +631,18 @@ class CATSResult(BaseModel):
         aggr_ind = make_default_index_if_outrange(ind, self.spectrogram_cluster_ID.shape[:-2], default_ind_value=0)
         inds_tf_cid = aggr_ind + (slice(None), i_tf)
 
+        signal = self.signal[inds_time]
+        if detrend_type:
+            detrend_type = 'linear' if detrend_type == 'linear' else 'constant'
+            signal = detrend_func(signal, axis=-1, type=detrend_type)
+
         PSD = self.spectrogram[inds_tf]
+        SNR = self.spectrogram_SNR[inds_tf]
         T = self.spectrogram_trim_mask[inds_tf]
-        M = self.spectrogram_cluster_ID[inds_tf_cid] > 0
+        CID = self.spectrogram_cluster_ID[inds_tf_cid]
+        M = (CID > 0)
+        if not self.main_params.get('full_aggregated_mask', False):
+            M = M & T
 
         PSD_clims = give_nonzero_limits(PSD, initials=(1e-1, 1e1))
         PSD_vdim = hv.Dimension('Spectrogram')
@@ -587,39 +650,58 @@ class CATSResult(BaseModel):
         cluster_mask = r'\cdot \tilde\mathcal{A}(t,f)'
         label_func = lambda name, var, mask: f'{name} spectrogram: $' f'|{var}(t,f)| {mask}$'
 
+        # For aggregating
+        aggr_axis = self.main_params.get('aggr_clustering_axis')
+        aggr_ind2 = replace_int_by_slice(ind, aggr_axis) + (slice(None), i_tf)
+        Vals = self.spectrogram_SNR if SNR_spectrograms else self.spectrogram
+        Vals = Vals[aggr_ind2]
+        if show_aggregated and (aggr_axis is not None):
+            Vals = aggregate_array_by_axis_and_func(Vals, axis=0,  # aggr axis is 0 after indexing
+                                                    func=aggr_func, min_last_dims=2)
+        if Vals.ndim > 2:
+            Vals = Vals[ind[aggr_axis]] if Vals.shape[0] > 1 else Vals[0]  # if not aggr func was applied
+        C = Vals * M
+
         if SNR_spectrograms:
-            SNR = self.spectrogram_SNR[inds_tf] * T
-            C = SNR * M
+            TS = SNR * T
             label_trimmed = label_func('SNR', 'SNR', trim_mask)
             label_clustered = label_func('SNR', 'SNR', cluster_mask)
-            SNR_clims = give_nonzero_limits(SNR, initials=(1e-1, 1e1))
-            SNR_vdim = hv.Dimension('SNR')
+            TS_clims = give_nonzero_limits(C, initials=(1e-1, 1e1))
+            TS_vdim = hv.Dimension('SNR')
         else:
-            SNR = PSD * T
-            C = PSD * M
+            TS = PSD * T
             label_trimmed = label_func('', 'X', trim_mask)
             label_clustered = label_func('', 'X', cluster_mask)
-            SNR_clims = PSD_clims
-            SNR_vdim = PSD_vdim
+            TS_clims = PSD_clims
+            TS_vdim = PSD_vdim
 
         signal_opts = (hv.opts.Curve(xlabel='', backend='matplotlib'),
                        hv.opts.Curve(xlabel='', backend='bokeh'))
         PSD_opts = (hv.opts.QuadMesh(clim=PSD_clims, backend='matplotlib'),
                     hv.opts.QuadMesh(clim=PSD_clims, backend='bokeh'))
-        SNR_opts = (hv.opts.QuadMesh(clim=SNR_clims, backend='matplotlib'),
-                    hv.opts.QuadMesh(clim=SNR_clims, backend='bokeh'))
+        TS_opts = (hv.opts.QuadMesh(clim=TS_clims, backend='matplotlib'),
+                   hv.opts.QuadMesh(clim=TS_clims, backend='bokeh'))
+        CID_opts = (hv.opts.QuadMesh(clim=(1, None), backend='matplotlib'),
+                    hv.opts.QuadMesh(clim=(1, None), backend='bokeh'))
 
         time = self.time(time_interval_sec)
         tf_time = self.tf_time(time_interval_sec)
 
-        fig0 = hv.Curve((time, self.signal[inds_time]), kdims=[t_dim], vdims=a_dim,
+        fig0 = hv.Curve((time, signal), kdims=[t_dim], vdims=a_dim,
                         label='0. Input data: $x(t)$').opts(*signal_opts)
         fig1 = hv.QuadMesh((tf_time, frequencies, PSD), kdims=[t_dim, f_dim], vdims=PSD_vdim,
                            label='1. Amplitude spectrogram: $|X(t,f)|$').opts(*PSD_opts)
-        fig2 = hv.QuadMesh((tf_time, frequencies, SNR), kdims=[t_dim, f_dim], vdims=SNR_vdim,
-                           label=f'2. Trimmed {label_trimmed}').opts(*SNR_opts)
-        fig3 = hv.QuadMesh((tf_time, frequencies, C), kdims=[t_dim, f_dim], vdims=SNR_vdim,
-                           label=f'3. Clustered {label_clustered}').opts(*SNR_opts)
+        fig2 = hv.QuadMesh((tf_time, frequencies, TS), kdims=[t_dim, f_dim], vdims=TS_vdim,
+                           label=f'2. Trimmed {label_trimmed}').opts(*TS_opts)
+        fig3 = hv.QuadMesh((tf_time, frequencies, C), kdims=[t_dim, f_dim], vdims=TS_vdim,
+                           label=f'3. Clustered {label_clustered}').opts(*TS_opts)
+
+        if show_cluster_ID:
+            fig31 = [hv.QuadMesh((tf_time, frequencies, CID), kdims=[t_dim, f_dim],
+                                 vdims=hv.Dimension("Cluster ID"),
+                                 label=r'3.1. Cluster ID: $\tilde\mathcal{A}_{ID}(t,f)$').opts(*CID_opts)]
+        else:
+            fig31 = []
 
         cluster_catalogs = getattr(self, 'cluster_catalogs', None)
         catalog = index_cluster_catalog(cluster_catalogs, aggr_ind).copy() if (cluster_catalogs is not None) else None
@@ -627,7 +709,7 @@ class CATSResult(BaseModel):
         fmin = frequencies[frequencies != 0].min()  # to handle 0 freq with Log axis
 
         if interactive and (catalog is not None):
-            vdims = list(catalog.columns)[:21]  # before 'F1' & 'F2 (important before!), first 27 features
+            vdims = list(catalog.columns)[:21]  # before 'F1' & 'F2' (important before!), first 27 features
             # remove zeros for proper visualization of Frequency in Log scale
             f_unit = 'Hz' if "Frequency_start_Hz" in catalog.columns else 'octave'
             f_conversion = lambda x: (x or fmin) if f_unit == 'Hz' else 2**x
@@ -656,7 +738,10 @@ class CATSResult(BaseModel):
         xlim = time_interval_sec
         ylim = (fmin, None)
         layout_title = str(self.stats[ind].starttime) if (self.stats is not None) else ''
-        cylim = (1.1 * np.min(fig0.data[a_dim.name]), 1.1 * np.max(fig0.data[a_dim.name]))
+        # cymin = np.nanmin(fig0.data[a_dim.name])
+        # cymax = np.nanmax(fig0.data[a_dim.name])
+        # cylim = (cymin - abs(cymin) * 0.1, cymax + abs(cymax) * 0.1)
+        cylim = (None, None)
 
         # bokeh params
         width = int(figsize * 0.9 * aspect * 0.8)
@@ -667,9 +752,9 @@ class CATSResult(BaseModel):
         backend = 'matplotlib'
         mpl_curve_opts = hv.opts.Curve(aspect=aspect, fig_size=figsize, fontsize=fontsize, xlim=xlim, ylim=cylim,
                                        show_frame=True, backend=backend)
-        mpl_spectr_opts = hv.opts.QuadMesh(cmap=cmap, colorbar=True,  logy=True, norm='log', xlim=xlim, ylim=ylim,
+        mpl_spectr_opts = hv.opts.QuadMesh(cmap=cmap, colorbar=True, logy=True, norm='log', xlim=xlim, ylim=ylim,
                                            xlabel='', clabel='', aspect=2, fig_size=figsize, fontsize=fontsize,
-                                           cbar_width=0.02, backend=backend)
+                                           clipping_colors={'min': 'transparent'}, cbar_width=0.02, backend=backend)
         mpl_layout_opts = hv.opts.Layout(fig_size=figsize, shared_axes=True, vspace=0.35, title=layout_title,
                                          aspect_weight=0, sublabel_format='', backend=backend)
 
@@ -687,12 +772,62 @@ class CATSResult(BaseModel):
         opts = (mpl_curve_opts, bkh_curve_opts,
                 mpl_spectr_opts, bkh_spectr_opts,
                 mpl_layout_opts, bkh_layout_opts)
-        figs = hv.Layout([fig0, fig1, fig2, fig3]).opts(*opts)
+        figs = [fig0, fig1, fig2, fig3] + fig31
+        figs = hv.Layout(figs).opts(*opts)
+        if fig31:
+            fig31 = figs[-1].opts(hv.opts.QuadMesh(norm=None, backend='matplotlib'),
+                                  hv.opts.QuadMesh(logz=False, backend='bokeh'))
         output = (figs, opts, inds_slices, time_interval_sec)
 
         switch_plotting_backend(interactive, fig_mpl='png', fig_bokeh='auto')  # switch MPL or BKH
 
         return output
+
+    def plot_multi(self,
+                   inds,
+                   share_time_labels=True,
+                   share_vertical_axes=True,
+                   share_spectrogram_cmaps=True,
+                   hspace=None,
+                   vspace=None,
+                   **kwargs):
+
+        figs = [self.plot(ind, **kwargs) for ind in inds]
+        nrows = len(figs[0])
+        ncols = len(figs)
+
+        if share_time_labels:
+            for i, figs_i in enumerate(zip(*figs)):
+                if i < nrows - 1:
+                    for fi in figs_i:
+                        fi = fi.opts(xaxis='bare')
+
+        if share_vertical_axes:
+            for i, fig_i in enumerate(figs):
+                if i > 0:
+                    fig_i = fig_i.opts(hv.opts.QuadMesh(yaxis='bare'),
+                                       hv.opts.Curve(yaxis='bare'))
+        if share_spectrogram_cmaps:
+            for i, figs_i in enumerate(zip(*figs)):
+                if (0 < i < nrows - 1):
+                    clims = [fi.opts.get().kwargs['clim'] for fi in figs_i]
+                    if all([(cl is not None) for i, cl in np.ndenumerate(clims)]):
+                        clim = (np.min(clims), np.max(clims))
+                        for fi in figs_i:
+                            fi = fi.opts(clim=clim)
+
+            for i, fig_i in enumerate(figs):
+                if i < ncols - 1:
+                    fig_i = fig_i.opts(hv.opts.QuadMesh(colorbar=False))
+
+        fig = hv.Layout(figs).cols(nrows).opts(**figs[0].opts.get().kwargs)
+
+        vspace = vspace or 0.05 + 0.02 * (not share_time_labels)
+        hspace = hspace or 0.025 + 0.1 * sum([not share_vertical_axes, not share_spectrogram_cmaps])
+
+        fig = fig.opts(shared_axes=share_vertical_axes, vspace=vspace, hspace=hspace, transpose=True)
+
+        return fig
 
     def get_intervals_picks(self, ind, catalog_intervals, catalog_picks):
 
@@ -775,6 +910,7 @@ class CATSResult(BaseModel):
                     station_loc: np.ndarray = None,
                     gain: int = 1,
                     clip: bool = False,
+                    detrend_type: str = 'constant',
                     each_station: int = 1,
                     amplitude_scale: float = None,
                     per_station_scale: bool = False,
@@ -799,11 +935,23 @@ class CATSResult(BaseModel):
         detected_intervals = detected_intervals if intervals else None
         picked_onsets = picked_onsets if picks else None
 
-        fig = plot_traces(traces, self.time(time_interval_sec), intervals=detected_intervals, picks=picked_onsets,
-                          station_loc=station_loc, time_interval_sec=time_interval_sec, gain=gain,
-                          amplitude_scale=amplitude_scale, per_station_scale=per_station_scale, clip=clip,
-                          each_station=each_station, component_labels=component_labels, station_labels=station_labels,
-                          interactive=interactive, allow_picking=allow_picking, **kwargs)
+        fig = plot_traces(traces,
+                          self.time(time_interval_sec),
+                          intervals=detected_intervals,
+                          picks=picked_onsets,
+                          station_loc=station_loc,
+                          time_interval_sec=time_interval_sec,
+                          gain=gain,
+                          detrend_type=detrend_type,
+                          amplitude_scale=amplitude_scale,
+                          per_station_scale=per_station_scale,
+                          clip=clip,
+                          each_station=each_station,
+                          interactive=interactive,
+                          allow_picking=allow_picking,
+                          component_labels=component_labels,
+                          station_labels=station_labels,
+                          **kwargs)
 
         stats = self.stats[ind] if (self.stats is not None) else None
         stats = stats.flat[0] if isinstance(stats, np.ndarray) else stats
@@ -883,6 +1031,7 @@ class CATSResult(BaseModel):
                 "spectrogram_SNR",
                 "spectrogram_trim_mask",
                 "spectrogram_trim_mask_aggr",
+                "spectrogram_event_ID",
                 "spectrogram_cluster_ID",
                 "signal_denoised",
                 "time_frames"]
@@ -892,14 +1041,15 @@ class CATSResult(BaseModel):
         return [self._update_cluster_id, self._update_time_frames]
 
     def _update_cluster_id(self, other):
-        attr = "spectrogram_cluster_ID"
-        self_attr = getattr(self, attr, None)
-        other_attr = getattr(other, attr, None)
-        if (self_attr is not None) and (other_attr is not None):
-            shape = other_attr.shape[:-2]
-            for ind in np.ndindex(shape):
-                other_attr[ind][other_attr[ind] > 0] += self_attr[ind].max()
-            setattr(other, attr, other_attr)  # other's IDs will be updated
+        attrs = ["spectrogram_event_ID", "spectrogram_cluster_ID"]
+        for attr in attrs:
+            self_attr = getattr(self, attr, None)
+            other_attr = getattr(other, attr, None)
+            if (self_attr is not None) and (other_attr is not None):
+                shape = other_attr.shape[:-2]
+                for ind in np.ndindex(shape):
+                    other_attr[ind][other_attr[ind] > 0] += self_attr[ind].max()
+                setattr(other, attr, other_attr)  # other's IDs will be updated
 
     def _update_time_frames(self, other):
         attr = "time_frames"
