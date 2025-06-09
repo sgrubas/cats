@@ -16,9 +16,10 @@ from cats.core.utils import (get_interval_division, cast_to_bool_dict, del_vals_
 from cats.core.utils import format_interval_by_limits, give_index_slice_by_limits
 from cats.io.utils import load_pickle, save_pickle
 from cats.io import convert_stream_to_dict
+from .core.phaseseparation import NewMapFromClusters, PhaseSeparator, event_id_recorder
 
 
-class CATSDenoiserCWT(BaseModel, extra='allow'):
+class CATSDenoiserCWT(BaseModel, extra='allow', arbitrary_types_allowed=True):
     """
         CATS denoising operator which implements:
             1) CWT transform
@@ -45,7 +46,9 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
     cluster_distance_scale_octaves: float = None
 
     # Extra CWT params
-    bandpass_scale_octaves: Union[tuple[float, float], Any] = None
+    bandpass_scale_octaves: Union[tuple[float, float], Any, None] = None
+    freq_bandpass_Hz: Union[tuple[float, float], Any, None] = None
+    define_scales_by_bandpass: bool = True
 
     # Extra B-E-DATE params
     bedate_scale_grouping_octaves: float = None
@@ -64,7 +67,10 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
     cluster_distance_trace: int = Field(1, ge=1)
 
     aggr_clustering_axis: Union[int, Tuple[int], None] = None
-    aggr_clustering_func: Union[str, None] = None
+    full_aggregated_mask: Union[bool, None] = False
+
+    # Phase separation
+    phase_separation: Union[PhaseSeparator, Callable, None] = None
 
     # Misc
     name: str = "CATSDenoiserCWT"
@@ -96,11 +102,12 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
                 name: int : name of the denoiser
         """
         super().__init__(**kwargs)
-        self._set_params()
         self._init_params = kwargs
+        self._set_params()
 
     def _set_params(self):
         self.cwt_kwargs = self.cwt_kwargs or {}
+        self.tf_dt_sec = self.dt_sec
 
         # Setting CWT operator
         self.CWT = CWTOperator(dt_sec=self.dt_sec, wavelet=self.wavelet_type, scales=self.scales_type,
@@ -110,14 +117,6 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         self.stationary_frame_sec = v if (v := self.stationary_frame_sec) is not None else 0.0
         self.stationary_frame_len = max(round(self.stationary_frame_sec / self.dt_sec), get_min_bedate_block_size())
         self.stationary_frame_sec = self.stationary_frame_len * self.dt_sec
-
-        # Bandpass by zeroing
-        self.bandpass_scale_octaves = format_interval_by_limits(self.bandpass_scale_octaves, (0, None))
-        if (self.bandpass_scale_octaves[0] is not None) and (self.bandpass_scale_octaves[1] is not None):
-            bandwidth = self.bandpass_scale_octaves[1] - self.bandpass_scale_octaves[0]
-            assert bandwidth > (css := self.cluster_size_scale_octaves), \
-                f"Scale bandwidth `{bandwidth}` must be bigger than min scale cluster size `{css}`"
-        self.bandpass_scale_slice = give_index_slice_by_limits(self.bandpass_scale_octaves, 1 / self.nvoices)
 
         # Clustering params
         self.cluster_size_t_len = max(round(self.cluster_size_t_sec / self.dt_sec), 1)
@@ -130,6 +129,13 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         self.cluster_distance_scale_len = max(round(self.cluster_distance_scale_octaves * self.nvoices), 1)
         self.cluster_distance_trace_len = self.cluster_distance_trace
 
+        # Bandpass by zeroing
+        self.bandpass_scale_octaves = format_interval_by_limits(self.bandpass_scale_octaves, (0, None))
+        if (self.bandpass_scale_octaves[0] is not None) and (self.bandpass_scale_octaves[1] is not None):
+            bandwidth = self.bandpass_scale_octaves[1] - self.bandpass_scale_octaves[0]
+            assert bandwidth > (css := self.cluster_size_scale_octaves), \
+                f"Scale bandwidth `{bandwidth}` must be bigger than min scale cluster size `{css}`"
+
         self.time_edge = 2
 
         self.min_duration_len = max(self.cluster_size_t_len, 1)  # `-1` to include bounds (0, 1, 0)
@@ -138,9 +144,14 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         self.min_separation_sec = self.min_separation_len * self.dt_sec
 
         # Catalog params
-        self.cluster_catalogs_funcs = self.cluster_catalogs_funcs or [bbox_peaks]
+        if self.cluster_catalogs_funcs is None:
+            self.cluster_catalogs_funcs = [event_id_recorder, bbox_peaks]
+        else:
+            self.cluster_catalogs_funcs = [event_id_recorder] + self.cluster_catalogs_funcs
+
         self.cluster_feature_distributions = (self.cluster_feature_distributions or
                                               ['spectrogram', 'spectrogram_SNR'])
+        self.cluster_feature_distributions = self.cluster_feature_distributions + ['spectrogram_event_ID']
         self.cluster_catalogs_opts = self.cluster_catalogs_opts or {}
 
         # Grouping scales for BEDATE
@@ -189,11 +200,35 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         return cls(**CATSDenoiserCWTResult.main_params)
 
     def apply_CWT(self, result_container, /):
+        N = result_container['signal'].shape[-1]
+        scales = self.CWT.get_scales(N)
+        freqs = self.CWT.get_freqs_from_scales(scales, N)
+
+        # Update bandpass if given in Hz
+        if self.freq_bandpass_Hz is not None:
+            freq_bandpass_Hz = format_interval_by_limits(self.freq_bandpass_Hz, (min(freqs), max(freqs)))
+            freq_bandpass_Hz = (min(freq_bandpass_Hz), max(freq_bandpass_Hz))
+            self.bandpass_scale_octaves = np.sort(self.CWT.get_scales_from_freqs(freq_bandpass_Hz, N))
+        else:
+            self.bandpass_scale_octaves = (self.bandpass_scale_octaves[0] or 0,
+                                           self.bandpass_scale_octaves[-1] or scales[-1])
+
+        bandpass_scale_slice = slice(abs(self.bandpass_scale_octaves[0] - scales).argmin(),
+                                     abs(self.bandpass_scale_octaves[1] - scales).argmin() + 1,
+                                     None)
+
+        if self.define_scales_by_bandpass:
+            scales = scales[bandpass_scale_slice]
+            self.CWT.reset_params(scales=scales)  # calculate CWT for bandpass scales only
+            self.bandpass_scale_slice = slice(None)  # for BEDATE, no bandpass
+        else:
+            self.bandpass_scale_slice = bandpass_scale_slice
+
+        result_container['scales'] = scales
+        result_container['frequencies'] = self.CWT.get_freqs_from_scales(scales, N)
+
         result_container['coefficients'] = self.CWT * result_container['signal']
         result_container['spectrogram'] = np.abs(result_container['coefficients'])
-        N = result_container['signal'].shape[-1]
-        result_container['scales'] = self.CWT.get_scales(N)
-        result_container['frequencies'] = self.CWT.get_frequencies(N)
 
     def apply_BEDATE(self, result_container, /):
 
@@ -209,17 +244,17 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         dim = 1 + np.iscomplexobj(result_container["coefficients"])  # checks if coefs are complex for dims
 
         SNR, T, STD, THR = BEDATE_trimming(result_container['spectrogram'],
-                                      scales_groups_indexes, self.bandpass_scale_slice,
-                                      result_container['time_frames'], self.minSNR, self.time_edge,
-                                      Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
-                                      original_mode=self.date_original_mode, fft_base=False, dim=dim)
+                                           scales_groups_indexes, self.bandpass_scale_slice,
+                                           result_container['time_frames'], self.minSNR, self.time_edge,
+                                           Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
+                                           original_mode=self.date_original_mode, fft_base=False, dim=dim)
 
         result_container['spectrogram_SNR'] = SNR
         result_container['spectrogram_trim_mask'] = T
         result_container['noise_std'] = STD
         result_container['noise_threshold_conversion'] = THR
 
-        # Aggregate trimmed spectrogram over `aggr_clustering_axis` by `aggr_clustering_func`
+        # Aggregate trimmed spectrogram over `aggr_clustering_axis`
         # Maybe useful if multi-component data are used (3-C or receiver groups)
         result_container['spectrogram_trim_mask_aggr'] = aggregate_array_by_axis_and_func(T,
                                                                                           self.aggr_clustering_axis,
@@ -233,6 +268,32 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
 
         result_container['spectrogram_cluster_ID'] = Clustering(result_container['spectrogram_trim_mask_aggr'],
                                                                 q=q, s=s, freq_octaves=log_freq_cluster)
+        result_container['spectrogram_event_ID'] = result_container['spectrogram_cluster_ID']
+
+    def apply_PhaseSeparation(self, result_container, /):
+
+        cluster_ID = result_container.get('spectrogram_cluster_ID', None)
+
+        d_name = self.phase_separation.on_distribution_name
+        self.phase_separation.set_dt_sec(self.tf_dt_sec)
+        distribution = result_container.get(d_name, None)
+        values_dict = {d_name: distribution}
+
+        if (cluster_ID is not None) and (distribution is not None):
+
+            tf_time = np.arange(cluster_ID.shape[-1]) * self.dt_sec
+            frequencies = result_container['frequencies']
+
+            Maps = NewMapFromClusters(values_dict=values_dict,
+                                      CID=cluster_ID,
+                                      freq=frequencies,
+                                      time=tf_time,
+                                      map_funcs=[self.phase_separation],
+                                      out_dtypes=[cluster_ID.dtype],
+                                      out_is_aggr=[True],
+                                      aggr_clustering_axis=self.aggr_clustering_axis)
+
+            result_container['spectrogram_cluster_ID'] = Maps[0]  # Phase IDs
 
     def apply_ClusterCatalogs(self, result_container, /):
         opts = self.cluster_catalogs_opts or {}
@@ -252,6 +313,9 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
             val = result_container.get(name, None)  # take feature distribution from 'result_container'
             if val is not None:
                 values_dict[name] = val
+
+                if (not self.full_aggregated_mask) and (val.shape == result_container['spectrogram_trim_mask'].shape):
+                    values_dict[name] = val * result_container['spectrogram_trim_mask']
 
         if (cluster_ID is not None) and (len(values_dict) > 0):
             tf_time = np.arange(cluster_ID.shape[-1]) * self.dt_sec
@@ -275,7 +339,11 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
 
     def apply_ICWT(self, result_container, /):
         weights = result_container['spectrogram_cluster_ID'] > 0
-        if self.background_weight:
+
+        if not self.full_aggregated_mask:
+            weights = weights * result_container['spectrogram_trim_mask']
+
+        if (self.background_weight is not None) and (self.background_weight > 0.0):
             weights = np.where(weights, 1.0, self.background_weight)
 
         weighted_coefficients = result_container['coefficients'] * weights
@@ -303,12 +371,18 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         # B-E-DATE
         self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
                         process_name='B-E-DATE trimming')
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR', 'spectrogram_trim_mask', 'noise_std',
-                                             'noise_threshold_conversion'])
+        del_vals_by_keys(result, full_info, ['spectrogram_SNR', 'noise_std', 'noise_threshold_conversion'] +
+                         ['spectrogram_trim_mask'] * self.full_aggregated_mask
+                         )
 
         # Clustering
         self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
                         process_name='Clustering')
+
+        # Phase separation
+        if self.phase_separation is not None:
+            self.apply_func(func_name='apply_PhaseSeparation', result_container=result, status_keeper=history,
+                            process_name='Phase separation')
 
         # Cluster catalog
         self.cluster_catalogs_opts.setdefault('update_cluster_ID', True)
@@ -321,7 +395,7 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         self.apply_func(func_name='apply_ICWT', result_container=result, status_keeper=history,
                         process_name='Inverse CWT')
 
-        del_vals_by_keys(result, full_info, ['coefficients', 'spectrogram_cluster_ID'])
+        del_vals_by_keys(result, full_info, ['spectrogram_trim_mask', 'coefficients', 'spectrogram_cluster_ID'])
 
         history.print_total_time()
 
@@ -392,6 +466,7 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
                 "spectrogram_SNR",
                 "spectrogram_trim_mask",
                 "spectrogram_trim_mask_aggr",
+                "spectrogram_event_ID",
                 "spectrogram_cluster_ID",
                 "cluster_catalogs",
                 "scales",
@@ -405,13 +480,13 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
 
     @classmethod
     def get_qc_keys(cls):
-        return ["signal", "spectrogram", "spectrogram_trim_mask", "spectrogram_cluster_ID",
+        return ["signal", "spectrogram", "spectrogram_trim_mask", "spectrogram_event_ID", "spectrogram_cluster_ID",
                 "noise_std", "noise_threshold_conversion", "cluster_catalogs",
                 "signal_denoised", "scales", "frequencies"]
 
     @classmethod
     def get_cluster_catalog_keys(cls):
-        return ["spectrogram", "spectrogram_cluster_ID"]
+        return ["spectrogram", "spectrogram_event_ID", "spectrogram_cluster_ID"]
 
     def parse_info_dict(self, full_info):
 
@@ -451,6 +526,7 @@ class CATSDenoiserCWT(BaseModel, extra='allow'):
         bedate_size = np.prod(np.float64(bedate_shape))
 
         cluster_sc = 2.0  # clustering requires < 2 copies of spectrogram (max estimate)
+        cluster_sc += 1.0  # for "event_ID" copy
         if self.aggr_clustering_axis is not None:
             cluster_sc /= x.shape[self.aggr_clustering_axis]  # reduced by aggregation (if applied)
 
@@ -551,16 +627,24 @@ class CATSDenoisingCWTResult(CATSDenoisingResult):
              ind: Tuple[int] = None,
              time_interval_sec: Tuple[float] = None,
              SNR_spectrograms: bool = False,
-             show_frequency=True,
+             show_cluster_ID: bool = False,
+             show_aggregated: bool = False,
+             detrend_type: str = 'constant',
+             show_frequency: bool = True,
              weighted_coefficients: bool = False,
              intervals: bool = False,
              picks: bool = False,
              interactive: bool = False,
+             aggr_func: callable = np.max,
              ):
         freqs = self.frequencies if show_frequency else self.scales
         plot_output = super(CATSDenoisingResult, self).plot(ind=ind,
                                                             time_interval_sec=time_interval_sec,
                                                             SNR_spectrograms=SNR_spectrograms,
+                                                            show_cluster_ID=show_cluster_ID,
+                                                            show_aggregated=show_aggregated,
+                                                            detrend_type=detrend_type,
+                                                            aggr_func=aggr_func,
                                                             interactive=interactive,
                                                             frequencies=freqs)
         fig, opts, inds_slices, time_interval_sec = plot_output
@@ -577,4 +661,9 @@ class CATSDenoisingCWTResult(CATSDenoisingResult):
             mpl_opts_spects = hv.opts.QuadMesh(invert_yaxis=True, backend='matplotlib')  # for scales
             bkh_opts_spects = hv.opts.QuadMesh(invert_yaxis=True, backend='bokeh')  # for scales
             fig = fig.opts(mpl_opts_spects, bkh_opts_spects).redim(Frequency=hv.Dimension("Scale"))
+
+        if show_cluster_ID:
+            ind = -2 - weighted_coefficients
+            fig31 = fig[ind].opts(hv.opts.QuadMesh(norm=None, backend='matplotlib'),
+                                  hv.opts.QuadMesh(logz=False, backend='bokeh'))
         return fig
