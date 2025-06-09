@@ -3,7 +3,33 @@ import holoviews as hv
 from holoviews.plotting.links import DataLink
 from typing import Union
 from .utils import format_interval_by_limits, give_index_slice_by_limits, give_rectangles, intervals_intersection
+from scipy.signal import detrend as detrend_func
 hv.extension('matplotlib', 'bokeh')
+
+
+def scale_funcs(x, spec, per_station_scale=False):
+    funcs = {'median': np.nanmedian,
+             'mean': np.nanmean,
+             'max': np.nanmax,
+             'min': np.nanmin}
+
+    func_names = spec.split('_')
+
+    if len(func_names) == 1:
+        func1 = funcs[func_names[0]]
+        axes = (0, 2) if x.ndim == 3 else (1,)
+        axes = axes if per_station_scale else None
+        return func1(x, axis=axes, keepdims=True)
+
+    elif len(func_names) == 2:
+        func1 = funcs[func_names[0]]
+        func2 = funcs[func_names[1]]
+        x2 = func2(x, axis=-1, keepdims=True)
+        x1 = func1(x2, axis=0 if per_station_scale else None, keepdims=True)
+        return x1
+
+    else:
+        raise ValueError(f"Invalid scale function: {spec}, max 2 is allowed")
 
 
 def plot_traces(data: np.ndarray,
@@ -13,9 +39,12 @@ def plot_traces(data: np.ndarray,
                 station_loc: Union[float, np.ndarray] = None,
                 time_interval_sec: tuple[float, float] = None,
                 gain: float = 1,
+                detrend_type: str = 'constant',
                 amplitude_scale: Union[float, np.ndarray] = None,
                 per_station_scale: bool = False,
+                scale_func: str = 'mean_max',
                 clip: bool = False,
+                clip_height: float = 0.95,
                 each_station: int = 1,
                 interactive: bool = False,
                 allow_picking: bool = False,
@@ -47,6 +76,10 @@ def plot_traces(data: np.ndarray,
     loc_slice = station_loc[i_trace]
     time_slice = time[i_t]
 
+    if detrend_type:
+        detrend_type = 'linear' if detrend_type == 'linear' else 'constant'
+        data_slice = detrend_func(data_slice, axis=-1, type=detrend_type)
+
     num_stations = data_slice.shape[-2]
     multi_comp = data_slice.ndim == 3
     num_comp = data_slice.shape[0] if multi_comp else 1
@@ -57,22 +90,24 @@ def plot_traces(data: np.ndarray,
     scale = gain * dloc
 
     if not per_station_scale:
-        amax = amplitude_scale or np.nanmedian(np.nanmax(abs(data_slice), axis=-1))
-        amax = amax or 1.0
+        # amax = amplitude_scale or np.nanmedian(np.nanmax(abs(data_slice), axis=-1))
+        amax = amplitude_scale or scale_funcs(abs(data_slice), scale_func, per_station_scale=per_station_scale)
+        amax = np.where(amax != 0, amax, 1.0)  # remove zero divisor
     else:
         if amplitude_scale is not None:
             amax = np.expand_dims(amplitude_scale, axis=-1)
             amax = amax if not multi_comp else np.expand_dims(amax, axis=0)
         else:
-            amax = np.nanmax(abs(data_slice), axis=-1, keepdims=True)  # per station
-            amax = amax if not multi_comp else np.nanmedian(amax, axis=0, keepdims=True)  # per component
+            # amax = np.nanmax(abs(data_slice), axis=-1, keepdims=True)  # per station
+            # amax = amax if not multi_comp else np.nanmedian(amax, axis=0, keepdims=True)  # per component
+            amax = scale_funcs(abs(data_slice), scale_func, per_station_scale=per_station_scale)
             amax = np.where(amax != 0, amax, 1.0)  # remove zero divisor
 
     data_slice = (data_slice / amax * scale)
+    clip_level = dloc / 2 * clip_height  # clip level, divided by 2 (1 for UP and 1 for DOWN)
     if clip:
-        level = dloc / 2.1
-        data_slice[-level > data_slice] = -level
-        data_slice[level < data_slice] = level
+        data_slice[-clip_level > data_slice] = -clip_level
+        data_slice[clip_level < data_slice] = clip_level
 
     # ---- Labels ---- #
 
@@ -94,7 +129,8 @@ def plot_traces(data: np.ndarray,
             j_ind = cj if num_comp > 1 else Ellipsis  # ellipsis is for absent component axis
             trace_curve = data_slice[j_ind, i, :] + loc_slice[i]
             traces.append(hv.Curve((time_slice, trace_curve),
-                                   kdims=[t_dim], vdims=[trace_dim], label=component_labels[cj]))
+                                   kdims=[t_dim], vdims=[trace_dim],
+                                   label=component_labels[cj] if num_comp > 1 else ''))
     traces = hv.Overlay(traces)
 
     #  Events intervals
@@ -114,7 +150,7 @@ def plot_traces(data: np.ndarray,
                 sliced_intervals.append(intervals_intersection(intv_i, reference_interval=(t1, t2)))
                 intv_locy.append(loc_slice[ind[-1]])
 
-        rectangles = give_rectangles(sliced_intervals, intv_locy, scale / gain / 2.2)
+        rectangles = give_rectangles(sliced_intervals, intv_locy, clip_level)
         rects.append(hv.Rectangles(rectangles, kdims=[t_dim, trace_dim, 'x2', 'y2'],
                                    label="Intervals" * interactive))
     rects = hv.Overlay(rects)
@@ -153,7 +189,7 @@ def plot_traces(data: np.ndarray,
     # ---- Parameters and options ---- #
     ylims = (np.nanmin(station_loc) - dloc, np.nanmax(station_loc) + dloc)
     aspect = 2
-    trace_color = kwargs.get('color', 'black') if num_comp == 1 else hv.Cycle(['red', 'blue', 'green'])
+    trace_color = kwargs.get('color', 'black') if num_comp == 1 else hv.Cycle(['red', 'blue', 'green'][:num_comp])
     linewidth = kwargs.get('linewidth', 1)
     figsize = kwargs.get('fig_size', 400)
     alpha = kwargs.get('alpha', 0.15)
@@ -186,6 +222,7 @@ def plot_traces(data: np.ndarray,
                                      show_legend=True, tools=tools, hover_tooltips=hover_tooltips, backend=backend)
     # bkh_picks_opts = hv.opts.Curve(line_width=2, tools=tools, hover_tooltips=hover_tooltips, backend=backend)
     bkh_overlay_opts = hv.opts.Overlay(ylim=ylims, xlim=time_interval_sec, fontsize=fontsize, width=width,
+                                       legend_position='top_right',
                                        height=height, legend_opts={"click_policy": "hide"}, yticks=station_labels,
                                        backend=backend)
 
