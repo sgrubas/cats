@@ -345,14 +345,22 @@ class DeepPicker(DeepModel):
         t0_offset = (annotated[0].stats.starttime - x_stream[0].stats.starttime)  # time offset
 
         with history("Getting picks"):
-            Lp, Ls, picks = self.get_picks(annotated, verbose)
+            Lp, Ls, P_picks, S_picks = self.get_picks(annotated, verbose)
+
+            picks = np.stack([P_picks, S_picks], axis=-1)
             picks = (picks * new_dt_sec + t0_offset) / self.scale
+            P_picks = picks[..., 0]
+            S_picks = picks[..., 1]
 
         history.print_total_time()
 
         return DeepPickerResult(dt_sec=new_dt_sec,
+                                threshold_P=self.threshold_P,
+                                threshold_S=self.threshold_S,
                                 likelihood_P=Lp,
                                 likelihood_S=Ls,
+                                P_picks=np.expand_dims(P_picks, self.comp_axis),
+                                S_picks=np.expand_dims(S_picks, self.comp_axis),
                                 t0_offset=t0_offset,
                                 picks=np.expand_dims(picks, self.comp_axis),
                                 history=history)
@@ -370,14 +378,17 @@ class DeepPicker(DeepModel):
         P_picks = np.argmax(likelihood_P, axis=-1) if np.count_nonzero(likelihood_P) > 0 else np.nan
         S_picks = np.argmax(likelihood_S, axis=-1) if np.count_nonzero(likelihood_S) > 0 else np.nan
 
-        picks = np.stack([P_picks, S_picks], axis=-1)
-        return likelihood_P, likelihood_S, picks
+        return likelihood_P, likelihood_S, P_picks, S_picks
 
 
 class DeepPickerResult(DeepModelResult):
     t0_offset: float
+    threshold_P: float
+    threshold_S: float
     likelihood_P: Any
     likelihood_S: Any
+    P_picks: Any
+    S_picks: Any
     picks: Any
 
 
