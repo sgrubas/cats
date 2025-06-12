@@ -41,12 +41,12 @@ class BaseScoring(BaseModel):
         metrics["Elapsed_time_sec"] = []
 
         for xi, yi, *attrs in x_and_y:
-            attrs = attrs or [{}]
+            attrs = (attrs or [{}])[0]
             if self.prepare_operator is not None:
                 self.prepare_operator(self.operator, xi)
             operator_result = self.operator * xi
             for name, func in self.metric_functions.items():
-                kwargs = {kw: attrs[0].get(kw, None) for kw in inspect.getfullargspec(func).args[2:]}
+                kwargs = {kw: attrs.get(kw, None) for kw in inspect.getfullargspec(func).args[2:]}
 
                 metrics[name].append(func(yi, operator_result, **kwargs))
             metrics["Elapsed_time_sec"].append(operator_result.history.history['Total'])
