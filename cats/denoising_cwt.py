@@ -13,7 +13,7 @@ from cats.core.date import BEDATE_trimming, divide_into_groups
 from cats.core.env_variables import get_min_bedate_block_size, get_max_memory_available_for_cats
 from cats.core.utils import (get_interval_division, cast_to_bool_dict, del_vals_by_keys, StatusKeeper,
                              aggregate_array_by_axis_and_func)
-from cats.core.utils import format_interval_by_limits, give_index_slice_by_limits
+from cats.core.utils import format_interval_by_limits
 from cats.io.utils import load_pickle, save_pickle
 from cats.io import convert_stream_to_dict
 from .core.phaseseparation import NewMapFromClusters, PhaseSeparator, event_id_recorder
@@ -188,12 +188,26 @@ class CATSDenoiserCWT(BaseModel, extra='allow', arbitrary_types_allowed=True):
         save_pickle(self, filename)
 
     @classmethod
-    def load(cls, filename):
+    def load(cls, filename, by_param_set='main_params'):
+        """
+            Loads CATS object from a file.
+
+            Arguments:
+                filename : str : path to the file with CATS object.
+                by_param_set : str : which set of parameters to use for loading,
+                    'all_params', 'main_params', 'init_params'. If None, then full original object is loaded.
+        """
         loaded = load_pickle(filename)
         if isinstance(loaded, dict):
             return cls(**loaded)
         else:
-            return loaded
+            assert by_param_set in ['all_params', 'main_params', 'init_params', None], \
+                f"Unknown {by_param_set = } code. [None, 'all_params', 'main_params', 'init_params'] are allowed."
+
+            if isinstance(by_param_set, str):
+                return cls(**getattr(loaded, by_param_set))
+            else:
+                return loaded
 
     @classmethod
     def from_result(cls, CATSDenoiserCWTResult):
