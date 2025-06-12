@@ -289,12 +289,26 @@ The fastest CPU version is 'ssqueezepy', which is default.
         save_pickle(obj, filename)
 
     @classmethod
-    def load(cls, filename):
+    def load(cls, filename, by_param_set='main_params'):
+        """
+            Loads CATS object from a file.
+
+            Arguments:
+                filename : str : path to the file with CATS object.
+                by_param_set : str : which set of parameters to use for loading,
+                    'all_params', 'main_params', 'init_params'. If None, then full original object is loaded.
+        """
         loaded = load_pickle(filename)
         if isinstance(loaded, dict):
             return cls(**loaded)
         else:
-            return loaded
+            assert by_param_set in ['all_params', 'main_params', 'init_params', None], \
+                f"Unknown {by_param_set = } code. [None, 'all_params', 'main_params', 'init_params'] are allowed."
+
+            if isinstance(by_param_set, str):
+                return cls(**getattr(loaded, by_param_set))
+            else:
+                return loaded
 
     @classmethod
     def from_result(cls, CATSResult):
