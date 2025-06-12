@@ -4,6 +4,7 @@ import numpy as np
 import colorednoise as cn
 from itertools import product
 from tqdm.notebook import tqdm
+import gc
 
 
 class TraceAugmenter(BaseModel):
@@ -14,9 +15,10 @@ class TraceAugmenter(BaseModel):
     random_noise_levels: Union[List[float], List[List[float]]] = [0.5]
     random_noise_colors: Union[List[float], List[List[float]]] = [0.0]
     random_noise_repeats: int = 2
-    product_levels_and_colors: bool = False
+    product_levels_and_colors: bool = True
     reference_noise: List[Any] = []
     reference_noise_levels: Union[List[float], List[List[float]]] = [0.5]
+    reference_noise_normalize: bool = True
     reference_noise_name: str = "reference"
     trace_dropout_rate: float = Field(0.0, ge=0, lt=1.0)
     # shuffle_traces: bool = False
@@ -43,6 +45,9 @@ class TraceAugmenter(BaseModel):
         if not self.product_levels_and_colors:
             assert (sum(self._len_of_nested_list(self.random_noise_levels)) ==
                     sum(self._len_of_nested_list(self.random_noise_colors)))
+
+        if self.reference_noise_normalize:
+            self.reference_noise = [n_ref / np.std(n_ref) for n_ref in self.reference_noise]
 
     def _set_nested_list(self, attr, ref_len):
         val = getattr(self, attr)
@@ -91,9 +96,12 @@ class TraceAugmenter(BaseModel):
         #     traces = np.take_along_axis(traces, indices=shuffle_ind, axis=self.shuffle_axis)
         #     if output.shape[:-1] == traces.shape[:-1]:
         #         output = np.take_along_axis(output, indices=shuffle_ind, axis=self.shuffle_axis)
-        dropout_c = np.random.choice([0.0, 1.0], size=traces.shape[:-1] + (1,),
-                                     p=[self.trace_dropout_rate, 1 - self.trace_dropout_rate])
-        return dropout_c * traces, output
+        if self.trace_dropout_rate > 0.0:
+            dropout_c = np.random.choice([0.0, 1.0], size=traces.shape[:-1] + (1,),
+                                         p=[self.trace_dropout_rate, 1 - self.trace_dropout_rate])
+            return dropout_c * traces, output
+        else:
+            return traces, output
 
     def __call__(self):
         repeats = self.random_noise_repeats
@@ -120,7 +128,7 @@ class TraceAugmenter(BaseModel):
 
                 for n_ref, nls_ref in zip(self.reference_noise, self.reference_noise_levels):
                     for n_l in nls_ref:
-                        noise = n_ref / np.std(n_ref) * n_l * r_l
+                        noise = n_ref * n_l * r_l
 
                         cntr = self.report_to_callbacks(cntr, trace=i, noise_level=n_l, noise_color=None,
                                                         noise_name=ref_name)
@@ -136,7 +144,10 @@ class TraceAugmenter(BaseModel):
         return cntr
 
 
-class Recorder:  # records auxiliary params such as iter number
+class Recorder:
+    """
+        Records auxiliary outputs such as iter number
+    """
     container: Dict
 
     def __init__(self):
@@ -151,3 +162,17 @@ class Recorder:  # records auxiliary params such as iter number
 
     def restart(self):
         self.container = {}
+
+
+class GC_callback:
+    """
+        Run garbage collector every 'gc_every' iterations of something to free out RAM
+    """
+    def __init__(self, gc_every=500):
+        self.gc_every = gc_every
+        self.counter = 0
+
+    def __call__(self, **kwargs) -> None:
+        self.counter += 1
+        if (self.counter % self.gc_every) == 0:
+            gc.collect()
