@@ -25,7 +25,10 @@ def scale_funcs(x, spec, per_station_scale=False):
         func1 = funcs[func_names[0]]
         func2 = funcs[func_names[1]]
         x2 = func2(x, axis=-1, keepdims=True)
-        x1 = func1(x2, axis=0 if per_station_scale else None, keepdims=True)
+        if x.ndim == 3:
+            x1 = func1(x2, axis=0 if per_station_scale else None, keepdims=True)
+        else:
+            x1 = x2 if per_station_scale else func1(x2, axis=None, keepdims=True)
         return x1
 
     else:
@@ -115,7 +118,7 @@ def plot_traces(data: np.ndarray,
         component_labels = ["E", "N", "Z"] if num_comp <= 3 else list(range(num_comp))
 
     if station_labels is None:
-        station_labels = list(range(1, num_stations + 1))
+        station_labels = list(range(1, data.shape[-2] + 1, each_station))
     station_labels = [(i, st) for i, st in zip(loc_slice, station_labels)]
 
     trace_dim = hv.Dimension("Station")
@@ -126,7 +129,7 @@ def plot_traces(data: np.ndarray,
     traces = []
     for i in range(num_stations):  # iter over traces
         for cj in range(num_comp):  # iter over components
-            j_ind = cj if num_comp > 1 else Ellipsis  # ellipsis is for absent component axis
+            j_ind = cj if multi_comp else Ellipsis  # ellipsis is for absent component axis
             trace_curve = data_slice[j_ind, i, :] + loc_slice[i]
             traces.append(hv.Curve((time_slice, trace_curve),
                                    kdims=[t_dim], vdims=[trace_dim],
