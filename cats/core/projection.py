@@ -4,7 +4,6 @@
 
 import numpy as np
 import numba as nb
-# from .utils import ReshapeArraysDecorator
 from .clustering import index_cluster_catalog, assign_by_index_cluster_catalog
 from scipy.ndimage import maximum_position
 
@@ -108,105 +107,56 @@ def FilterDetection(detection, min_separation, min_duration):
     return filtered_detection, filtered_intervals
 
 
-# @nb.njit(["UniTuple(f8[:, :], 2)(f8[:, :], f8[:, :], f8)"])
-# def FilterIntervalsFeatures(detected_intervals, picked_features, dt_sec):
-#     """
-#         `detected_intervals` are assumed to be properly projected from cluster catalogs
-#     """
-#     if len(detected_intervals) > 1:  # no point to merge less than 2 intervals
-#         N = round(detected_intervals.max() / dt_sec) + 2  # don't need to know full length
-#         bool_detection = np.full(N, False, dtype=np.bool_)
-#         for intv in detected_intervals:  # projecting first, easier
-#             i1, i2 = intv / dt_sec
-#             i1, i2 = round(i1 - dt_sec/2), round(i2 + dt_sec/2)  # extending, to avoid argmax of empty slices below
-#             bool_detection[i1: i2 + 1] = True
-#
-#         merged_intervals = _giveIntervals(bool_detection) * dt_sec  # new, merged intervals from projection
-#         onsets = picked_features[:, 0]
-#         likelihood = picked_features[:, 1]
-#         merged_features = np.full((len(merged_intervals),
-#                                    picked_features.shape[1]), -1.0)  # default `-1` will pop up if empty slice below
-#         for i, intv in enumerate(merged_intervals):
-#             curr_inds = (intv[0] <= onsets) & (onsets <= intv[1])  # which ones are in the new merged interval
-#             curr_feats = picked_features[curr_inds]
-#             likel_i = likelihood[curr_inds]
-#             if len(likel_i) > 0:
-#                 ind_max = np.argmax(likel_i)  # choose only ones with max energy
-#                 merged_features[i] = curr_feats[ind_max]
-#     else:
-#         merged_intervals, merged_features = detected_intervals, picked_features
-#
-#     return merged_intervals, merged_features
-#
-#
-# def get_associated_events_from_mCATS_catalog(full_shape, cluster_catalogs, dt_sec):
-#
-#     shape = full_shape[:-2]  # reduce dim in multitrace
+# def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, min_duration_sec):
+#     shape = trace_shape
 #
 #     detected_intervals = np.empty(shape, dtype=object)
 #     picked_features = np.empty(shape, dtype=object)
 #
 #     interval_cols = ["Time_start_sec", "Time_end_sec"]
-#     feature_cols = ["Time_peak_sec", "Energy_peak"]  # STRICTLY THESE TWO FIRST, important for filtering
-#     feature_cols = [col for col in cluster_catalogs.columns
-#                     if col not in (interval_cols + feature_cols)]
+#     detection_cols = ["Interval_ID", "Interval_start_sec", "Interval_end_sec"]
+#
+#     # cols for 'picked_features'
+#     features_cols = ["Time_peak_sec", "Energy_peak", "Frequency_peak_Hz"]  # STRICTLY THESE TWO FIRST
 #
 #     for ind in np.ndindex(shape):
 #         cat = index_cluster_catalog(cluster_catalogs, ind)
 #
-#         intervals, features = [], []
-#         for i, df_grp in cat.groupby('Cluster_ID'):
-#             intervals.append([df_grp.Time_start_sec.min(), df_grp.Time_end_sec.max()])
-#             peak_id = df_grp.Energy_peak.values.argmax()
-#             features.append(df_grp[feature_cols].values[peak_id])
+#         if len(cat) > 0:  # skip if empty
+#             intervals_i = cat[interval_cols].values  # these will be merged
 #
-#         intervals_i = np.array(intervals)
-#         features_i = np.array(features)
+#             projected_intervals, merge_inds = MergeIntervals(intervals_i, dt_sec, min_separation_sec, min_duration_sec)
+#             values = np.concatenate((merge_inds[:, None], projected_intervals[merge_inds]), axis=1)
+#             assign_by_index_cluster_catalog(cluster_catalogs, ind, detection_cols, values)
 #
-#         detected_intervals[ind], picked_features[ind] = FilterIntervalsFeatures(detected_intervals=intervals_i,
-#                                                                                 picked_features=features_i,
-#                                                                                 dt_sec=dt_sec)
+#             detected_intervals[ind] = projected_intervals
 #
-#     return detected_intervals, picked_features
+#             # ------- going to be deprecated --------
+#             features = cat[features_cols].values  # 2D array
+#             max_inds = maximum_position(features[:, 1], merge_inds + 1,
+#                                         np.arange(merge_inds.max() + 1) + 1)  # peak energy criterion
+#             features = features[np.array(max_inds).squeeze()]
+#             picked_features[ind] = features if features.ndim > 1 else features.reshape(-1, len(features_cols))
 #
+#         else:  # if empty, then it is `pyobject` array, and fails numba JIT below
+#             detected_intervals[ind] = np.zeros((0, 2), dtype=float)
+#             picked_features[ind] = np.zeros((0, len(features_cols)), dtype=float)
 #
-# def IntervalsFeaturesFromCatalogs(full_shape, cluster_catalogs, dt_sec):
-#
-#     shape = full_shape[:-1]
-#
-#     detected_intervals = np.empty(shape, dtype=object)
-#     picked_features = np.empty(shape, dtype=object)
-#
-#     interval_cols = ["Time_start_sec", "Time_end_sec"]
-#     features_cols = ["Time_peak_sec", "Energy_peak"]  # STRICTLY THESE TWO FIRST, important for filtering
-#     features_cols += [col for col in cluster_catalogs.columns
-#                       if col not in (interval_cols + features_cols)]
-#
-#     for ind in np.ndindex(shape):
-#         if len(cluster_catalogs) > 0:  # empty if empty
-#             cat = index_cluster_catalog(cluster_catalogs, ind)
-#             intervals_i = cat[interval_cols].values
-#             features_i = cat[features_cols].values
-#
-#             if len(intervals_i) == 0:  # if shape = (0, ...) then it is `pyobject` array, and fails numba JIT below
-#                 intervals_i = intervals_i.astype(np.float64)
-#                 features_i = features_i.astype(np.float64)
-#         else:
-#             intervals_i = np.zeros((0, 2), dtype=float)
-#             features_i = np.zeros((0, len(features_cols)), dtype=float)
-#
-#         detected_intervals[ind], picked_features[ind] = FilterIntervalsFeatures(detected_intervals=intervals_i,
-#                                                                                 picked_features=features_i,
-#                                                                                 dt_sec=dt_sec)
-#
+#     # cluster_catalogs = cluster_catalogs.astype({detection_cols[0]: int})
 #     return detected_intervals, picked_features
 
 
+@nb.njit(["Tuple((f8[:, :], i8[:]))(f8[:, :], f8, f8, f8)",
+          "Tuple((f8[:, :], i8[:]))(f4[:, :], f8, f8, f8)"], cache=True)
 def MergeIntervals(intervals, dt_sec, min_separation_sec, min_duration_sec):
+    """
+        Merges intervals based on the given minimum separation and duration.
+    """
     if len(intervals) > 1:  # no point to merge less than 2 intervals
-        centers = intervals.mean(axis=1)
+        # centers = np.mean(intervals, axis=1)
+        centers = (intervals[:, 0] + intervals[:, 1]) * 0.5  # mean of start and end
 
-        # 1. Project intervals onto disctrete sequence
+        # 1. Project intervals onto a discrete sequence
         # (easier to implement, because it does not depend on sorting)
         N = round(intervals.max() / dt_sec) + 2  # don't need to know full length, max is enough
         intervals_inds = (intervals / dt_sec).astype(np.int64)
@@ -221,52 +171,106 @@ def MergeIntervals(intervals, dt_sec, min_separation_sec, min_duration_sec):
 
         # 3. Aggregate indexes falling in one interval, by feature_max
         merge_inds = np.arange(len(intervals))
-        for i, (d1, d2) in enumerate(merged_intervals):
-            curr_inds = (d1 <= centers) & (centers <= d2)  # which ones are in the new merged interval
-            merge_inds[curr_inds] = i  # index allows assign interval ID to each feature row
+        for i in range(len(merged_intervals)):
+            d1, d2 = merged_intervals[i]
+            curr_inds = (d1 <= centers) & (centers <= d2)  # which ones are in the new merged interval?
+            merge_inds[curr_inds] = i  # index allows assigning interval ID to each feature row
     else:
-        merged_intervals = intervals
+        merged_intervals = intervals.astype(np.float64)
         merge_inds = np.arange(len(intervals))
 
     return merged_intervals, merge_inds
 
 
-def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, min_duration_sec):
-    shape = trace_shape
+@nb.njit(["f8[:, :](f8[:, :], i8[:], i8, i8)"], cache=True)
+def GetMaxRowsByLabels(array, labels, col_ind, col_num):
+    """
+        Get rows from `array` with maximum values in `col_ind` for each label in `labels`.
 
-    detected_intervals = np.empty(shape, dtype=object)
-    picked_features = np.empty(shape, dtype=object)
+        Arguments:
+            array : np.ndarray (N, M) : 2D array, where N is number of rows, M is number of columns
+            labels : np.ndarray (N,) : 1D array with labels for each row
+            col_ind : int : index of column to find maximum in
+            col_num : int : number of columns in output array
+
+        Returns:
+            new_array : np.ndarray (L, M) : 2D array with L rows, where L is number of unique labels,
+                                            and M is number of columns
+    """
+    # index = np.arange(labels.max()) + 1  # labels start from 1, not 0
+    index = np.unique(labels)
+
+    new_array = np.zeros((len(index), col_num))
+
+    array_col = array[:, col_ind]
+    original_inds = np.arange(len(array_col))
+    for i in range(len(index)):
+        j = index[i]
+        cond_j = labels == j
+        max_j = np.argmax(array_col[cond_j])  # if empty then Error
+        orig_max_j = original_inds[cond_j][max_j]
+        new_array[i] = array[orig_max_j]
+
+    return new_array
+
+
+def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, min_duration_sec):
+    """
+        Projects intervals in cluster catalogs onto time domain, merging the overlapping intervals.
+
+        Arguments:
+            trace_shape : tuple : shape of the traces, e.g. (N_channels, N_traces)
+            cluster_catalogs : pd.DataFrame : DataFrame with cluster catalog data
+            dt_sec : float : time step in seconds
+            min_separation_sec : float : minimum separation between intervals in seconds
+            min_duration_sec : float : minimum duration of intervals in seconds
+
+        Returns:
+            detected_intervals : np.ndarray : array of detected intervals for each trace
+            picked_features : np.ndarray : array of picked features for each trace
+    """
+    cluster_catalogs.sort_index(inplace=True)  # for faster and easier indexing over trace indexes
+    unique_inds, iter_inds = np.unique(cluster_catalogs.index, return_index=True)
+    N_all = cluster_catalogs.shape[0]
+    N_inds = len(iter_inds)
 
     interval_cols = ["Time_start_sec", "Time_end_sec"]
     detection_cols = ["Interval_ID", "Interval_start_sec", "Interval_end_sec"]
-
-    # cols for 'picked_features'
     features_cols = ["Time_peak_sec", "Energy_peak", "Frequency_peak_Hz"]  # STRICTLY THESE TWO FIRST
 
-    for ind in np.ndindex(shape):
-        cat = index_cluster_catalog(cluster_catalogs, ind)
+    shape = trace_shape
+    detections = np.zeros((N_all, len(detection_cols)), dtype=float)
+    detected_intervals = np.empty(shape, dtype=object)
+    picked_features = np.empty(shape, dtype=object)
 
-        if len(cat) > 0:  # skip if empty
-            intervals_i = cat[interval_cols].values  # these will be merged
+    if N_all > 0:
+        intervals = cluster_catalogs[interval_cols].values  # numpy arrays
+        features = cluster_catalogs[features_cols].values  # numpy arrays
 
-            projected_intervals, merge_inds = MergeIntervals(intervals_i, dt_sec, min_separation_sec, min_duration_sec)
+        for j, i1 in enumerate(iter_inds):
+            ind = unique_inds[j]
+
+            i2 = iter_inds[j + 1] if (j + 1 < N_inds) else N_all
+            arr_slice = slice(i1, i2)
+
+            intervals_j = intervals[arr_slice]
+            projected_intervals, merge_inds = MergeIntervals(intervals_j, dt_sec, min_separation_sec, min_duration_sec)
             values = np.concatenate((merge_inds[:, None], projected_intervals[merge_inds]), axis=1)
-            assign_by_index_cluster_catalog(cluster_catalogs, ind, detection_cols, values)
+            detections[arr_slice] = values
 
             detected_intervals[ind] = projected_intervals
 
             # ------- going to be deprecated --------
-            features = cat[features_cols].values  # 2D array
-            max_inds = maximum_position(features[:, 1], merge_inds + 1,
-                                        np.arange(merge_inds.max() + 1) + 1)  # peak energy criterion
-            features = features[np.array(max_inds).squeeze()]
-            picked_features[ind] = features if features.ndim > 1 else features.reshape(-1, len(features_cols))
+            picked_features[ind] = GetMaxRowsByLabels(features[arr_slice], merge_inds + 1, 1, len(features_cols))
 
-        else:  # if empty then it is `pyobject` array, and fails numba JIT below
+        cluster_catalogs[detection_cols] = detections
+
+    # populate traces with no detected intervals with zero-length arrays
+    for ind, arr in np.ndenumerate(detected_intervals):
+        if arr is None:
             detected_intervals[ind] = np.zeros((0, 2), dtype=float)
             picked_features[ind] = np.zeros((0, len(features_cols)), dtype=float)
 
-    # cluster_catalogs = cluster_catalogs.astype({detection_cols[0]: int})
     return detected_intervals, picked_features
 
 
