@@ -1,11 +1,9 @@
 """
-    Functions for projection detection from Time-Frequency onto Time.
+    Functions for projecting detection from Time-Frequency onto Time.
 """
 
 import numpy as np
 import numba as nb
-from .clustering import index_cluster_catalog, assign_by_index_cluster_catalog
-from scipy.ndimage import maximum_position
 
 
 # ------------------  TIME PROJECTION AND FILTERING  ------------------ #
@@ -125,7 +123,8 @@ def FilterDetection(detection, min_separation, min_duration):
 #         if len(cat) > 0:  # skip if empty
 #             intervals_i = cat[interval_cols].values  # these will be merged
 #
-#             projected_intervals, merge_inds = MergeIntervals(intervals_i, dt_sec, min_separation_sec, min_duration_sec)
+#             projected_intervals, merge_inds = MergeIntervals(intervals_i, dt_sec, min_separation_sec,
+#                                                              min_duration_sec)
 #             values = np.concatenate((merge_inds[:, None], projected_intervals[merge_inds]), axis=1)
 #             assign_by_index_cluster_catalog(cluster_catalogs, ind, detection_cols, values)
 #
@@ -297,3 +296,33 @@ def _projectLabeledSequence(labeled_sequence):
         binary_sequence[i1: i2 + 1] = True
     return binary_sequence
 
+
+def generate_time_segments(intervals, time_len, dt_sec, segment_separation_sec, segment_extend_time_sec=None):
+    # 1. Projecting onto time (binary sequence)
+    binary_projection = np.full(time_len + 2, False, dtype=np.bool_)
+    for intv in intervals:
+        if intv.dtype.name == 'object':
+            for ind in np.ndindex(intv.shape):
+                intv_i = np.rint(intv[ind] / dt_sec).astype(int)
+                project_intervals(intv_i, binary_projection)
+        else:
+            intv_i = np.rint(intv / dt_sec).astype(int)
+            project_intervals(intv_i, binary_projection)
+
+    # 2. Extracting and merging intervals
+    if (segment_extend_time_sec is not None) and \
+            (segment_separation_sec < segment_extend_time_sec):
+        segment_separation_sec = segment_extend_time_sec  # to avoid plotting same events many times
+    time_segments = _giveIntervals(binary_projection)
+    if len(time_segments) > 0:
+        time_segments = time_segments * dt_sec
+        time_segments[:, 1] += dt_sec  # append to allow single pixel intervals
+        time_segments = filter_intervals(time_segments, segment_separation_sec, 0.0)
+        if segment_extend_time_sec is None:
+            segment_extend_time_sec = np.diff(time_segments, axis=-1).squeeze() * 0.5
+        # print(segment_extend_time_sec.shape)
+
+        time_segments[:, 0] -= segment_extend_time_sec
+        time_segments[:, 1] += segment_extend_time_sec
+
+    return time_segments

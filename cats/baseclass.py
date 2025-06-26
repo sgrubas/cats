@@ -13,6 +13,7 @@ from typing import Any, Union, Callable, List
 from pydantic import BaseModel, Field
 import obspy
 from typing import Tuple
+from tqdm.notebook import tqdm
 
 from .core.utils import replace_int_by_slice
 from .core.timefrequency import STFTOperator
@@ -24,7 +25,8 @@ from .core.utils import (get_interval_division, format_index_by_dimensions, cast
                          intervals_intersection_inds, aggregate_array_by_axis_and_func, make_default_index_if_outrange)
 from .core.utils import format_interval_by_limits, give_index_slice_by_limits, make_default_index_on_axis
 from .core.utils import format_index_by_dimensions_new, give_nonzero_limits, mat_structure_to_tight_dataframe_dict
-from .core.plottingutils import plot_traces, switch_plotting_backend, detrend_func
+from .core.plottingutils import (plot_traces, switch_plotting_backend, detrend_func, save_all_segments_to_file,
+                                 populate_index)
 from .io.utils import convert_stream_to_dict, save_pickle, load_pickle
 from .core.phaseseparation import NewMapFromClusters, PhaseSeparator, event_id_recorder
 
@@ -834,7 +836,11 @@ class CATSResult(BaseModel):
                 if i < ncols - 1:
                     fig_i = fig_i.opts(hv.opts.QuadMesh(colorbar=False))
 
-        fig = hv.Layout(figs).cols(nrows).opts(**figs[0].opts.get().kwargs)
+        layout_kwargs = figs[0].opts.get().kwargs
+        layout_kwargs['title'] = f"Traces:  {inds}".replace('[', '').replace(']', '')
+        layout_kwargs['title'] = layout_kwargs['title'].replace('),', ') ')
+        layout_kwargs['fontsize'] = dict(title=22)
+        fig = hv.Layout(figs).cols(nrows).opts(**layout_kwargs)
 
         vspace = vspace or 0.05 + 0.02 * (not share_time_labels)
         hspace = hspace or 0.025 + 0.1 * sum([not share_vertical_axes, not share_spectrogram_cmaps])
@@ -922,7 +928,7 @@ class CATSResult(BaseModel):
                     intervals: bool = False,
                     picks: bool = False,
                     station_loc: np.ndarray = None,
-                    gain: int = 1,
+                    gain: int = 0.5,
                     clip: bool = False,
                     detrend_type: str = 'constant',
                     each_station: int = 1,
@@ -977,6 +983,94 @@ class CATSResult(BaseModel):
 
         fig = fig.opts(title=layout_title)
         return fig
+
+    def plot_traces_all_segments_to_file(self,
+                                         folder_path,
+                                         ind=None,
+                                         segment_separation_sec=None,
+                                         segment_extend_time_sec=None,
+                                         window_interval_sec=None,
+                                         filename=None,
+                                         image_format='png',
+                                         dpi=100,
+                                         gc_every_iterations=5,
+                                         **plot_traces_kwargs):
+
+        if not isinstance(ind, list):
+            ind = [ind]
+
+        for ind_i in tqdm(ind, display=len(ind) > 1):
+            save_all_segments_to_file(self,
+                                      plot_function_name='plot_traces',
+                                      ind=ind_i,
+                                      folder_path=folder_path,
+                                      segment_separation_sec=segment_separation_sec,
+                                      segment_extend_time_sec=segment_extend_time_sec,
+                                      window_interval_sec=window_interval_sec,
+                                      filename=filename,
+                                      image_format=image_format,
+                                      dpi=dpi,
+                                      gc_every_iterations=gc_every_iterations,
+                                      **plot_traces_kwargs)
+
+    def plot_all_segments_to_file(self,
+                                  folder_path,
+                                  ind=None,
+                                  segment_separation_sec=None,
+                                  segment_extend_time_sec=None,
+                                  window_interval_sec=None,
+                                  filename=None,
+                                  image_format='png',
+                                  dpi=100,
+                                  gc_every_iterations=5,
+                                  **plot_kwargs):
+
+        shape = self.noise_std.shape[:-2]
+        ind = populate_index(ind, shape)
+
+        for ind_i in tqdm(ind, display=len(ind) > 1):
+            save_all_segments_to_file(self,
+                                      plot_function_name='plot',
+                                      ind=ind_i,
+                                      folder_path=folder_path,
+                                      segment_separation_sec=segment_separation_sec,
+                                      segment_extend_time_sec=segment_extend_time_sec,
+                                      window_interval_sec=window_interval_sec,
+                                      filename=filename,
+                                      image_format=image_format,
+                                      dpi=dpi,
+                                      gc_every_iterations=gc_every_iterations,
+                                      **plot_kwargs)
+
+    def plot_multi_all_segments_to_file(self,
+                                        folder_path,
+                                        multi_axis,
+                                        ind=None,
+                                        segment_separation_sec=None,
+                                        segment_extend_time_sec=None,
+                                        window_interval_sec=None,
+                                        filename=None,
+                                        image_format='png',
+                                        dpi=100,
+                                        gc_every_iterations=5,
+                                        **plot_multi_kwargs):
+
+        shape = self.noise_std.shape[:-2]
+        ind = populate_index(ind, shape, multi_axis)
+
+        for ind_i in tqdm(ind, display=len(ind) > 1):
+            save_all_segments_to_file(self,
+                                      plot_function_name='plot_multi',
+                                      ind=ind_i,
+                                      folder_path=folder_path,
+                                      segment_separation_sec=segment_separation_sec,
+                                      segment_extend_time_sec=segment_extend_time_sec,
+                                      window_interval_sec=window_interval_sec,
+                                      filename=filename,
+                                      image_format=image_format,
+                                      dpi=dpi,
+                                      gc_every_iterations=gc_every_iterations,
+                                      **plot_multi_kwargs)
 
     def get_cluster_catalogs(self,
                              values_keys: List[str] = None,
@@ -1157,7 +1251,7 @@ class CATSResult(BaseModel):
     # Legacy methods for saving to/from '.mat'
     def filter_convert_attributes_to_dict(self):
         # Remove `None`
-        mdict = {name: attr for name, attr in self.dict().items() if (attr is not None)}
+        mdict = {name: attr for name, attr in self.model_dump().items() if (attr is not None)}
         catalog = mdict.get('cluster_catalogs', None)
 
         # Convert DataFrame to dict for `mat` format

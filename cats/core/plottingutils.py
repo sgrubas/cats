@@ -2,9 +2,17 @@ import numpy as np
 import holoviews as hv
 from holoviews.plotting.links import DataLink
 from typing import Union
-from .utils import format_interval_by_limits, give_index_slice_by_limits, give_rectangles, intervals_intersection
 from scipy.signal import detrend as detrend_func
+from pathlib import Path
+from tqdm.notebook import tqdm
+import gc
+from itertools import product
 hv.extension('matplotlib', 'bokeh')
+
+from .utils import format_interval_by_limits, give_index_slice_by_limits, give_rectangles, intervals_intersection
+from .utils import format_index_by_dimensions_new, replace_int_by_slice
+from .clustering import index_cluster_catalog
+from .projection import generate_time_segments
 
 
 def scale_funcs(x, spec, per_station_scale=False):
@@ -264,3 +272,131 @@ def switch_plotting_backend(interactive: bool, fig_mpl='png', fig_bokeh='auto'):
     backend = 'bokeh' if interactive else 'matplotlib'
     static_format = fig_bokeh if interactive else fig_mpl
     hv.output(backend=backend, fig=static_format)
+
+
+def save_all_segments_to_file(result,
+                              plot_function_name,
+                              ind,
+                              folder_path,
+                              segment_separation_sec=None,
+                              segment_extend_time_sec=None,
+                              window_interval_sec=None,
+                              filename=None,
+                              image_format='png',
+                              dpi=100,
+                              gc_every_iterations=5,
+                              **plot_function_kwargs):
+    # 1. Parse arguments
+    filename = filename or result.main_params['name']
+    window_interval_sec = format_interval_by_limits(window_interval_sec, (0, (result.time_npts - 1) * result.dt_sec))
+
+    # 1.1. Convenience funcs for file naming
+    rounding = abs(int(np.floor(np.log10(result.tf_dt_sec))))
+
+    def round_f(x):
+        return round(x, rounding)  # for time interval in file name
+
+    # 1.2. Index formatting for proper visualization
+    if 'trace' in plot_function_name:  # .plot_traces
+        ind = () if ind is None else ind
+        ind = format_index_by_dimensions_new(ind=ind, ndim=result.signal.ndim - 1, default_ind=0)  # .plot_traces
+        ind = [ind]
+    else:
+        if 'multi' in plot_function_name:  # .plot_multi
+            assert isinstance(ind, list)
+        else:
+            assert isinstance(ind, tuple)  # .plot
+            ind = [ind]
+
+    # 1.3. Make str from 'ind' for file name
+    def convert_to_str(x):
+        if isinstance(x, slice):
+            name = f"{x.start}_{x.stop}_{x.step}"
+            name = name.replace('None', '-')
+        else:
+            name = str(x)
+        return name
+
+    ind_names = ["(" + ", ".join(tuple(convert_to_str(i) for i in ind_i)) + ")"
+                 for ind_i in ind]
+    ind_name = "_".join(ind_names)
+
+    # 2. Extract time segments for visualization
+    segment_separation_sec = segment_separation_sec or result.main_params['cluster_distance_t_sec']
+    aggr_axis = result.main_params.get('aggr_clustering_axis')
+
+    def aggr_ind(x):
+        return replace_int_by_slice(x, aggr_axis)  # for indexing detected intervals or catalog
+
+    list_of_intervals = getattr(result, 'detected_intervals', None)
+    if list_of_intervals is None:
+        cols = ['Time_start_sec', 'Time_end_sec']
+        list_of_intervals = [index_cluster_catalog(result.cluster_catalogs[cols], aggr_ind(ind_i)) for ind_i in ind]
+    else:
+        list_of_intervals = [list_of_intervals[aggr_ind(ind_i)] for ind_i in ind]
+
+    time_segments = generate_time_segments(list_of_intervals, result.tf_time_npts, result.tf_dt_sec,
+                                           segment_separation_sec, segment_extend_time_sec)
+
+    def check_inside(intv):
+        t_1, t_2 = window_interval_sec
+        return (t_1 <= intv[1]) and (intv[0] <= t_2)
+
+    time_segments = [intv_i for intv_i in time_segments if check_inside(intv_i)]
+
+    # 3. Plot and save time segments
+    for i, (t1, t2) in enumerate(tqdm(time_segments)):
+        kwargs_i = dict(time_interval_sec=(t1, t2))
+        if 'multi' in plot_function_name:
+            kwargs_i['inds'] = ind
+        else:
+            kwargs_i['ind'] = ind[0]
+        fig = getattr(result, plot_function_name)(**kwargs_i, **plot_function_kwargs)
+
+        filepath = f"{filename}_{plot_function_name}_{round_f(t1)}_{round_f(t2)}_{ind_name}"
+        filepath = Path(folder_path) / filepath
+
+        _ = hv.save(fig, filepath, fmt=image_format, dpi=dpi)
+
+        del fig
+        if (i % gc_every_iterations) == 0:
+            gc.collect()
+    gc.collect()
+
+
+def populate_index(ind, shape, multi_axis=None):
+    multi_plot = isinstance(multi_axis, (int, tuple))
+    if multi_plot:
+        multi_axis = (multi_axis,) if isinstance(multi_axis, int) else multi_axis
+
+    if ind is None:
+        ind = tuple(list(range(di)) for di in shape)
+
+    if isinstance(ind, tuple):
+        dims = []
+        for i, (dim_j, di) in zip(ind, enumerate(shape)):
+            if i is None:
+                dim_iter = list(range(di))
+            elif isinstance(i, int):
+                dim_iter = [i]
+            elif isinstance(i, slice):
+                dim_iter = list(range(i.start or 0, i.stop or di, i.step or 1))
+            elif isinstance(i, (list, tuple)):
+                dim_iter = i
+            else:
+                raise ValueError(f"Unknown type of index identifier {i}")
+            dims.append(dim_iter)
+
+        if multi_plot:
+            for m_i in multi_axis:
+                dims[m_i] = [dims[m_i]]
+
+        ind = [index for index in product(*dims)]
+
+    if multi_plot:
+        for i, ind_i in enumerate(ind):
+            ind[i] = populate_index(ind_i, shape, None)
+    else:
+        assert isinstance(ind, list) and ('int' in np.r_[ind].dtype.name)
+
+    return ind
