@@ -331,7 +331,8 @@ def save_all_segments_to_file(result,
     list_of_intervals = getattr(result, 'detected_intervals', None)
     if list_of_intervals is None:
         cols = ['Time_start_sec', 'Time_end_sec']
-        list_of_intervals = [index_cluster_catalog(result.cluster_catalogs[cols], aggr_ind(ind_i)) for ind_i in ind]
+        catalog = result.cluster_catalogs[cols]
+        list_of_intervals = [index_cluster_catalog(catalog, aggr_ind(ind_i)).values for ind_i in ind]
     else:
         list_of_intervals = [list_of_intervals[aggr_ind(ind_i)] for ind_i in ind]
 
