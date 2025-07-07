@@ -278,8 +278,6 @@ class CATSDetector(CATSBase):
 class CATSDetectionResult(CATSResult):
     likelihood: Any = None
     detection: Any = None
-    detected_intervals: Any = None
-    picked_features: Any = None
 
     @classmethod
     def get_qc_keys(cls):

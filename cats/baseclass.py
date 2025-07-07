@@ -29,6 +29,7 @@ from .core.plottingutils import (plot_traces, switch_plotting_backend, detrend_f
                                  populate_index)
 from .io.utils import convert_stream_to_dict, save_pickle, load_pickle
 from .core.phaseseparation import NewMapFromClusters, PhaseSeparator, event_id_recorder
+from .core.projection import ProjectCatalogs
 
 
 # ------------------------ BASE CLASSES ------------------------ #
@@ -576,6 +577,8 @@ class CATSResult(BaseModel):
     spectrogram_event_ID: Any = None
     spectrogram_cluster_ID: Any = None
     cluster_catalogs: Any = None
+    detected_intervals: Any = None
+    picked_features: Any = None
     dt_sec: float = None
     tf_dt_sec: float = None
     tf_t0_sec: float = 0.0
@@ -849,75 +852,42 @@ class CATSResult(BaseModel):
 
         return fig
 
-    def get_intervals_picks(self, ind, catalog_intervals, catalog_picks):
+    def get_intervals_picks(self, ind, catalog_picks):
 
+        shape = self.noise_std.shape[:-2]  # assume that noise_std is always present
+        shape = (1,) if len(shape) == 0 else shape
+
+        # Check attributes
+        intv_none = (getattr(self, 'detected_intervals') is None)
+        pick_none = (getattr(self, 'picked_features') is None)
+        is_cluster_catalogs = (getattr(self, 'cluster_catalogs') is not None)
+
+        if is_cluster_catalogs and (intv_none or pick_none):
+            # If cluster catalogs are present, but intervals or picks are not, then calculate them
+            detected_intervals, picked_features = ProjectCatalogs(shape, self.cluster_catalogs, dt_sec=self.tf_dt_sec,
+                                                                  min_separation_sec=0, min_duration_sec=0,
+                                                                  features_cols=catalog_picks)
+
+            for i in np.ndindex(shape):
+                picked_features[i] = picked_features[i].reshape(-1, 1)
+
+            setattr(self, 'detected_intervals', detected_intervals)
+            setattr(self, 'picked_features', picked_features)
+
+        picked_onsets = np.empty(shape, dtype=object)
+        for i in np.ndindex(shape):
+            picked_onsets[i] = self.picked_features[i][:, 0]
+
+        # Get proper dimensions associated with `ind`
         aggr_ax = self.main_params.get('aggr_clustering_axis')
         aggr_ind = make_default_index_on_axis(ind, aggr_ax, 0)
 
-        # Keys: `Result` attributes; Values: analogs from catalogs
-        attributes = {'detected_intervals': catalog_intervals, 'picked_onsets': catalog_picks}
-
-        # 1. Check attributes (high priority)
-        detected_intervals = getattr(self, 'detected_intervals', None)
-        picked_features = getattr(self, 'picked_features', None)
-        intv_none = (detected_intervals is None)
-        pick_none = (picked_features is None)
-
-        detected_intervals = detected_intervals[aggr_ind] if not intv_none else None
-
-        picked_features = picked_features[aggr_ind] if not pick_none else None
-        if not pick_none:
-            picked_onsets = np.empty_like(picked_features, dtype=object)
-            for i, pf in np.ndenumerate(picked_features):
-                picked_onsets[i] = pf[:, 0]
-        else:
-            picked_onsets = None
-
-        # 2. Check catalogs (low priority)
-        cluster_catalogs = getattr(self, 'cluster_catalogs', None)
-
-        if (cluster_catalogs is not None) and (intv_none or pick_none):
-            catalog = index_cluster_catalog(cluster_catalogs, aggr_ind)
-
-            shape = self.noise_std.shape[:-2]  # assume that noise_std is always present
-            shape = (1,) if len(shape) == 0 else shape
-
-            detected_intervals = np.empty(shape, dtype=object) if intv_none else None
-            picked_onsets = np.empty(shape, dtype=object) if pick_none else None
-
-            for i in catalog.index.unique():
-                cat = index_cluster_catalog(catalog, i)
-
-                if intv_none:  # do if empty
-                    vals = None
-                    for cols in attributes['detected_intervals']:
-                        vals = cat.get(cols, None)
-                        if vals is not None:
-                            break
-                    if vals is not None:
-                        detected_intervals[i] = vals.values.reshape(-1, 2)
-                    else:
-                        detected_intervals[i] = np.zeros((0, 2))
-
-                if pick_none:  # do if empty
-                    vals = None
-                    for cols in attributes['picked_onsets']:
-                        vals = cat.get(cols, None)
-                        if vals is not None:
-                            break
-
-                    if vals is not None:
-                        picked_onsets[i] = vals.values.flatten()
-                    else:
-                        picked_onsets[i] = np.zeros((0,))
-
-            # Get proper dimensions associated with `ind`
-            detected_intervals = detected_intervals[aggr_ind + (...,)]  # `(..., )` is to always keep `dtype=object`
-            picked_onsets = picked_onsets[aggr_ind + (...,)]
-            # Adjust if arrays are 0-dim
-            zero_dim = detected_intervals.ndim == 0
-            detected_intervals = detected_intervals.reshape(1) if zero_dim else detected_intervals
-            picked_onsets = picked_onsets.reshape(1) if zero_dim else picked_onsets
+        detected_intervals = self.detected_intervals[aggr_ind + (...,)]  # `(..., )` is to always keep `dtype=object`
+        picked_onsets = picked_onsets[aggr_ind + (...,)]
+        # Adjust if arrays are 0-dim
+        zero_dim = detected_intervals.ndim == 0
+        detected_intervals = detected_intervals.reshape(1) if zero_dim else detected_intervals
+        picked_onsets = picked_onsets.reshape(1) if zero_dim else picked_onsets
 
         return detected_intervals, picked_onsets
 
@@ -946,12 +916,9 @@ class CATSResult(BaseModel):
         traces = signal[ind + (i_time, )]
 
         arrival_cols = list(filter(lambda x: "arrival_sec" in x, self.cluster_catalogs.columns))
+        picks_cols = ['Time_peak_sec'] + arrival_cols if picks else []
 
-        detected_intervals, picked_onsets = self.get_intervals_picks(ind,
-                                                                     catalog_intervals=[['Time_start_sec',
-                                                                                        'Time_end_sec']],
-                                                                     catalog_picks=[arrival_cols,
-                                                                                    'Time_peak_sec'])
+        detected_intervals, picked_onsets = self.get_intervals_picks(ind, catalog_picks=picks_cols)
         detected_intervals = detected_intervals if intervals else None
         picked_onsets = picked_onsets if picks else None
 

@@ -213,7 +213,7 @@ def GetMaxRowsByLabels(array, labels, col_ind, col_num):
     return new_array
 
 
-def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, min_duration_sec):
+def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, min_duration_sec, features_cols=None):
     """
         Projects intervals in cluster catalogs onto time domain, merging the overlapping intervals.
 
@@ -223,6 +223,7 @@ def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, m
             dt_sec : float : time step in seconds
             min_separation_sec : float : minimum separation between intervals in seconds
             min_duration_sec : float : minimum duration of intervals in seconds
+            features_cols : list : list of feature columns to pick, defaults to ["Time_peak_sec", "Energy_peak", "Frequency_peak_Hz"]
 
         Returns:
             detected_intervals : np.ndarray : array of detected intervals for each trace
@@ -235,12 +236,11 @@ def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, m
 
     interval_cols = ["Time_start_sec", "Time_end_sec"]
     detection_cols = ["Interval_ID", "Interval_start_sec", "Interval_end_sec"]
-    features_cols = ["Time_peak_sec", "Energy_peak", "Frequency_peak_Hz"]  # STRICTLY THESE TWO FIRST
+    features_cols = features_cols or ["Time_peak_sec", "Energy_peak", "Frequency_peak_Hz"]  # STRICTLY THESE TWO FIRST
 
-    shape = trace_shape
     detections = np.zeros((N_all, len(detection_cols)), dtype=float)
-    detected_intervals = np.empty(shape, dtype=object)
-    picked_features = np.empty(shape, dtype=object)
+    detected_intervals = np.empty(trace_shape, dtype=object)
+    picked_features = np.empty(trace_shape, dtype=object)
 
     if N_all > 0:
         intervals = cluster_catalogs[interval_cols].values  # numpy arrays
@@ -253,14 +253,22 @@ def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, m
             arr_slice = slice(i1, i2)
 
             intervals_j = intervals[arr_slice]
-            projected_intervals, merge_inds = MergeIntervals(intervals_j, dt_sec, min_separation_sec, min_duration_sec)
-            values = np.concatenate((merge_inds[:, None], projected_intervals[merge_inds]), axis=1)
-            detections[arr_slice] = values
+            if min_separation_sec > 0:
+                projected_intervals, merge_inds = MergeIntervals(intervals_j, dt_sec, min_separation_sec,
+                                                                 min_duration_sec)
+                values = np.concatenate((merge_inds[:, None], projected_intervals[merge_inds]), axis=1)
+                detections[arr_slice] = values
 
-            detected_intervals[ind] = projected_intervals
+                detected_intervals[ind] = projected_intervals
 
-            # ------- going to be deprecated --------
-            picked_features[ind] = GetMaxRowsByLabels(features[arr_slice], merge_inds + 1, 1, len(features_cols))
+                # ------- going to be deprecated --------
+                picked_features[ind] = GetMaxRowsByLabels(features[arr_slice], merge_inds + 1, 1, len(features_cols))
+            else:
+                # if no merging, then just copy intervals and features
+                detections[arr_slice] = np.concatenate((np.arange(len(intervals_j))[:, None],
+                                                        intervals_j), axis=1)
+                detected_intervals[ind] = intervals_j
+                picked_features[ind] = features[arr_slice]
 
         cluster_catalogs[detection_cols] = detections
 
