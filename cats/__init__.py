@@ -21,4 +21,4 @@ from .core import env_variables
 from .core.env_variables import get_max_memory_available_for_cats, set_max_memory_for_cats
 
 
-__version__ = "0.3.4"
+__version__ = "0.3.5"
