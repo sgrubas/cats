@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Callable, Union
 from pydantic import BaseModel
 import numpy as np
 
@@ -26,6 +26,8 @@ class DeepModel(BaseModel, extra='allow'):
     comp_axis: int = 0
     comp_labels: list = ['E', 'N', 'Z']
     annotate_kwargs: dict = {}
+    max_ndims: int = 3  # max number of dimensions for input data
+    reshape_rule: Union[Callable, None] = None  # function to reshape output data
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -33,7 +35,7 @@ class DeepModel(BaseModel, extra='allow'):
         self.scale = self.scale if self.scale > 0 else 1 / self.model.sampling_rate / self.dt_sec  # scale freqs
 
     def apply(self, x, verbose=True, **kwargs):
-        pass
+        assert x.ndim <= self.max_ndims, f"Number of data dimensions {x.ndim} exceeded max {self.max_ndims}!"
 
     def detect(self, x, verbose=False, **kwargs):
         return self.apply(x, verbose=verbose)
@@ -93,6 +95,18 @@ class DeepModel(BaseModel, extra='allow'):
         else:
             return x
 
+    def reshape_data(self, x):
+        """
+            Reshapes data according to the `reshape_rule`.
+            If `reshape_rule` is None, returns the input data.
+        """
+        if self.reshape_rule is None:
+            return x
+        elif callable(self.reshape_rule):
+            return self.reshape_rule(x)
+        else:
+            raise ValueError(f"Unknown reshape rule: {self.reshape_rule}")
+
     @property
     def main_params(self):
         params = {kw: val for kw in type(self).model_fields.keys()
@@ -151,6 +165,8 @@ class DeepDetector(DeepModel):
     min_duration_sec: float = 1.0
 
     def apply(self, x, verbose=True, **kwargs):
+        super().apply(x, verbose=verbose, **kwargs)
+
         history = StatusKeeper(verbose=verbose)
         shape = x.shape[:-1]
 
@@ -334,6 +350,8 @@ class DeepPicker(DeepModel):
     threshold_S: float = 0.0
 
     def apply(self, x, verbose=True, **kwargs):
+        super().apply(x, verbose=verbose, **kwargs)
+
         history = StatusKeeper(verbose=verbose)
         shape = x.shape[:-1]
         with history(f"Applying {self.name}"):
@@ -396,6 +414,8 @@ class DeepDenoiser(DeepModel):
     name: str = "DeepDenoiser"
 
     def apply(self, x, verbose=True, **kwargs):
+        super().apply(x, verbose=verbose, **kwargs)
+
         history = StatusKeeper(verbose=verbose)
         shape = x.shape[:-1]
         with history(f"Applying {self.name}"):
@@ -403,7 +423,8 @@ class DeepDenoiser(DeepModel):
                                                'stats': self.get_stats(shape)})
             annotated = self.model.annotate(x_stream, **self.annotate_kwargs)
 
-        signal_denoised = convert_stream_to_dict(annotated)['data'].reshape(*x.shape)
+        signal_denoised = convert_stream_to_dict(annotated)['data']
+        signal_denoised = self.reshape_data(signal_denoised)
 
         new_dt_sec = annotated[0].stats.delta
         t0_offset = (annotated[0].stats.starttime - x_stream[0].stats.starttime)  # time offset
