@@ -258,7 +258,7 @@ class CATSDenoiser(CATSBase):
             del x
 
     def denoise_on_files(self, data_folder, data_format, result_folder=None,
-                        verbose=False, full_info=False, compress=False):
+                         verbose=False, full_info=False, compress=False):
         """
             Performs the denoising the same as `denoise_to_file` method, but directly on folder with data.
         """
@@ -421,12 +421,22 @@ class CATSDenoisingResult(CATSResult):
                     **kwargs):
 
         fig = super().plot_traces(signal=self.signal_denoised if show_denoised else self.signal,
-                                  ind=ind, time_interval_sec=time_interval_sec, intervals=intervals,
-                                  picks=picks, station_loc=station_loc, gain=gain, clip=clip, each_station=each_station,
-                                  amplitude_scale=amplitude_scale, per_station_scale=per_station_scale,
-                                  component_labels=component_labels, station_labels=station_labels,
+                                  ind=ind,
+                                  time_interval_sec=time_interval_sec,
+                                  intervals=intervals,
+                                  picks=picks,
+                                  station_loc=station_loc,
+                                  gain=gain,
+                                  clip=clip,
+                                  each_station=each_station,
+                                  amplitude_scale=amplitude_scale,
+                                  per_station_scale=per_station_scale,
+                                  component_labels=component_labels,
+                                  station_labels=station_labels,
                                   detrend_type=detrend_type,
-                                  interactive=interactive, allow_picking=allow_picking, **kwargs)
+                                  interactive=interactive,
+                                  allow_picking=allow_picking,
+                                  **kwargs)
         return fig
 
     def filter_and_update_result(self, cluster_catalogs_filter):

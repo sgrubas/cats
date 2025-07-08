@@ -50,7 +50,8 @@ class CATSDetector(CATSBase):
                                               result_container['cluster_catalogs'],
                                               dt_sec=self.stft_hop_sec * 0.5,
                                               min_separation_sec=self.cluster_distance_t_sec,
-                                              min_duration_sec=0.0)
+                                              min_duration_sec=0.0,
+                                              features_cols=None)
 
         result_container['detected_intervals'] = intervals
         result_container['picked_features'] = features
@@ -397,11 +398,22 @@ class CATSDetectionResult(CATSResult):
                     allow_picking: bool = False,
                     **kwargs):
 
-        fig = super().plot_traces(signal=self.signal, ind=ind, time_interval_sec=time_interval_sec, intervals=intervals,
-                                  picks=picks, station_loc=station_loc, gain=gain, clip=clip, each_station=each_station,
-                                  detrend_type=detrend_type, amplitude_scale=amplitude_scale,
-                                  per_station_scale=per_station_scale, component_labels=component_labels,
-                                  station_labels=station_labels, interactive=interactive, allow_picking=allow_picking,
+        fig = super().plot_traces(signal=self.signal,
+                                  ind=ind,
+                                  time_interval_sec=time_interval_sec,
+                                  intervals=intervals,
+                                  picks=picks,
+                                  station_loc=station_loc,
+                                  gain=gain,
+                                  clip=clip,
+                                  each_station=each_station,
+                                  detrend_type=detrend_type,
+                                  amplitude_scale=amplitude_scale,
+                                  per_station_scale=per_station_scale,
+                                  component_labels=component_labels,
+                                  station_labels=station_labels,
+                                  interactive=interactive,
+                                  allow_picking=allow_picking,
                                   **kwargs)
         return fig
 
