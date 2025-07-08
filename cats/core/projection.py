@@ -235,8 +235,9 @@ def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, m
     N_inds = len(iter_inds)
 
     interval_cols = ["Time_start_sec", "Time_end_sec"]
-    detection_cols = ["Interval_ID", "Interval_start_sec", "Interval_end_sec"]
-    features_cols = features_cols or ["Time_peak_sec", "Energy_peak", "Frequency_peak_Hz"]  # STRICTLY THESE TWO FIRST
+    detection_cols = ["Interval_ID", "Interval_start_sec", "Interval_end_sec"]  # Interval_ID is FIRST
+    if features_cols is None:
+        features_cols = ["Time_peak_sec", "Energy_peak", "Frequency_peak_Hz"]  # STRICTLY THESE TWO FIRST
 
     detections = np.zeros((N_all, len(detection_cols)), dtype=float)
     detected_intervals = np.empty(trace_shape, dtype=object)
@@ -253,24 +254,26 @@ def ProjectCatalogs(trace_shape, cluster_catalogs, dt_sec, min_separation_sec, m
             arr_slice = slice(i1, i2)
 
             intervals_j = intervals[arr_slice]
-            if min_separation_sec > 0:
+            features_j = features[arr_slice]
+            if min_separation_sec > 0.0:
                 projected_intervals, merge_inds = MergeIntervals(intervals_j, dt_sec, min_separation_sec,
                                                                  min_duration_sec)
-                values = np.concatenate((merge_inds[:, None], projected_intervals[merge_inds]), axis=1)
-                detections[arr_slice] = values
+                interval_id = merge_inds[:, None] + 1  # to start from 1, not 0 (Interval_IDs)
+                detections[arr_slice] = np.concatenate((interval_id, projected_intervals[merge_inds]), axis=1)
 
                 detected_intervals[ind] = projected_intervals
 
                 # ------- going to be deprecated --------
-                picked_features[ind] = GetMaxRowsByLabels(features[arr_slice], merge_inds + 1, 1, len(features_cols))
+                picked_features[ind] = GetMaxRowsByLabels(features_j, merge_inds, 1, len(features_cols))
+
+                # updated catalog columns, add interval IDs
+                cluster_catalogs[detection_cols] = detections
+                # Interval_ID is FIRST
+                cluster_catalogs[detection_cols[0]] = cluster_catalogs[detection_cols[0]].astype(int)
             else:
                 # if no merging, then just copy intervals and features
-                detections[arr_slice] = np.concatenate((np.arange(len(intervals_j))[:, None],
-                                                        intervals_j), axis=1)
                 detected_intervals[ind] = intervals_j
-                picked_features[ind] = features[arr_slice]
-
-        cluster_catalogs[detection_cols] = detections
+                picked_features[ind] = features_j
 
     # populate traces with no detected intervals with zero-length arrays
     for ind, arr in np.ndenumerate(detected_intervals):

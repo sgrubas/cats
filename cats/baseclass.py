@@ -853,9 +853,13 @@ class CATSResult(BaseModel):
         return fig
 
     def get_intervals_picks(self, ind, catalog_picks):
+        # Get proper dimensions associated with `ind`
+        aggr_ax = self.main_params.get('aggr_clustering_axis')
+        aggr_ind = make_default_index_on_axis(ind, aggr_ax, 0)
 
         shape = self.noise_std.shape[:-2]  # assume that noise_std is always present
         shape = (1,) if len(shape) == 0 else shape
+        shape = make_default_index_on_axis(shape, aggr_ax, 1)  # to handle aggregation axis
 
         # Check attributes
         intv_none = (getattr(self, 'detected_intervals') is None)
@@ -864,23 +868,24 @@ class CATSResult(BaseModel):
 
         if is_cluster_catalogs and (intv_none or pick_none):
             # If cluster catalogs are present, but intervals or picks are not, then calculate them
-            detected_intervals, picked_features = ProjectCatalogs(shape, self.cluster_catalogs, dt_sec=self.tf_dt_sec,
-                                                                  min_separation_sec=0, min_duration_sec=0,
+            detected_intervals, picked_features = ProjectCatalogs(shape,
+                                                                  self.cluster_catalogs,
+                                                                  dt_sec=self.tf_dt_sec,
+                                                                  min_separation_sec=0,
+                                                                  min_duration_sec=0,
                                                                   features_cols=catalog_picks)
 
             for i in np.ndindex(shape):
                 picked_features[i] = picked_features[i].reshape(-1, 1)
 
-            setattr(self, 'detected_intervals', detected_intervals)
-            setattr(self, 'picked_features', picked_features)
+            if intv_none:
+                setattr(self, 'detected_intervals', detected_intervals)
+            if pick_none:
+                setattr(self, 'picked_features', picked_features)
 
         picked_onsets = np.empty(shape, dtype=object)
         for i in np.ndindex(shape):
             picked_onsets[i] = self.picked_features[i][:, 0]
-
-        # Get proper dimensions associated with `ind`
-        aggr_ax = self.main_params.get('aggr_clustering_axis')
-        aggr_ind = make_default_index_on_axis(ind, aggr_ax, 0)
 
         detected_intervals = self.detected_intervals[aggr_ind + (...,)]  # `(..., )` is to always keep `dtype=object`
         picked_onsets = picked_onsets[aggr_ind + (...,)]
@@ -916,7 +921,7 @@ class CATSResult(BaseModel):
         traces = signal[ind + (i_time, )]
 
         arrival_cols = list(filter(lambda x: "arrival_sec" in x, self.cluster_catalogs.columns))
-        picks_cols = ['Time_peak_sec'] + arrival_cols if picks else []
+        picks_cols = ['Time_peak_sec'] + arrival_cols
 
         detected_intervals, picked_onsets = self.get_intervals_picks(ind, catalog_picks=picks_cols)
         detected_intervals = detected_intervals if intervals else None
