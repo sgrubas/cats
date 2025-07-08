@@ -7,13 +7,13 @@ This work is still in progress, and the package is under active development.
 Soon, here will be links to our papers/preprints.
 
 ## Key features of CATS
-- **Versatile**. Any signals (not necessarily seismic) that are sparse in the time-frequency domain can be localized by CATS.
-- **Flexible**. Any time-frequency transform can be used as a base (STFT, CWT, ...). Fast detection with STFT or more accurate denoising with CWT.
+- **Versatile**. Any sparse signals in the time-frequency domain can be localized by CATS.
+- **Flexible**. Fast detection with STFT or more accurate denoising with CWT.
 - **Fast** and **accurate**. Here will be links to our papers showing this.
-- **Transparent** and **QC-friendly**. 
-  - Minimum number of parameters which are easy to autotune.
-  - Interpretable and visualizable workflow steps and parameters.
-  - Collected cluster statistics can be used for custom post-processing and quality control (QC).
+- **Comprehensive quality control**. 
+  - Autotunable parameters with direct physical interpretation.
+  - Easy visualization of all intermediate workflow steps.
+  - Collected cluster statistics allow for fine-grained QC and classification of signals.
 
 
 # Installation
@@ -32,6 +32,7 @@ The package was tested on Python 3.9. See other dependencies in [requirements.tx
 - [Detection of seismic events](https://github.com/sgrubas/cats/blob/main/tutorials/DetectionTutorial.ipynb)
 - [Autotuning CATS detector with Optuna](https://github.com/sgrubas/cats/blob/main/tutorials/DetectionAutotuner.ipynb)
 - [Denoising seismic events](https://github.com/sgrubas/cats/blob/main/tutorials/DenoisingTutorial.ipynb)
+- [Autotuning CATS denoising with Optuna](https://github.com/sgrubas/cats/blob/main/tutorials/DenoisingAutotuner.ipynb)
 
 # Demos:
 ## Signal detection with CATSDetector 
