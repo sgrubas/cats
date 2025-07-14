@@ -42,17 +42,7 @@ The package was tested on Python 3.9. See other dependencies in [requirements.tx
 <img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS.png" width="400"/><img src="https://github.com/sgrubas/cats/blob/main/figures/DemoDenoising_CATS_CWT.png" width="400"/>
 
 # Citation
-If you find CATS useful for your research, please cite this repository (soon there will be links to our papers):
-```
-@article{grubas2023cats,
-  title = {Cluster Analysis of Trimmed Spectrograms (CATS)},
-  author = {Serafim Grubas and Mirko van der Baan},
-  journal = {GitHub},
-  url = {https://github.com/sgrubas/cats},
-  year = {2024},
-  doi = {10.5281/zenodo.13830301},
-}
-```
+If you find CATS useful for your research, please cite the repository ([CITATION.bib](https://github.com/sgrubas/cats/blob/main/CITATION.bib)).
 
 # Authors
 - Serafim Grubas (serafimgrubas@gmail.com, grubas@ualberta.ca)
