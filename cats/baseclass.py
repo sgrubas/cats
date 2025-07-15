@@ -1153,7 +1153,10 @@ class CATSResult(BaseModel):
             self._concat(other=other, attr=name, axis=-1)
 
         t0 = self.get_t0_for_append()  # must be before updating `time_npts`
-        self.cluster_catalogs = concatenate_cluster_catalogs(self.cluster_catalogs, other.cluster_catalogs, t0)
+        id_cols = ['Cluster_ID', 'Event_ID', 'Interval_ID']
+        cols = self.cluster_catalogs.columns
+        id_cols = list(filter(lambda x: x in cols, id_cols))  # remove not existing cols
+        self.cluster_catalogs = concatenate_cluster_catalogs(self.cluster_catalogs, other.cluster_catalogs, id_cols, t0)
 
         self.time_npts += other.time_npts
         self.tf_time_npts += other.tf_time_npts

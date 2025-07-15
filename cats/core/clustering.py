@@ -494,9 +494,7 @@ def concatenate_cluster_catalogs(catalog1: pd.DataFrame,
                                  catalog2: pd.DataFrame,
                                  id_cols: List[str],
                                  t0: float):
-    time_shift_cols = ["Time_start_sec", "Time_end_sec",
-                       "Time_peak_sec", "Time_centroid_sec",
-                       "Time_first_arrival_sec", "Time_strong_arrival_sec"]
+    time_shift_cols = ["Time_start_sec", "Time_end_sec", "Time_peak_sec", "Time_centroid_sec"]
     id_cols = id_cols or ["Cluster_ID"]
 
     if catalog2 is not None:
@@ -509,13 +507,14 @@ def concatenate_cluster_catalogs(catalog1: pd.DataFrame,
                 # cluster ID shift
                 for id_col in id_cols:
                     id_col2 = f"{id_col}_2"
-                    catalog2[id_col2] = catalog1[id_col].groupby(
-                        catalog1.index.names).max()  # assign new col to handle empty traces with no clusters (NaNs)
-                    catalog2[id_col] += catalog2.pop(id_col2).fillna(0).astype(
-                        int)  # empty traces with NaN are replaced with 0, and added to original Cluster_IDs
+                    # assign new col to handle empty traces with no clusters (NaNs)
+                    catalog2[id_col2] = catalog1[id_col].groupby(catalog1.index.names).max()
+                    # empty traces with NaN are replaced with 0, and added to original Cluster_IDs
+                    catalog2[id_col] += catalog2.pop(id_col2).fillna(0).astype(int)
 
         catalog_new = pd.concat([catalog1, catalog2], copy=False)
-        catalog_new.sort_values(by=catalog_new.index.names, inplace=True)
+        # catalog_new.sort_values(by=catalog_new.index.names, inplace=True)
+        catalog_new.sort_index(inplace=True)
         return catalog_new
 
     elif (catalog1 is not None) and (catalog2 is None):
