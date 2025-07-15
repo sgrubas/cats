@@ -74,7 +74,7 @@ class DeepModel(BaseModel, extra='allow'):
         return model
 
     def padding(self, x):
-        # to avoid cases when number of sample less than minimum for 'picker'
+        # to avoid cases when the number of samples is lower than a minimum for 'picker'
 
         # 'ratio' - from 'scale sampling rate' to 'model sampling rate'
         ratio = int(1 / (self.dt_sec * self.scale * self.model.sampling_rate))
