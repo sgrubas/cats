@@ -9,13 +9,12 @@
 """
 
 
-from typing import Union, Tuple, List, Any
+from typing import Union, Tuple, List, Literal
 
 import holoviews as hv
 import numpy as np
 from pathlib import Path
 from tqdm.notebook import tqdm
-from scipy.signal import check_NOLA
 import obspy
 
 from .baseclass import CATSBase, CATSResult
@@ -37,14 +36,7 @@ class CATSDenoiser(CATSBase):
         background_weight : float : weight of the background noise in the inverse STFT. If None, then 0.0
 
     """
-    inverse_transform: bool = True
-
-    def __init__(self, **kwargs):
-        if not kwargs['inverse_transform']:
-            kwargs['inverse_transform'] = True  # Inverse transform is always True for denoising
-            print("WARNING: Inverse transform is always applied for denoising. "
-                  "Parameter `inverse_transform` is set to True.")
-        super().__init__(**kwargs)
+    inverse_transform: Literal[True] = True  # Inverse transform is always True for denoising
 
     def _denoise(self, x, /, verbose=False, full_info=False):
         full_info = self.parse_info_dict(full_info)
