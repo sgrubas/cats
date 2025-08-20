@@ -27,7 +27,7 @@ class DeepModel(BaseModel, extra='allow'):
     comp_labels: list = ['E', 'N', 'Z']
     annotate_kwargs: dict = {}
     max_ndims: int = 3  # max number of dimensions for input data
-    reshape_rule: Union[Callable, None] = None  # function to reshape output data
+    reshape_rule: Union[Callable, str, None] = None  # function to reshape output data
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -95,7 +95,7 @@ class DeepModel(BaseModel, extra='allow'):
         else:
             return x
 
-    def reshape_data(self, x):
+    def reshape_data(self, x, shape):
         """
             Reshapes data according to the `reshape_rule`.
             If `reshape_rule` is None, returns the input data.
@@ -103,7 +103,10 @@ class DeepModel(BaseModel, extra='allow'):
         if self.reshape_rule is None:
             return x
         elif callable(self.reshape_rule):
-            return self.reshape_rule(x)
+            return self.reshape_rule(x, shape)
+        elif self.reshape_rule == '3d':
+            assert len(shape) == 3, f"Expected shape of 3 dimensions, got {shape}!"
+            return np.reshape(x, (shape[1], shape[0], shape[2])).swapaxes(0, 1)
         else:
             raise ValueError(f"Unknown reshape rule: {self.reshape_rule}")
 
@@ -424,7 +427,7 @@ class DeepDenoiser(DeepModel):
             annotated = self.model.annotate(x_stream, **self.annotate_kwargs)
 
         signal_denoised = convert_stream_to_dict(annotated)['data']
-        signal_denoised = self.reshape_data(signal_denoised)
+        signal_denoised = self.reshape_data(signal_denoised, x.shape)
 
         new_dt_sec = annotated[0].stats.delta
         t0_offset = (annotated[0].stats.starttime - x_stream[0].stats.starttime)  # time offset
