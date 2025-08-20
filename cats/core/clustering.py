@@ -344,7 +344,7 @@ def calculate_cluster_features(values_dict: Dict[str, np.ndarray],
             # Iterate over feature funcs on feature distributions
             res_dicts = [func(f, t, vals_slices_dict, sep_inds) for func in funcs]
 
-            # Compose single long dict (must be unique keys / feature names, else it picks the first occured)
+            # Compose single long dict (must be unique keys / feature names, else it picks the first occurred)
             func_res_dict = ChainMap(*res_dicts)
 
             # Make 'dict of lists of vals' from 'dict of vals'
