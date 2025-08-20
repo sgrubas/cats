@@ -8,6 +8,7 @@
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
+from scipy.signal import check_NOLA
 import holoviews as hv
 from typing import Any, Union, Callable, List
 from pydantic import BaseModel, Field
@@ -83,6 +84,8 @@ class CATSBase(BaseModel, extra='allow', arbitrary_types_allowed=True):
     cluster_distance_trace: int = Field(1, ge=1)
 
     # Extra STFT params
+    inverse_transform: bool = False
+    background_weight: Union[float, None] = None
     freq_bandpass_Hz: Union[tuple[float, float], Any, None] = None
     stft_backend: str = 'ssqueezepy'
     stft_kwargs: Union[dict, None] = None
@@ -92,8 +95,9 @@ class CATSBase(BaseModel, extra='allow', arbitrary_types_allowed=True):
     bedate_freq_grouping_Hz: Union[float, None] = None
     bedate_freq_grouping_octaves: Union[float, None] = None
     date_Q: float = 0.95
-    date_Nmin_percentile: float = Field(0.25, gt=0.0, lt=0.5)
+    date_Nmin_percentile: float = Field(0.25, ge=0.0, lt=1.0)
     date_original_mode: bool = False
+    date_bigSNR: float = 4.0
 
     # Misc
     name: str = "CATS"
@@ -150,6 +154,10 @@ Minimum separation frequency width between two different events.
 
                 phase_separation : callable : function to separate phases in each event
 
+                inverse_transform : bool : whether to apply inverse STFT at the end of CATS. \
+
+                background_weight : float : weight of the background noise in inverse STFT. \
+
                 freq_bandpass_Hz : tuple[float, float] : bandpass frequency range, in hertz, i.e. everything out of \
 the range is zero (e.g. (f_min, f_max)).
 
@@ -165,10 +173,11 @@ than standard deviation. Used in Bienaymé–Chebyshev inequality to get `Nmin` 
 
                 date_Nmin_percentile : float : percentile of data to use as `Nmin` (see above `Q`), supersedes `date_Q`
 
-                date_original_mode : bool : `True` means to use the original implementation of DATE algorithm. \
-Original implementation assumes that if no outliers are found then standard deviation is estimated from `Nmin` \
-to not overestimate the noise, but leads to underestimation. `False` uses our adaptation: if no outliers \
-are found, then no outliers will be present in the trimmed spectrogram.
+                date_original_mode : bool : `True` means to use the original DATE algorithm. \
+                `False` uses our adaptation DATE2. See our paper for details.
+
+                date_bigSNR : float : threshold for `minSNR >= date_bigSNR` \
+to use `max_estimate` mode (makes last DATE estimate valid).
 
                 stft_backend : str : backend for STFT operator ['scipy', 'ssqueezepy', 'ssqueezepy_gpu']. \
 The fastest CPU version is 'ssqueezepy', which is default.
@@ -198,6 +207,11 @@ The fastest CPU version is 'ssqueezepy', which is default.
         self.stft_hop_len = self.STFT.hop
         self.stft_hop_sec = self.stft_hop_len * self.dt_sec
         self.tf_dt_sec = self.stft_hop_sec
+
+        if (self.inverse_transform and
+                not check_NOLA(self.stft_window, self.stft_window_len, self.stft_overlap_len, tol=1e-10)):
+            raise ValueError("For inverse STFT, Nonzero Overlap Add (NOLA) is required, currently"
+                             " STFT overlap is not enough for the inverse STFT.")
 
         # DATE params
         self.stationary_frame_sec = v if (v := self.stationary_frame_sec) is not None else 0.0
@@ -329,7 +343,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
                                            self.frequency_groups_indexes, self.freq_bandpass_slice,
                                            result_container['time_frames'], self.minSNR, self.time_edge,
                                            Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
-                                           original_mode=self.date_original_mode, fft_base=True, dim=2)
+                                           bigSNR=self.date_bigSNR, original_mode=self.date_original_mode,
+                                           fft_base=True, dim=2)
 
         result_container['spectrogram_SNR'] = SNR
         result_container['spectrogram_trim_mask'] = T
@@ -412,6 +427,43 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
         result_container['cluster_catalogs'] = catalog
 
+    def apply_Projection(self, result_container, /, bandpass_slice, full_info):
+        if full_info.get("likelihood", False):
+            # Project SNR on time axis
+            SNR = result_container['spectrogram_SNR'][bandpass_slice]
+            T = result_container['spectrogram_trim_mask'][bandpass_slice]
+            CID = result_container['spectrogram_cluster_ID'][bandpass_slice]
+            # counts = np.count_nonzero(clustered, axis=-2)
+            # counts[counts == 0] = 1  # normalization by number of nonzero elements, not by all frequencies
+            S = SNR * T * (CID > 0)
+            result_container['likelihood'] = S.sum(axis=-2)  # removed the normalization, for simplicity
+
+        # Extracts intervals of events
+        trace_shape = result_container['spectrogram_cluster_ID'].shape[:-2]
+        intervals, features = ProjectCatalogs(trace_shape,
+                                              result_container['cluster_catalogs'],
+                                              dt_sec=self.stft_hop_sec,  # why 0.5 * dt ?
+                                              min_separation_sec=self.cluster_distance_t_sec,
+                                              min_duration_sec=0.0,
+                                              features_cols=None)
+
+        result_container['detected_intervals'] = intervals
+        result_container['picked_features'] = features
+
+    def apply_ISTFT(self, result_container, /, N):
+        weights = result_container['spectrogram_cluster_ID'] > 0
+
+        if not self.full_aggregated_mask:
+            weights = weights * result_container['spectrogram_trim_mask']
+
+        if (self.background_weight is not None) and (self.background_weight > 0.0):
+            weights = np.where(weights, 1.0, self.background_weight)
+
+        weighted_coefficients = result_container['coefficients'] * weights
+
+        result_container['signal_denoised'] = (self.STFT / weighted_coefficients)[..., :N]
+        del weights, weighted_coefficients
+
     def apply_func(self, func_name, result_container, status_keeper, process_name=None, **kwargs):
         process_name = process_name or func_name
         with status_keeper(current_process=process_name):
@@ -429,7 +481,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
                 "spectrogram_trim_mask_aggr",
                 "spectrogram_event_ID",
                 "spectrogram_cluster_ID",
-                "cluster_catalogs"]
+                "cluster_catalogs",
+                "signal_denoised"]
 
     @classmethod
     def get_qc_keys(cls):
@@ -463,6 +516,8 @@ The fastest CPU version is 'ssqueezepy', which is default.
         # add necessary, repetitions will be deleted
         full_info += self.get_default_keys()  # defaults
         full_info += self.cluster_feature_distributions  # for cluster catalogs
+        if self.inverse_transform:
+            full_info += ["signal_denoised"]  # for cluster catalogs
 
         # Parse
         full_info = cast_to_bool_dict(full_info, self.get_all_keys())
@@ -567,6 +622,7 @@ The fastest CPU version is 'ssqueezepy', which is default.
 
 class CATSResult(BaseModel):
     signal: Any = None
+    signal_denoised: Any = None
     coefficients: Any = None
     spectrogram: Any = None
     noise_threshold_conversion: Any = None
@@ -690,7 +746,8 @@ class CATSResult(BaseModel):
         else:
             TS = PSD * T
             label_trimmed = label_func('', 'X', trim_mask)
-            label_clustered = label_func('', 'X', cluster_mask)
+            # label_clustered = label_func('', 'X', cluster_mask)
+            label_clustered = label_func('', r'\tilde{S}', '')
             TS_clims = PSD_clims
             TS_vdim = PSD_vdim
 
@@ -753,7 +810,7 @@ class CATSResult(BaseModel):
         fontsize = dict(labels=15, title=16, ticks=14, legend=10, cticks=14)
         figsize = 225
         aspect = 5
-        cmap = 'viridis'
+        cmap = 'viridis_r'
         xlim = time_interval_sec
         ylim = (fmin, None)
         layout_title = str(self.stats[ind].starttime) if (self.stats is not None) else ''
@@ -793,7 +850,7 @@ class CATSResult(BaseModel):
                 mpl_layout_opts, bkh_layout_opts)
         figs = [fig0, fig1, fig2, fig3] + fig31
         figs = hv.Layout(figs).opts(*opts)
-        if fig31:
+        if show_cluster_ID:
             fig31 = figs[-1].opts(hv.opts.QuadMesh(norm=None, backend='matplotlib'),
                                   hv.opts.QuadMesh(logz=False, backend='bokeh'))
         output = (figs, opts, inds_slices, time_interval_sec)
@@ -828,12 +885,12 @@ class CATSResult(BaseModel):
                                        hv.opts.Curve(yaxis='bare'))
         if share_spectrogram_cmaps:
             for i, figs_i in enumerate(zip(*figs)):
-                if (0 < i < nrows - 1):
-                    clims = [fi.opts.get().kwargs['clim'] for fi in figs_i]
-                    if all([(cl is not None) for i, cl in np.ndenumerate(clims)]):
-                        clim = (np.min(clims), np.max(clims))
-                        for fi in figs_i:
-                            fi = fi.opts(clim=clim)
+                # if (0 < i < nrows - 1):
+                clims = [fi.opts.get().kwargs.get('clim', None) for fi in figs_i]
+                if all([(cl is not None) for i, cl in np.ndenumerate(clims)]):
+                    clim = (np.min(clims), np.max(clims))
+                    for fi in figs_i:
+                        fi = fi.opts(clim=clim)
 
             for i, fig_i in enumerate(figs):
                 if i < ncols - 1:
@@ -966,6 +1023,7 @@ class CATSResult(BaseModel):
                                          image_format='png',
                                          dpi=100,
                                          gc_every_iterations=5,
+                                         figure_opts=None,
                                          **plot_traces_kwargs):
 
         if not isinstance(ind, list):
@@ -983,6 +1041,7 @@ class CATSResult(BaseModel):
                                       image_format=image_format,
                                       dpi=dpi,
                                       gc_every_iterations=gc_every_iterations,
+                                      figure_opts=figure_opts,
                                       **plot_traces_kwargs)
 
     def plot_all_segments_to_file(self,
@@ -995,6 +1054,7 @@ class CATSResult(BaseModel):
                                   image_format='png',
                                   dpi=100,
                                   gc_every_iterations=5,
+                                  figure_opts=None,
                                   **plot_kwargs):
 
         shape = self.noise_std.shape[:-2]
@@ -1012,6 +1072,7 @@ class CATSResult(BaseModel):
                                       image_format=image_format,
                                       dpi=dpi,
                                       gc_every_iterations=gc_every_iterations,
+                                      figure_opts=figure_opts,
                                       **plot_kwargs)
 
     def plot_multi_all_segments_to_file(self,
@@ -1025,6 +1086,7 @@ class CATSResult(BaseModel):
                                         image_format='png',
                                         dpi=100,
                                         gc_every_iterations=5,
+                                        figure_opts=None,
                                         **plot_multi_kwargs):
 
         shape = self.noise_std.shape[:-2]
@@ -1042,6 +1104,7 @@ class CATSResult(BaseModel):
                                       image_format=image_format,
                                       dpi=dpi,
                                       gc_every_iterations=gc_every_iterations,
+                                      figure_opts=figure_opts,
                                       **plot_multi_kwargs)
 
     def get_cluster_catalogs(self,

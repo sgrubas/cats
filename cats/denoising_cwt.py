@@ -55,6 +55,7 @@ class CATSDenoiserCWT(BaseModel, extra='allow', arbitrary_types_allowed=True):
     date_Q: float = Field(0.95, gt=0.0, lt=1.0)
     date_Nmin_percentile: float = Field(0.25, gt=0.0, lt=0.5)
     date_original_mode: bool = False
+    date_bigSNR: float = 4.0
 
     # Extra clustering params
     background_weight: float = 0.0
@@ -261,7 +262,8 @@ class CATSDenoiserCWT(BaseModel, extra='allow', arbitrary_types_allowed=True):
                                            scales_groups_indexes, self.bandpass_scale_slice,
                                            result_container['time_frames'], self.minSNR, self.time_edge,
                                            Q=self.date_Q, Nmin_percentile=self.date_Nmin_percentile,
-                                           original_mode=self.date_original_mode, fft_base=False, dim=dim)
+                                           bigSNR=self.date_bigSNR, original_mode=self.date_original_mode,
+                                           fft_base=False, dim=dim)
 
         result_container['spectrogram_SNR'] = SNR
         result_container['spectrogram_trim_mask'] = T

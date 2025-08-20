@@ -37,28 +37,14 @@ class CATSDenoiser(CATSBase):
         background_weight : float : weight of the background noise in the inverse STFT. If None, then 0.0
 
     """
-    background_weight: Union[float, None] = None
-    full_aggregated_mask: Union[bool, None] = False
+    inverse_transform: bool = True
 
     def __init__(self, **kwargs):
+        if not kwargs['inverse_transform']:
+            kwargs['inverse_transform'] = True  # Inverse transform is always True for denoising
+            print("WARNING: Inverse transform is always applied for denoising. "
+                  "Parameter `inverse_transform` is set to True.")
         super().__init__(**kwargs)
-        if not check_NOLA(self.stft_window, self.stft_window_len, self.stft_overlap_len, tol=1e-10):
-            raise ValueError("For inverse STFT, Nonzero Overlap Add (NOLA) is required, currently"
-                             " STFT overlap is not enough for inversion.")
-
-    def apply_ISTFT(self, result_container, /, N):
-        weights = result_container['spectrogram_cluster_ID'] > 0
-
-        if not self.full_aggregated_mask:
-            weights = weights * result_container['spectrogram_trim_mask']
-
-        if (self.background_weight is not None) and (self.background_weight > 0.0):
-            weights = np.where(weights, 1.0, self.background_weight)
-
-        weighted_coefficients = result_container['coefficients'] * weights
-
-        result_container['signal_denoised'] = (self.STFT / weighted_coefficients)[..., :N]
-        del weights, weighted_coefficients
 
     def _denoise(self, x, /, verbose=False, full_info=False):
         full_info = self.parse_info_dict(full_info)
@@ -76,8 +62,7 @@ class CATSDenoiser(CATSBase):
         # B-E-DATE
         self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
                         process_name='B-E-DATE trimming')
-        del_vals_by_keys(result, full_info, ['noise_std', 'noise_threshold_conversion'] +
-                         ['spectrogram_trim_mask'] * self.full_aggregated_mask)
+        del_vals_by_keys(result, full_info, ['spectrogram_trim_mask'] * self.full_aggregated_mask)
 
         # Clustering
         self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
@@ -166,9 +151,9 @@ class CATSDenoiser(CATSBase):
         """ Alias of `.denoise`. For compatibility with CATSBase """
         return self.denoise(x, verbose=verbose, full_info=full_info)
 
-    @classmethod
-    def get_all_keys(cls):
-        return super(cls, cls).get_all_keys() + ["signal_denoised"]
+    # @classmethod
+    # def get_all_keys(cls):
+    #     return super(cls, cls).get_all_keys() + ["signal_denoised"]
 
     @classmethod
     def get_qc_keys(cls):
@@ -268,7 +253,6 @@ class CATSDenoiser(CATSBase):
 
 
 class CATSDenoisingResult(CATSResult):
-    signal_denoised: Any = None
 
     @classmethod
     def get_qc_keys(cls):

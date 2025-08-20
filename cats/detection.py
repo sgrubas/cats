@@ -33,29 +33,6 @@ class CATSDetector(CATSBase):
         Detector of events based on Cluster Analysis of Trimmed Spectrograms
     """
 
-    full_aggregated_mask: Union[bool, None] = True
-
-    def apply_Projection(self, result_container, /, bandpass_slice, full_info):
-        if full_info.get("likelihood", False):
-            # Project SNR on time axis
-            SNR, CID = (result_container['spectrogram_SNR'][bandpass_slice],
-                        result_container['spectrogram_cluster_ID'][bandpass_slice])
-            # counts = np.count_nonzero(clustered, axis=-2)
-            # counts[counts == 0] = 1  # normalization by number of nonzero elements, not by all frequencies
-            result_container['likelihood'] = (SNR * (CID > 0)).sum(axis=-2)  # removed the normalization, for simplicity
-
-        # Extracts intervals of events
-        trace_shape = result_container['spectrogram_cluster_ID'].shape[:-2]
-        intervals, features = ProjectCatalogs(trace_shape,
-                                              result_container['cluster_catalogs'],
-                                              dt_sec=self.stft_hop_sec * 0.5,
-                                              min_separation_sec=self.cluster_distance_t_sec,
-                                              min_duration_sec=0.0,
-                                              features_cols=None)
-
-        result_container['detected_intervals'] = intervals
-        result_container['picked_features'] = features
-
     def _detect(self, x, /, verbose=False, full_info=False):
         full_info = self.parse_info_dict(full_info)
 
@@ -66,7 +43,7 @@ class CATSDetector(CATSBase):
         # STFT
         self.apply_func(func_name='apply_STFT', result_container=result, status_keeper=history,
                         process_name='STFT')
-        del_vals_by_keys(result, full_info, ['signal', 'coefficients'])
+        del_vals_by_keys(result, full_info, ['signal'] + ['coefficients'] * (not self.inverse_transform))
 
         stft_time = self.STFT.forward_time_axis(x.shape[-1])
         bandpass_slice = (..., self.freq_bandpass_slice, slice(None))
@@ -74,8 +51,8 @@ class CATSDetector(CATSBase):
         # B-E-DATE
         self.apply_func(func_name='apply_BEDATE', result_container=result, status_keeper=history,
                         process_name='B-E-DATE trimming')
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR', 'spectrogram_trim_mask',
-                                             'noise_std', 'noise_threshold_conversion'])
+        del_vals_by_keys(result, full_info,
+                         ['spectrogram_trim_mask'] * (self.full_aggregated_mask and not self.inverse_transform))
 
         # Clustering
         self.apply_func(func_name='apply_Clustering', result_container=result, status_keeper=history,
@@ -91,13 +68,22 @@ class CATSDetector(CATSBase):
         self.apply_func(func_name='apply_ClusterCatalogs', result_container=result,
                         tf_time=stft_time, frequencies=self.stft_frequency, status_keeper=history,
                         process_name='Cluster catalog')
-        del_vals_by_keys(result, full_info, ['spectrogram'])
+        del_vals_by_keys(result, full_info,
+                         ['spectrogram'])
 
         # Projecting intervals
         self.apply_func(func_name='apply_Projection', result_container=result, status_keeper=history,
                         process_name='Projecting intervals', bandpass_slice=bandpass_slice, full_info=full_info)
-        del_vals_by_keys(result, full_info, ['spectrogram_SNR', 'spectrogram_cluster_ID',
-                                             'likelihood', 'detection', 'cluster_catalogs'])
+        del_vals_by_keys(result, full_info,
+                         ['spectrogram_SNR', 'likelihood', 'detection'] +
+                         ['spectrogram_cluster_ID', 'spectrogram_trim_mask'] * (not self.inverse_transform))
+
+        # Inverse STFT
+        if self.inverse_transform:
+            self.apply_func(func_name='apply_ISTFT', result_container=result, status_keeper=history,
+                            process_name='Inverse STFT', N=x.shape[-1])
+            del_vals_by_keys(result, full_info,
+                             ['spectrogram_trim_mask', 'coefficients', 'spectrogram_cluster_ID'])
 
         history.print_total_time()
 
@@ -290,6 +276,7 @@ class CATSDetectionResult(CATSResult):
              SNR_spectrograms: bool = False,
              show_cluster_ID: bool = False,
              show_aggregated: bool = False,
+             show_denoised: bool = True,
              detrend_type: str = 'constant',
              aggr_func: callable = np.max,
              interactive: bool = False,
@@ -305,6 +292,7 @@ class CATSDetectionResult(CATSResult):
                                                                  interactive=interactive,
                                                                  frequencies=self.frequencies)
 
+        show_denoised = show_denoised and (self.signal_denoised is not None)
         t_dim, a_dim = fig[0].dimensions()  # get dim params (no matter what fig index)
         L_dim = hv.Dimension('Likelihood')
         t1, t2 = time_interval_sec
@@ -312,7 +300,8 @@ class CATSDetectionResult(CATSResult):
         ind, i_time, i_stft = inds_slices
 
         aggr_ind = make_default_index_if_outrange(ind, self.spectrogram_cluster_ID.shape[:-2], default_ind_value=0)
-        inds_stft = aggr_ind + (i_stft,)
+        # inds_stft = aggr_ind + (i_stft,)  # old
+        inds_stft = ind + (i_stft,)
 
         stft_time = self.tf_time(time_interval_sec)
 
@@ -367,17 +356,30 @@ class CATSDetectionResult(CATSResult):
         fig4 = hv.Overlay(last_figs, label=r'4. Likelihood and Detection: $\mathcal{L}(t)$ and $\tilde{\alpha}(t)$')
         lmax = 1.1 * np.max(likelihood)
         cylim = (-0.02 * lmax, lmax)
-        overlay_opts = (hv.opts.Overlay(ylim=cylim, show_frame=True, backend='matplotlib'),
-                        hv.opts.Overlay(ylim=cylim, height=int(opts[1].kwargs['height'] * 1.15), backend='bokeh'))
+        bkh_height = int(opts[1].kwargs['height'] * 1.15)
+        xlabel = '' if show_denoised else None
+        overlay_opts = (hv.opts.Overlay(ylim=cylim, xlabel=xlabel, show_frame=True, backend='matplotlib'),
+                        hv.opts.Overlay(ylim=cylim, xlabel=xlabel, height=bkh_height, backend='bokeh'))
         fig4 = fig4.opts(*opts[:2]).opts(*overlay_opts)
 
+        figs = (fig + fig4)
+
+        # Denoised signal
+        if show_denoised:
+            trace_slice = ind + (i_time,)
+            fig5 = hv.Curve((fig[0].data[t_dim.name], self.signal_denoised[trace_slice]),
+                            kdims=[t_dim], vdims=a_dim,
+                            label=r'5. Denoised data: $\tilde{s}(t)$').opts(*opts[:2])  # apply opts for Curve
+            figs = figs + fig5
+
         # Output
-        fig = (fig + fig4).opts(*opts).cols(1)
+        fig = figs.opts(*opts).cols(1)
 
         if show_cluster_ID:
-            fig31 = fig[-2].opts(hv.opts.QuadMesh(norm=None, backend='matplotlib'),
-                                 hv.opts.QuadMesh(logz=False, backend='bokeh'))
-        # fig = (fig + fig4).opts(*opts[-2:]).cols(1)  # apply layout opts
+            # update CLuster ID spectrogram opts, because of previous `opts` call above
+            fig_cid = -2 - show_denoised
+            fig31 = fig[fig_cid].opts(hv.opts.QuadMesh(norm=None, backend='matplotlib'),
+                                      hv.opts.QuadMesh(logz=False, backend='bokeh'))
         return fig
 
     def plot_traces(self,
