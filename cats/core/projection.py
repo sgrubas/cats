@@ -165,7 +165,8 @@ def MergeIntervals(intervals, dt_sec, min_separation_sec, min_duration_sec):
 
         # 2. Extract new projected intervals, and merge those within min_separation_sec
         merged_intervals = _giveIntervals(binary_projection) * dt_sec
-        merged_intervals[:, 1] += dt_sec  # append to allow single pixel intervals
+        # merged_intervals[:, 0] -= dt_sec * 0.5  # append to allow single pixel intervals
+        merged_intervals[:, 1] += dt_sec * 0.5  # append to allow single pixel intervals
         merged_intervals = filter_intervals(merged_intervals, min_separation_sec, min_duration_sec)
 
         # 3. Aggregate indexes falling in one interval, by feature_max
