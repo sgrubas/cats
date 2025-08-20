@@ -50,9 +50,41 @@ def DATE(Y, xi, lamb, Nmin, original_mode):
     return std
 
 
-@nb.njit(["f8[:, :, :](f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)",
-          "f4[:, :, :](f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)"], parallel=True, cache=True)
-def _BEDATE(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mode):
+@nb.njit(["f8(f8[:], f8, f8, i8, b1, b1)",
+          "f4(f4[:], f8, f8, i8, b1, b1)"], cache=True)
+def DATE2(Y, xi, lamb, Nmin, max_estimate, original_mode):
+    N = len(Y)
+
+    Y_sort = np.sort(Y)
+    M = 0.0
+    std_found = std = -1.0
+    for ni in range(0, N - 1):  # iterate over elements
+        M += Y_sort[ni]
+
+        above_Nmin = (ni + 1 >= Nmin)
+        if above_Nmin or (not max_estimate and not original_mode):
+            std = M / (ni + 1) / lamb  # current estimate
+            thr = std * xi  # threshold height (std * xi(minSNR))
+
+            if (Y_sort[ni] <= thr < Y_sort[ni + 1]):  # criterion
+                std_found = std
+                if above_Nmin:
+                    break
+
+        if ni == Nmin:  # default estimate (see below)
+            std_Nmin = std
+
+    if std_found < 0.0:
+        # max_estimate = max_estimate or (thr >= Y_sort[ni + 1])
+        condition = max_estimate and (not original_mode)
+        std_found = std if condition else std_Nmin  # largest estimate
+
+    return std_found
+
+
+@nb.njit(["f8[:, :, :](f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1, b1)",
+          "f4[:, :, :](f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1, b1)"], parallel=True, cache=True)
+def _BEDATE(PSD, time_frames, freq_groups, xi, lamb, Nmin, max_estimate, original_mode):
     K = PSD.shape[0]
     m, n = len(freq_groups), len(time_frames)
     Sgm = np.zeros((K, m, n), dtype=PSD.dtype)
@@ -65,17 +97,17 @@ def _BEDATE(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mode):
             for j in nb.prange(n):  # iter over time frames
                 j1, j2 = time_frames[j]
                 psd = psdl[i1: i2 + 1, j1: j2 + 1].ravel()
-                Sgm[k, i, j] = DATE(psd, xi_i, lamb_i, Nmin, original_mode)
+                Sgm[k, i, j] = DATE2(psd, xi_i, lamb_i, Nmin, max_estimate, original_mode)
     return Sgm
 
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=1, first_shape=True)
-def _BEDATE_API(PSD, /, time_frames, freq_groups, xi_lamb, Nmin, original_mode):
-    return _BEDATE(PSD, time_frames, freq_groups, xi_lamb, Nmin, original_mode)
+def _BEDATE_API(PSD, /, time_frames, freq_groups, xi_lamb, Nmin, max_estimate, original_mode):
+    return _BEDATE(PSD, time_frames, freq_groups, xi_lamb, Nmin, max_estimate, original_mode)
 
 
 def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
-           original_mode=False, zero_Nyq_freqs=(True, True)):
+           bigSNR=4.0, original_mode=False, zero_Nyq_freqs=(True, True)):
     """
         Performs Block-Extended-DATE algorithm 
         
@@ -88,6 +120,7 @@ def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
             freq_groups : np.ndarray (m, 2) / None : frequency groups.
                       If None, each frequency bin is processed separately
             minSNR : float : expected minimum signal-to-noise ratio
+            bigSNR : float : threshold for `minSNR` to use `max_estimate` mode (enables last DATE estimate as valid).
             Q : float [0, 1) : probability value to compute appropriate `Nmin`. Recommended value `0.95`
             original_mode : boolean : whether to use original implementation [1].
                             If `True`, noise is estimated on `Nmin` in the worst case.
@@ -120,7 +153,8 @@ def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
     Nmin = _Nmin(time_frames[0, 1] + 1, Q)
 
     # The B-E-DATE
-    Sgm = _BEDATE_API(PSD, time_frames, freq_groups, Xi, Lambda, Nmin, original_mode)
+    max_estimate = (minSNR >= bigSNR)
+    Sgm = _BEDATE_API(PSD, time_frames, freq_groups, Xi, Lambda, Nmin, max_estimate, original_mode)
 
     return Sgm
 
@@ -128,10 +162,10 @@ def BEDATE(PSD, time_frames=None, freq_groups=None, minSNR=4.0, Q=0.95,
 ########################################################################################
 
 
-@nb.njit(["Tuple((f8[:, :, :], b1[:, :, :], f8[:, :, :]))(f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)",
-          "Tuple((f4[:, :, :], b1[:, :, :], f4[:, :, :]))(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1)"],
+@nb.njit(["Tuple((f8[:, :, :], b1[:, :, :], f8[:, :, :]))(f8[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1, b1)",
+          "Tuple((f4[:, :, :], b1[:, :, :], f4[:, :, :]))(f4[:, :, :], i8[:, :], i8[:, :], f8[:], f8[:], i8, b1, b1)"],
          parallel=True, cache=True)
-def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mode):
+def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, max_estimate, original_mode):
     K = PSD.shape[0]
     m, n = len(freq_groups), len(time_frames)
     Sgm = np.zeros((K, m, n), dtype=PSD.dtype)
@@ -147,7 +181,7 @@ def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mod
                 j1, j2 = time_frames[j]
 
                 psd = psdl[i1: i2 + 1, j1: j2 + 1]
-                Sgm[k, i, j] = sgm = DATE(psd.ravel(), xi_i, lamb_i, Nmin, original_mode)
+                Sgm[k, i, j] = sgm = DATE2(psd.ravel(), xi_i, lamb_i, Nmin, max_estimate, original_mode)
                 Mask[k, i1: i2 + 1, j1: j2 + 1] = (psd > sgm * xi_i)
                 SNR[k, i1: i2 + 1, j1: j2 + 1] = psd / (sgm + 1e-8)
                 # snr = (psd > sgm * xi_i) * psd / (sgm + 1e-8)  # the fastest way so far
@@ -156,7 +190,7 @@ def _BEDATE_trimming(PSD, time_frames, freq_groups, xi, lamb, Nmin, original_mod
 
 @ReshapeArraysDecorator(dim=3, input_num=1, methodfunc=False, output_num=3, first_shape=True)
 def BEDATE_trimming(PSD, /, frequency_groups_indexes, bandpass_slice,
-                    time_frames, minSNR, time_edge, Q=None, Nmin_percentile=None,
+                    time_frames, minSNR, time_edge, Q=None, Nmin_percentile=None, bigSNR=4.0,
                     original_mode=False, fft_base=True, dim=2):
 
     groups_slice = bandpass_frequency_groups(frequency_groups_indexes, bandpass_slice)
@@ -178,11 +212,12 @@ def BEDATE_trimming(PSD, /, frequency_groups_indexes, bandpass_slice,
     # The B-E-DATE trimming
     bedate_ind = (..., groups_slice, slice(None))
     noise_std = np.zeros(PSD.shape[:-2] + (m, n), dtype=PSD.dtype)
+    max_estimate = (minSNR >= bigSNR)
     spectrogram_SNR, Mask, noise_std[bedate_ind] = _BEDATE_trimming(PSD, time_frames,
                                                                     frequency_groups_indexes[groups_slice],
                                                                     Xi[groups_slice],
                                                                     Lambda[groups_slice],
-                                                                    Nmin, original_mode)
+                                                                    Nmin, max_estimate, original_mode)
 
     # Removing everything out of the bandpass range
     b1 = bandpass_slice.start or 0
