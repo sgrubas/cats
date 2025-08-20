@@ -125,9 +125,12 @@ def plot_traces(data: np.ndarray,
     if component_labels is None:
         component_labels = ["E", "N", "Z"] if num_comp <= 3 else list(range(num_comp))
 
-    if station_labels is None:
-        station_labels = list(range(1, data.shape[-2] + 1, each_station))
-    station_labels = [(i, st) for i, st in zip(loc_slice, station_labels)]
+    # if station_labels is None:
+    #     station_labels = list(range(1, data.shape[-2] + 1, each_station))
+    # station_labels = [(i, st) for i, st in zip(loc_slice, station_labels)]
+
+    if station_labels is not None:
+        station_labels = [(i, st) for i, st in zip(loc_slice, station_labels)]
 
     trace_dim = hv.Dimension("Station")
     t_dim = hv.Dimension("Time", unit='s')
@@ -285,6 +288,7 @@ def save_all_segments_to_file(result,
                               image_format='png',
                               dpi=100,
                               gc_every_iterations=5,
+                              figure_opts=None,
                               **plot_function_kwargs):
     # 1. Parse arguments
     filename = filename or result.main_params['name']
@@ -299,7 +303,7 @@ def save_all_segments_to_file(result,
     # 1.2. Index formatting for proper visualization
     if 'trace' in plot_function_name:  # .plot_traces
         ind = () if ind is None else ind
-        ind = format_index_by_dimensions_new(ind=ind, ndim=result.signal.ndim - 1, default_ind=0)  # .plot_traces
+        ind = format_index_by_dimensions_new(ind=ind, ndim=result.noise_std.ndim - 2, default_ind=0)  # .plot_traces
         ind = [ind]
     else:
         if 'multi' in plot_function_name:  # .plot_multi
@@ -343,7 +347,9 @@ def save_all_segments_to_file(result,
         t_1, t_2 = window_interval_sec
         return (t_1 <= intv[1]) and (intv[0] <= t_2)
 
-    time_segments = [intv_i for intv_i in time_segments if check_inside(intv_i)]
+    time_segments = [format_interval_by_limits(intv_i, (0, (result.time_npts - 1) * result.dt_sec))
+                     for intv_i in time_segments]  # fix interval bigger than time limits
+    time_segments = [intv_i for intv_i in time_segments if check_inside(intv_i)]  # keep only 'inside' intervals
 
     # 3. Plot and save time segments
     for i, (t1, t2) in enumerate(tqdm(time_segments)):
@@ -353,6 +359,9 @@ def save_all_segments_to_file(result,
         else:
             kwargs_i['ind'] = ind[0]
         fig = getattr(result, plot_function_name)(**kwargs_i, **plot_function_kwargs)
+
+        if figure_opts is not None:
+            fig = fig.opts(figure_opts)
 
         filepath = f"{filename}_{plot_function_name}_{round_f(t1)}_{round_f(t2)}_{ind_name}"
         filepath = Path(folder_path) / filepath
