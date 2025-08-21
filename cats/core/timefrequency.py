@@ -289,7 +289,7 @@ class CWTOperator(BaseModel, extra="allow"):
     # additional params for inverse CWT
     one_int: bool = True
     x_len: int = None
-    x_mean: int = 0
+    x_mean: float = 0.0  # mean of the signal for inverse CWT, zero-freq component; CWT cannot capture it
 
     gpu: bool = False
 
@@ -360,10 +360,13 @@ class CWTOperator(BaseModel, extra="allow"):
     def inverse(self, W):
         os.environ['SSQ_GPU'] = '1' if self.gpu else '0'
 
-        X = np.empty((len(W), W.shape[-1]))
-        for i, wi in enumerate(W):
-            xi = ssq.icwt(wi, **self.inverse_kw)
-            X[i] = xi if isinstance(xi, np.ndarray) else xi.cpu().numpy()
+        # X = np.empty((len(W), W.shape[-1]))
+        # for i, wi in enumerate(W):
+        #     xi = ssq.icwt(wi, **self.inverse_kw)
+        #     X[i] = xi if isinstance(xi, np.ndarray) else xi.cpu().numpy()
+
+        X = ssq.icwt(W, **self.inverse_kw)
+        X = X if isinstance(X, np.ndarray) else X.cpu().numpy()
 
         return X
 

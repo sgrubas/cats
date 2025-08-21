@@ -3,7 +3,7 @@ numpy<2.0.0  # for working with array
 scipy>=1.13.0  # optimize and special funcs
 numba>=0.59.0  # JIT compilation of computational routines
 colorednoise==2.2.0  # random Gaussian colored noise
-ssqueezepy==0.6.4  # fast STFT, CWT
+ssqueezepy==0.6.6  # fast STFT, CWT
 pandas>=2.0.0  # for tabular data
 
 # Seismology (formats and data sources)
